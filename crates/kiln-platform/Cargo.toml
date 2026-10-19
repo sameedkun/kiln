@@ -1,0 +1,19 @@
+[package]
+name = "kiln-platform"
+description = "Platform adapter interfaces and portable building blocks (hosts block, etc.)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+kiln-ops.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
