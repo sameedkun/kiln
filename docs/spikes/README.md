@@ -1,11 +1,11 @@
 # Phase 0 spikes
 
 Time-boxed experiments that produce evidence for an ADR. Spike code lives in `spikes/` (outside
-the Cargo workspace) and is thrown away afterwards. Only results and the ADR survive.
+the Cargo workspace) so results can be reproduced; downloaded binaries never enter git.
 
 | # | Spike | Feeds | Time box | Status |
 |---|---|---|---|---|
-| 01 | [Web server: nginx vs Caddy on Windows](01-web-server.md) | ADR 0005 | 3 days | planned |
+| 01 | [Web server: nginx vs Caddy on Windows](01-web-server.md) | ADR 0005 | 3 days | **done**: Caddy ([results](results/01-web-server.md)) |
 | 02 | [Windows DNS: hosts block vs NRPT + stub](02-windows-dns.md) | ADR 0006 (opt-in mode) | 3 days | planned |
 
 ## Ground rules for every spike

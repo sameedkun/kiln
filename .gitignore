@@ -6,3 +6,6 @@
 .DS_Store
 .idea/
 .vscode/
+/spikes/**/Cargo.lock
+/spikes/windows-dns/sandbox/results/
+/spikes/windows-dns/sandbox/tools/*.exe
