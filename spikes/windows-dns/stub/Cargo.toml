@@ -1,0 +1,8 @@
+[package]
+name = "dns-stub"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Spike 02 throwaway: answers *.<tld> with loopback, REFUSED for everything else."
+
+[dependencies]

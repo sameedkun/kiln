@@ -1,7 +1,7 @@
-# 0006. Windows name resolution: managed hosts block by default, NRPT stub as opt-in
+# 0006. Windows name resolution: managed hosts block (NRPT stub rejected for now)
 
-- **Status:** accepted for the default, confirmed by [spike 02 Part 1](../spikes/results/02-windows-dns-part1.md). The opt-in mode is pending spike 02 Part 2.
-- **Date:** 2026-10-19 (amended 2026-10-20)
+- **Status:** accepted. Hosts block confirmed by [spike 02 Part 1](../spikes/results/02-windows-dns-part1.md). NRPT + stub **rejected for Phase 2** by [spike 02 Part 2](../spikes/results/02-windows-dns-part2.md).
+- **Date:** 2026-10-19 (amended 2026-10-20 twice)
 
 ## Context
 
@@ -33,11 +33,17 @@ convenience for the default.
   replacement was shown to drop explicit ACEs. The read-only attribute is refused by default;
   clearing it is a journaled opt-in. Sharing violations are retried with backoff. A missing
   file is created, with a receipt that deletes it on revert. No DNS cache flush is needed.
-- NRPT + stub becomes an opt-in mode only after spike 02 shows acceptable behavior with
-  WireGuard, OpenVPN and browser secure-DNS settings.
+- *(Decided after spike 02 Part 2.)* **NRPT + stub is not offered as a Windows mode in
+  Phase 2.** In a Windows 11 25H2 VM, `.test` names served by the stub stopped resolving
+  entirely when the network adapter was unplugged (reproduced twice) and under a WireGuard
+  full tunnel with pushed DNS. In both cases the hosts block kept working. Developers are
+  routinely offline or on a VPN, so losing every site there is worse than having no
+  wildcards. Revisit in Phase 6, together with "hosts block plus declared-subdomain
+  expansion".
 
 ## Consequences
 
-- No wildcard subdomains in the default mode. `kiln link --alias` adds explicit names.
+- No wildcard subdomains on Windows. `kiln link --alias` adds explicit names, and a project
+  manifest can declare its subdomains so Kiln writes them for you.
 - One UAC prompt per site-set change. Batching keeps this to one prompt per user action.
 - The pure block-editing logic is shared with the Linux hosts fallback.

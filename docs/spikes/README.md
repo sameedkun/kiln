@@ -6,7 +6,7 @@ the Cargo workspace) so results can be reproduced; downloaded binaries never ent
 | # | Spike | Feeds | Time box | Status |
 |---|---|---|---|---|
 | 01 | [Web server: nginx vs Caddy on Windows](01-web-server.md) | ADR 0005 | 3 days | **done**: Caddy ([results](results/01-web-server.md)) |
-| 02 | [Windows DNS: hosts block vs NRPT + stub](02-windows-dns.md) | ADR 0006 (opt-in mode) | 3 days | Part 1 **done** ([results](results/02-windows-dns-part1.md)); Part 2 waiting on Hyper-V VM |
+| 02 | [Windows DNS: hosts block vs NRPT + stub](02-windows-dns.md) | ADR 0006 | 3 days | **done**: hosts block only; NRPT rejected ([part 1](results/02-windows-dns-part1.md), [part 2](results/02-windows-dns-part2.md)) |
 
 ## Ground rules for every spike
 
