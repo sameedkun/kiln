@@ -27,6 +27,7 @@ managed services. It runs on Windows, Linux and macOS.
 | `crates/kiln-ops` | Operation engine: prepare → journal → apply → verify, batch rollback, undo, crash recovery |
 | `crates/kiln-platform` | Platform adapter interfaces, plus the portable hosts-file block editor |
 | `crates/kiln-cli` | The `kiln` binary. Currently only `kiln plan hosts` (read-only preview) |
+| `docs/` | **Start here:** [plan](docs/plan.md), [progress](docs/progress.md), [issues log](docs/issues.md), [dev setup](docs/dev-setup.md) |
 | `docs/adr` | Architecture decision records |
 | `docs/spikes` | Phase 0 spike plans and their results |
 
