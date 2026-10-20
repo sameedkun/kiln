@@ -1,7 +1,7 @@
 # 0006. Windows name resolution: managed hosts block by default, NRPT stub as opt-in
 
-- **Status:** accepted for the default. The opt-in mode is pending [spike 02](../spikes/02-windows-dns.md).
-- **Date:** 2026-10-19
+- **Status:** accepted for the default, confirmed by [spike 02 Part 1](../spikes/results/02-windows-dns-part1.md). The opt-in mode is pending spike 02 Part 2.
+- **Date:** 2026-10-19 (amended 2026-10-20)
 
 ## Context
 
@@ -28,6 +28,11 @@ convenience for the default.
   and refuses ambiguous marker layouts.
 - The helper never changes the hosts file's ACLs. If it can't write, it fails with
   guidance instead.
+- *(Added after spike 02 Part 1.)* Editing is byte-oriented, because hosts files are not
+  always UTF-8. Writes use a same-directory temp file plus `ReplaceFileW`: rename-based
+  replacement was shown to drop explicit ACEs. The read-only attribute is refused by default;
+  clearing it is a journaled opt-in. Sharing violations are retried with backoff. A missing
+  file is created, with a receipt that deletes it on revert. No DNS cache flush is needed.
 - NRPT + stub becomes an opt-in mode only after spike 02 shows acceptable behavior with
   WireGuard, OpenVPN and browser secure-DNS settings.
 

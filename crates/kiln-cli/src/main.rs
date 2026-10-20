@@ -70,8 +70,8 @@ fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), 
         .map_err(|e| e.to_string())?;
 
     let path = file.unwrap_or_else(system_hosts_path);
-    let current = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let current =
+        std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let before = hosts::read_block(&current).map_err(|e| e.to_string())?;
     let updated = hosts::upsert_block(&current, &entries).map_err(|e| e.to_string())?;
     let after = hosts::read_block(&updated).map_err(|e| e.to_string())?;

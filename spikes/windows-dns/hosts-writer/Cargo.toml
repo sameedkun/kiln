@@ -1,0 +1,11 @@
+[package]
+name = "hosts-writer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Spike 02 throwaway: applies/removes Kiln's hosts block with different write strategies."
+
+[dependencies]
+kiln-core = { path = "../../../crates/kiln-core" }
+kiln-platform = { path = "../../../crates/kiln-platform" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
