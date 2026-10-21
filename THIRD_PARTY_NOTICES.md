@@ -7,6 +7,7 @@ adapted into, this repository. Rust crate dependencies are tracked by `Cargo.loc
 | Component | Source | License | Used for |
 |---|---|---|---|
 | Contributor Covenant 2.1 | https://www.contributor-covenant.org | CC BY 4.0 | `CODE_OF_CONDUCT.md` |
+| SQLite (bundled via `libsqlite3-sys`) | https://sqlite.org | Public domain | `kiln-state` database engine, compiled into the binaries |
 
 ## Planned
 

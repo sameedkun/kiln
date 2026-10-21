@@ -18,12 +18,23 @@ env:
 
 jobs:
   fmt:
-    name: rustfmt
+    name: rustfmt & policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       # rustup on the runner installs the toolchain pinned in rust-toolchain.toml.
       - run: cargo fmt --all --check
+      - name: unsafe stays in kiln-sys (ADR 0008)
+        run: |
+          status=0
+          for manifest in crates/*/Cargo.toml; do
+            [ "$manifest" = crates/kiln-sys/Cargo.toml ] && continue
+            if ! awk '/^\[lints\]/{f=1;next} /^\[/{f=0} f && /^workspace *= *true/{ok=1} END{exit !ok}' "$manifest"; then
+              echo "::error file=$manifest::must use '[lints] workspace = true' (unsafe_code is forbidden outside kiln-sys)"
+              status=1
+            fi
+          done
+          exit $status
 
   test:
     name: test (${{ matrix.os }})

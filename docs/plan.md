@@ -54,8 +54,8 @@ Details in [progress.md](progress.md#phase-0).
 
 | ID | Task | Depends on | Notes / findings to honour |
 |---|---|---|---|
-| P1-01 | State store (SQLite) and journal migration from JSONL | — | ADR 0004 follow-up |
-| P1-02 | `kiln-helper` (Windows): fixed operation list, named pipe with an ACL for the installing user, signed requests | P1-01 | Needs an `unsafe` exception ADR or a safe `ReplaceFileW` wrapper ([I-38](issues.md#i-38)) |
+| P1-01 | State store (SQLite) and journal migration from JSONL | — | **done** 2026-10-21 (`kiln-state`) |
+| P1-02 | `kiln-helper` (Windows): fixed operation list, named pipe with an ACL for the installing user, signed requests | P1-01 | FFI goes in `kiln-sys` only ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | P1-03 | `HostsBlock` DNS provider (Windows): `ReplaceFileW`, read-only refusal, sharing-violation retry, create-if-missing | P1-02 | [I-25](issues.md#i-25)–[I-27](issues.md#i-27), ADR 0006 |
 | P1-04 | Linux DNS: detect systemd-resolved / NetworkManager, hosts fallback via polkit | P1-01 | — |
 | P1-05 | Local CA: `.test`-only (name-constrained), key protected by DPAPI/libsecret, user-store trust by default, Firefox/NSS | P1-02 | Spike 01 PKI results, [I-12](issues.md#i-12) |

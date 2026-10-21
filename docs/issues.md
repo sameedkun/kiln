@@ -47,7 +47,7 @@ commits and PRs.
 | [I-35](#i-35) | infra | Checkpoint restore failed: not enough host memory | ✅ |
 | [I-36](#i-36) | infra | Rebuilt VM installs (~20 GB written) but has no bootable OS | 🔶 |
 | [I-37](#i-37) | DNS | NRPT + stub stops resolving when offline and under a full-tunnel VPN | 📌 (NRPT rejected) |
-| [I-38](#i-38) | code | `ReplaceFileW` needs Win32 FFI, but `unsafe` is forbidden | 🔶 |
+| [I-38](#i-38) | code | `ReplaceFileW` needs Win32 FFI, but `unsafe` is forbidden | ✅ (ADR 0008) |
 | [I-39](#i-39) | testing | Edge × DNS-over-HTTPS results unreliable (cold session); recheck pending | 🔶 |
 
 ---
@@ -290,10 +290,18 @@ commits and PRs.
 - **Decision:** NRPT rejected for Phase 2 ([ADR 0006](adr/0006-windows-dns-strategy.md)).
 
 <a id="i-38"></a>
-### I-38: `ReplaceFileW` needs `unsafe` 🔶
+### I-38: `ReplaceFileW` needs `unsafe` ✅
 - The workspace forbids `unsafe_code`, but the hosts writer needs `ReplaceFileW` (Win32 FFI).
-- **Next:** either an ADR granting a scoped exception to one audited module in `kiln-helper`,
-  or a vetted crate exposing a safe wrapper. Decide at the start of P1-02.
+- **Investigated (2026-10-21):** no safe wrapper exists. `atomicwrites` 0.4, `atomic-write-file`
+  0.3 and `staged_file` 0.5 all replace by rename (source grep: 0 uses of `ReplaceFile`), which
+  I-25 showed drops explicit ACEs.
+- **Resolved by [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md):** `unsafe` is allowed only
+  in the new `kiln-sys` crate, under stricter lints (`undocumented_unsafe_blocks`,
+  `multiple_unsafe_ops_per_block`, `unsafe_op_in_unsafe_fn` all deny). A CI step fails if any
+  other crate drops the workspace lints. `kiln_sys::replace_file` / `write_replacing` ship with
+  real-Windows tests showing an explicit deny ACE is kept, and that a plain rename drops it.
+- **Side finding:** a workspace-level `forbid` can't be relaxed per item, so `kiln-sys` defines its
+  own `[lints]` table instead of `workspace = true`.
 
 <a id="i-39"></a>
 ### I-39: Edge × DNS-over-HTTPS matrix unreliable 🔶

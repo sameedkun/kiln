@@ -1,15 +1,17 @@
 # Progress
 
-**Last updated:** 2026-10-20 · **Current phase:** Phase 0 done → **Phase 1 next** · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (1 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0007 accepted |
-| Repository, CI, license and dependency policy | **done** |
-| Operation engine (`kiln-ops`) | **done** for Phase 0: engine, journal, rollback, undo, recovery |
+| Architecture and key decisions | **done**: ADRs 0001–0008 accepted |
+| Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
+| Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
+| Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
+| OS wrappers (`kiln-sys`) | **started**: `replace_file` / `write_replacing` (ACL-preserving on Windows) |
 | Hosts-file editor (`kiln-platform::hosts`) | **done**: byte-safe, property-tested |
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
@@ -40,14 +42,14 @@ were caught before release ([I-01](issues.md#i-01), [I-02](issues.md#i-02),
 **Gate:** ADRs accepted ✓ · operation-engine property tests ✓ · CI green ✓.
 
 <a id="phase-1"></a>
-## Phase 1: MVP on Windows + Linux (next)
+## Phase 1: MVP on Windows + Linux (in progress)
 
 Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| P1-01 | State store (SQLite) + journal migration | next | |
-| P1-02 | `kiln-helper` (Windows) | next | decide [I-38](issues.md#i-38) first |
+| P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
+| P1-02 | `kiln-helper` (Windows) | **next** | [I-38](issues.md#i-38) resolved by [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md); `kiln_sys::write_replacing` ready |
 | P1-03 | `HostsBlock` provider (Windows) | later | |
 | P1-04 | Linux DNS providers | later | |
 | P1-05 | Local CA + trust stores | later | |
@@ -62,12 +64,38 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-14 | Coexistence detection | later | [I-11](issues.md#i-11) |
 | P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
 
+### P1-01 delivered (2026-10-21)
+
+- **I-38 decided** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)): no crate wraps
+  `ReplaceFileW` safely (`atomicwrites`, `atomic-write-file` and `staged_file` all rename).
+  The new `kiln-sys` crate is the only place `unsafe` is allowed, with stricter lints: one
+  operation per `unsafe` block, each with a `SAFETY` comment. A CI step fails if any other crate
+  drops the workspace lints. `kiln_sys::replace_file` / `write_replacing` have tests on real
+  Windows, including the I-25 regression: an explicit deny ACE survives `ReplaceFileW`, and a
+  rename drops it.
+- **`kiln-state`:** per-user SQLite database (`%APPDATA%\Kiln\state.db`, macOS
+  `~/Library/Application Support/Kiln`, Linux `$XDG_STATE_HOME/kiln`).
+  - WAL with `synchronous = FULL`, so every acknowledged journal entry is durable.
+  - Numbered migrations through `user_version`; databases from a newer Kiln are refused.
+  - Tables `settings`, `operations` (latest state) and `operation_events` (every transition).
+  - `StateStore` implements `kiln_ops::Journal`.
+- **Journal migration:** `StateStore::import_jsonl` replays the Phase 0 JSON Lines history in one
+  transaction. It's read-only on the source, refused if anything was already imported or recorded,
+  and ignores a torn tail without repairing it. `StateStore::open_dir` does this automatically once
+  and keeps the old file as `journal.jsonl.imported`.
+- **Contract tests:** `kiln_ops::testing` (feature `testing`) is one conformance suite that all
+  three journals pass: memory, JSONL and SQLite.
+- **End to end:** `tests/engine_on_sqlite.rs` shows a later "process" rolling back an interrupted
+  operation and undoing everything, using only the SQLite journal.
+- **CLI:** `kiln state info [--dir]` is read-only and never creates a database.
+- **Tests:** 42 total (22 new). Clippy pedantic and cargo-deny are clean.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
 |---|---|---|
-| `unsafe` exception vs safe wrapper for `ReplaceFileW` | [I-38](issues.md#i-38) | blocks P1-02/P1-03 |
 | Caddy admin over a Unix socket on Windows | [I-20](issues.md#i-20) | blocks P1-07 |
+| Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
 | OpenVPN, Firefox/Chrome, WordPress and Unicode-path tests | spike results | no (Phase 1 integration suite) |
@@ -83,7 +111,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | 2026-10-20 | Spike 01: nginx vs Caddy, interleaved benchmarks plus robustness tests. **Caddy chosen**, 93 vs 80 (`dbf84c9`). Findings I-11 to I-20. |
 | 2026-10-20 | Spike 02 Part 1 in Windows Sandbox: hosts block confirmed. Hosts editor made byte-oriented (I-04, I-05) (`3bcc1fa`). |
 | 2026-10-20 | Spike 02 Part 2 in a Hyper-V Windows 11 VM: **NRPT rejected** (offline and VPN failures, I-37). ADR 0006 accepted (`49479cc`). VM moved from D: to E: after a disk-space scare (I-28). |
-| 2026-10-20 | Docs set added: plan, progress, issues log, dev setup. |
+| 2026-10-20 | Docs set added: plan, progress, issues log, dev setup (`7040666`). |
+| 2026-10-21 | **Phase 1 started.** I-38 decided (ADR 0008, `kiln-sys`). **P1-01 done:** `kiln-state` SQLite store, journal migration, shared journal contract tests, `kiln state info`. |
 
 ## How to update this file
 

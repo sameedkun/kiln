@@ -23,6 +23,7 @@ working name). Start here.
 | [0005](adr/0005-web-server.md) | Caddy as the web server, driven by its JSON admin API | accepted (spike 01) |
 | [0006](adr/0006-windows-dns-strategy.md) | Windows `.test` resolution via a managed hosts block; NRPT rejected for now | accepted (spike 02) |
 | [0007](adr/0007-platform-delivery-order.md) | Windows and Linux first, macOS from Phase 3 | accepted |
+| [0008](adr/0008-unsafe-confined-to-kiln-sys.md) | `unsafe` only in the audited `kiln-sys` crate (enforced in CI) | accepted (resolves I-38) |
 
 ## Conventions
 

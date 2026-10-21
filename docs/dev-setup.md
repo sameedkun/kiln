@@ -20,6 +20,20 @@ The GNU toolchain on Windows is **not** supported: its bundled `dlltool` can't l
 
 Optional: `cargo install cargo-deny --locked` to run the license and advisory checks locally.
 
+`kiln-state` compiles SQLite from source (`rusqlite` with `bundled`), so a C compiler is
+required on every platform. That's MSVC on Windows; the toolchains listed above cover this.
+
+## Where things are
+
+| Crate | Role | `unsafe` |
+|---|---|---|
+| `kiln-core` | Domain types (TLD, host names) | forbidden |
+| `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
+| `kiln-platform` | Adapter traits, hosts block editor | forbidden |
+| `kiln-state` | SQLite state store (`StateStore`), JSONL import | forbidden |
+| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, …) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`) | forbidden |
+
 ## Everyday commands
 
 ```sh

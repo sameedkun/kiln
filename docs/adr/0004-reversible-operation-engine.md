@@ -38,7 +38,9 @@ open, because the write was never acknowledged. Any other corruption is a hard e
 
 ## Follow-ups
 
-- Journal storage may move into the SQLite state store once that exists (Phase 1). The JSONL
-  format stays as an export.
+- ~~Journal storage may move into the SQLite state store.~~ **Done in P1-01 (2026-10-21):**
+  `kiln_state::StateStore` implements `Journal` (latest state plus full event history). It
+  passes the same `kiln_ops::testing` contract as the memory and JSONL journals, and imports an
+  existing `journal.jsonl` once. `FileJournal` remains for tests and as an export format.
 - Elevated operations: the engine passes `requires_elevation` batches to `kiln-helper`
   (ADR to come with the helper).

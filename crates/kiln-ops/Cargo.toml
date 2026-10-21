@@ -18,3 +18,7 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Exposes `kiln_ops::testing`, the shared Journal conformance suite, to other crates.
+testing = []

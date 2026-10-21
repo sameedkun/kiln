@@ -45,10 +45,19 @@ pub enum JournalError {
         line: usize,
         source: serde_json::Error,
     },
+    /// Errors from other storage backends (e.g. the SQLite state store), kept opaque so this
+    /// crate does not depend on them.
+    #[error("journal storage error: {0}")]
+    Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Durable record of operations. Writes are events; [`Journal::entries`] returns the latest
 /// state of every operation in id order.
+///
+/// Contract (checked by [`crate::testing`] for every implementation): entries come back in
+/// ascending id order with every field exactly as recorded; recording an existing id replaces
+/// its latest state; ids up to `i64::MAX` are supported; durable implementations keep all of
+/// this across reopen.
 pub trait Journal {
     fn record(&mut self, entry: &JournalEntry) -> Result<(), JournalError>;
     fn entries(&self) -> Result<Vec<JournalEntry>, JournalError>;
@@ -135,6 +144,22 @@ impl Journal for FileJournal {
     }
 
     fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
+        Ok(latest_per_id(self.events()?))
+    }
+}
+
+impl FileJournal {
+    /// Opens an existing journal for reading without repairing it, so importing from it never
+    /// modifies the source. A torn final line is still ignored by [`FileJournal::events`].
+    pub fn open_read_only(path: impl Into<PathBuf>) -> Result<Self, JournalError> {
+        let path = path.into();
+        std::fs::metadata(&path).map_err(|source| io_error(&path, source))?;
+        Ok(Self { path })
+    }
+
+    /// Every recorded event in write order, including superseded states. Used to migrate the
+    /// full history into the state store.
+    pub fn events(&self) -> Result<Vec<JournalEntry>, JournalError> {
         let file = File::open(&self.path).map_err(|source| io_error(&self.path, source))?;
         let lines: Vec<String> = BufReader::new(file)
             .lines()
@@ -158,7 +183,7 @@ impl Journal for FileJournal {
                 }
             }
         }
-        Ok(latest_per_id(events))
+        Ok(events)
     }
 }
 
@@ -177,6 +202,31 @@ mod tests {
             state,
             note: None,
         }
+    }
+
+    #[test]
+    fn memory_journal_meets_the_contract() {
+        crate::testing::check_journal_contract(MemoryJournal::default());
+    }
+
+    #[test]
+    fn file_journal_meets_the_contract_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testing::check_journal_contract(
+            FileJournal::open(dir.path().join("fresh.jsonl")).unwrap(),
+        );
+        let path = dir.path().join("persist.jsonl");
+        crate::testing::check_journal_persistence(|| FileJournal::open(&path).unwrap());
+    }
+
+    #[test]
+    fn file_journal_events_keep_superseded_states_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut journal = FileJournal::open(dir.path().join("j.jsonl")).unwrap();
+        journal.record(&entry(1, OpState::Prepared)).unwrap();
+        journal.record(&entry(1, OpState::Applied)).unwrap();
+        let states: Vec<_> = journal.events().unwrap().iter().map(|e| e.state).collect();
+        assert_eq!(states, vec![OpState::Prepared, OpState::Applied]);
     }
 
     #[test]

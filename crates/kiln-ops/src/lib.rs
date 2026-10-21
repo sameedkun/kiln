@@ -15,6 +15,8 @@
 mod engine;
 mod journal;
 mod operation;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use engine::{ApplyError, BatchReport, Engine, RecoveryReport, Registry};
 pub use journal::{FileJournal, Journal, JournalEntry, JournalError, MemoryJournal, OpState};

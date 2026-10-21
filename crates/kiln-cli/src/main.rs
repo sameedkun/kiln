@@ -1,4 +1,4 @@
-//! `kiln` CLI. Phase 0 only exposes read-only previews; nothing here writes to the system.
+//! `kiln` CLI. Read-only so far: previews (`plan`) and state inspection (`state info`).
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
@@ -26,6 +26,50 @@ enum Command {
         #[command(subcommand)]
         target: PlanTarget,
     },
+    /// Inspect Kiln's own state database.
+    State {
+        #[command(subcommand)]
+        action: StateAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum StateAction {
+    /// Where the state database is, its schema version and journal summary.
+    Info {
+        /// State directory to inspect instead of the per-user default.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+}
+
+fn state_info(dir: Option<PathBuf>) -> Result<(), String> {
+    let dir = dir
+        .or_else(kiln_state::default_state_dir)
+        .ok_or("cannot determine the state directory (APPDATA/HOME not set)")?;
+    let db = dir.join(kiln_state::DB_FILE);
+    println!("State directory: {}", dir.display());
+    if !db.is_file() {
+        println!("No state database yet ({} does not exist).", db.display());
+        if dir.join(kiln_state::LEGACY_JOURNAL_FILE).is_file() {
+            println!("A legacy journal.jsonl is present; it will be imported on first use.");
+        }
+        return Ok(());
+    }
+    let store = kiln_state::StateStore::open(&db).map_err(|e| e.to_string())?;
+    println!("Database:        {}", db.display());
+    println!(
+        "Schema version:  {} (this build: {})",
+        store.schema_version().map_err(|e| e.to_string())?,
+        kiln_state::SCHEMA_VERSION
+    );
+    let counts = store.counts_by_state().map_err(|e| e.to_string())?;
+    let total: u64 = counts.iter().map(|(_, n)| n).sum();
+    println!("Operations:      {total}");
+    for (state, n) in counts {
+        println!("  {state:?}: {n}");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,6 +148,9 @@ fn main() -> ExitCode {
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, &tld, file),
+        Command::State {
+            action: StateAction::Info { dir },
+        } => state_info(dir),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

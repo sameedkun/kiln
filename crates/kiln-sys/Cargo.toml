@@ -1,0 +1,29 @@
+[package]
+name = "kiln-sys"
+description = "The only Kiln crate allowed to contain `unsafe`: small, safe wrappers over OS APIs (ADR 0008)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# Not `workspace = true`: the workspace forbids unsafe_code, which cannot be relaxed per item.
+# Everything else mirrors the workspace, plus stricter unsafe hygiene (ADR 0008).
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
