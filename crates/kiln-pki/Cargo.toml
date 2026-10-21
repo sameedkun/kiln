@@ -1,0 +1,26 @@
+[package]
+name = "kiln-pki"
+description = "Kiln's local certificate authority: name-constrained root, short-lived intermediate, protected key storage (ADR 0010)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+kiln-sys.workspace = true
+rcgen.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+rustls-pki-types.workspace = true
+rustls-webpki.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -52,6 +52,7 @@ commits and PRs.
 | [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
 | [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
 | [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
+| [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | 🔶 |
 
 ---
 
@@ -361,3 +362,14 @@ commits and PRs.
   - Side effect: Kiln's own state database now exists at `%APPDATA%\Kiln\state.db` (one
     reverted operation).
 
+
+<a id="i-43"></a>
+### I-43: Real `Root` store trust is a manual check 🔶
+- Adding to or removing from `Cert:\CurrentUser\Root` makes Windows show its own security
+  dialog, which CI can't click. All logic is tested automatically against private per-test
+  stores (`KilnTest-<pid>-<n>`, deleted afterwards): trust + undo from the journal, a
+  pre-existing cert left alone, foreign roots refused by the `kiln-sys` wrapper.
+- **Manual check:** `kiln ca init` → `kiln ca trust` (choose **Yes** in the Windows dialog) →
+  `Get-ChildItem Cert:\CurrentUser\Root | ? Subject -like '*Kiln Local Development CA*'`
+  shows it → `kiln undo <n>` (confirm the removal dialog) → gone. Also confirm Edge or Chrome
+  shows a `.test` page as secure once P1-06 serves one.

@@ -6,6 +6,8 @@
 
 pub mod hosts;
 pub mod hosts_op;
+#[cfg(windows)]
+pub mod trust;
 
 use std::net::IpAddr;
 

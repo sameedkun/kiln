@@ -10,12 +10,16 @@ publish.workspace = true
 [dependencies]
 kiln-core.workspace = true
 kiln-ops.workspace = true
+kiln-sys.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
+kiln-pki.workspace = true
+rcgen.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

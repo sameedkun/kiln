@@ -1,13 +1,14 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (3 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (4 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0009 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0010 accepted |
+| Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; real `Root` dialog check pending ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
@@ -54,8 +55,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
 | P1-04 | Linux DNS providers | **next** (or P1-05) | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
-| P1-05 | Local CA + trust stores | later | |
-| P1-06 | Caddy integration | later | |
+| P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
+| P1-06 | Caddy integration | **next** | Caddy PKI gets `intermediate.crt/.key` + `root.crt` from `CaStore::web_server_files` |
 | P1-07 | Caddy admin API lockdown | later | [I-20](issues.md#i-20) |
 | P1-08 | PHP runtime provider | later | |
 | P1-09 | Process supervisor | later | [I-14](issues.md#i-14) |
@@ -152,6 +153,43 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 - **Verified on the real machine (2026-10-21):** `kiln hosts set demo` → `ping demo.test` →
   `kiln undo 1` left the hosts file byte-identical, with the same ACL ([I-42](issues.md#i-42)).
 
+### P1-05 delivered (2026-10-21)
+
+Design: [ADR 0010](adr/0010-local-certificate-authority.md).
+
+- **`kiln-pki`** (rcgen with the `ring` backend):
+  - Root: ECDSA P-256, `CA:TRUE pathlen:1`, **critical Name Constraints permitting only the dev
+    TLD**, valid 3 years. The subject names the owner and date and starts with `Kiln Local
+    Development CA`.
+  - Intermediate: same constraints, `pathlen:0`, valid 30 days, for Caddy (P1-06).
+  - `CaStore`: never overwrites a root. The root key is written **only** as a
+    `KeyProtector` blob (DPAPI on Windows, Kiln-specific entropy) and decrypted in memory just
+    long enough to sign an intermediate.
+- **`kiln-sys::wincrypt`:** `dpapi_protect` / `dpapi_unprotect`; `CertStore` (current user)
+  `contains` / `add` / `remove`. `add` **refuses any certificate whose subject isn't a Kiln
+  root**. Test stores can be deleted; `Root` and `My` can't.
+- **`kiln-platform::trust::TrustCaOp`** (`trust.ca.user`): reversible per-user trust. Undo
+  removes the root only if Kiln added it.
+- **CLI:** `kiln ca init [--tld]` (idempotent; re-issues the intermediate), `kiln ca info`,
+  `kiln ca trust` (preview → confirm → the Windows dialog → journaled, so `kiln undo <n>`
+  removes it).
+- **Tests:** 13 new (95 total).
+  - The chain is verified independently with **rustls-webpki**: `blog.test` and
+    `api.blog.test` are accepted; `example.com`, `test.example.com` and `bank.test.com` are
+    rejected.
+  - Critical name constraints and basic constraints are checked; thumbprints are stable;
+    `Debug` never prints the key.
+  - The store never overwrites a root, holds no plaintext key on disk, a reloaded store
+    issues a working intermediate, and a DPAPI blob is useless without DPAPI.
+  - DPAPI round-trips and rejects tampering or wrong entropy.
+  - Trust round-trips through the journal, a pre-existing cert is left alone, and a foreign
+    root is refused.
+  - All store tests use private stores, deleted afterwards (0 left behind).
+- **Firefox/NSS:** planned in ADR 0010 §10–12. Windows uses Firefox's enterprise-roots setting
+  via a journaled `user.js` change, and Linux uses `certutil` NSS imports. Implemented with
+  `kiln doctor` and P1-04.
+- **Manual check pending:** the real `CurrentUser\Root` dialog flow ([I-43](issues.md#i-43)).
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -160,6 +198,8 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
+| Manual `Root` store trust check | [I-43](issues.md#i-43) | no |
+| Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
 | OpenVPN, Firefox/Chrome, WordPress and Unicode-path tests | spike results | no (Phase 1 integration suite) |
@@ -181,6 +221,7 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 | 2026-10-21 | **P1-02 done:** ADR 0009; Windows FFI in `kiln-sys::win`; new `kiln-helper` crate and binary (authenticated pipe protocol, fixed operations, hosts write policy); 28 new tests, 70 total. |
 | 2026-10-21 | **P1-03 done:** `HostsBlockOp` (platform-neutral) + `HelperSession` (lazy UAC); helper protocol v2; `kiln hosts set/clear`, `kiln undo`; 12 new tests, 82 total. |
 | 2026-10-21 | **I-42 manual end-to-end passed** on the dev machine: `kiln hosts set demo` (1 UAC prompt) → `demo.test` resolves → `kiln undo 1` (1 UAC prompt) → hosts file SHA-256 identical (`4387EA88…`), ACL identical, Herd's block untouched. |
+| 2026-10-21 | **P1-05 done (Windows):** ADR 0010; `kiln-pki` (name-constrained root + 30-day intermediate, DPAPI-protected key); `kiln-sys::wincrypt`; `TrustCaOp`; `kiln ca init/info/trust`; 13 new tests, 95 total. |
 
 ## How to update this file
 

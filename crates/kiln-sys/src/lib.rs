@@ -8,3 +8,6 @@ mod replace;
 pub mod win;
 
 pub use replace::{replace_file, write_replacing};
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub mod wincrypt;

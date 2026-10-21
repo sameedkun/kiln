@@ -38,6 +38,11 @@ enum Command {
         #[command(subcommand)]
         action: HostsAction,
     },
+    /// Kiln's local certificate authority (only ever valid for the development TLD).
+    Ca {
+        #[command(subcommand)]
+        action: CaAction,
+    },
     /// Undo a recorded operation by its number (see the output of the command that made it).
     Undo {
         id: u64,
@@ -45,6 +50,23 @@ enum Command {
         #[arg(long)]
         force: bool,
         /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CaAction {
+    /// Create the root CA (if there is none) and issue a fresh intermediate for the web server.
+    Init {
+        #[arg(long, default_value = "test")]
+        tld: String,
+    },
+    /// Show the CA's certificates, fingerprints and expiry.
+    Info,
+    /// Trust the root CA for your Windows account (Windows asks you to confirm).
+    Trust {
+        /// Do not ask for confirmation in the terminal (Windows still shows its own dialog).
         #[arg(long, short)]
         yes: bool,
     },
@@ -184,6 +206,15 @@ fn main() -> ExitCode {
         } => Tld::new(&tld)
             .map_err(|e| e.to_string())
             .and_then(|tld| apply::hosts_set(tld, Vec::new(), yes)),
+        Command::Ca {
+            action: CaAction::Init { tld },
+        } => apply::ca_init(&tld),
+        Command::Ca {
+            action: CaAction::Info,
+        } => apply::ca_info(),
+        Command::Ca {
+            action: CaAction::Trust { yes },
+        } => apply::ca_trust(yes),
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
     };
     match result {
