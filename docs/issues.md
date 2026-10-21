@@ -50,6 +50,8 @@ commits and PRs.
 | [I-38](#i-38) | code | `ReplaceFileW` needs Win32 FFI, but `unsafe` is forbidden | ✅ (ADR 0008) |
 | [I-39](#i-39) | testing | Edge × DNS-over-HTTPS results unreliable (cold session); recheck pending | 🔶 |
 | [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
+| [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
+| [I-42](#i-42) | helper | UAC launch path can only be tested manually | 🔶 |
 
 ---
 
@@ -325,3 +327,21 @@ commits and PRs.
   in every assertion message. As a side effect the test runs in 0.1 s instead of 2.3 s.
 - **Lesson:** OS-behaviour tests must not depend on shell output formats. Prefer tools with
   machine-readable output, and always print the observed value on failure.
+
+<a id="i-41"></a>
+### I-41: Over-the-shoulder elevation not yet verified 🔶
+- When a standard user approves UAC with *another* account's admin credentials, `kiln-helper`
+  runs as that admin. The helper builds the pipe DACL from the **client process's** token
+  user (`process_user_sid(client_pid)`), so the right user gets access. But opening a
+  different user's process token can be denied by that token's default DACL.
+- **Next:** test on a VM with a standard user plus a separate admin account. If the token query
+  is denied, fall back to the SID the client passes as an argument, validated against the
+  pipe client's PID after connect. Tracked for P1-15.
+
+<a id="i-42"></a>
+### I-42: UAC launch is manual-test only 🔶
+- `kiln_sys::win::spawn_elevated` (`ShellExecuteExW` `runas`) shows a consent prompt, which CI
+  can't click. Everything *after* launch (pipe, identity check, MAC, operations, the real
+  binary) is covered automatically in `crates/kiln-helper/tests/session.rs`.
+- **Manual check:** `cargo test -p kiln-sys -- --ignored elevation_runs_and_reports_the_exit_code`
+  (approve the prompt; expects exit code 7). Run it once per Windows release and before 1.0.

@@ -3,5 +3,8 @@
 //! plain Rust types and `std::io::Result`.
 
 mod replace;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub mod win;
 
 pub use replace::{replace_file, write_replacing};

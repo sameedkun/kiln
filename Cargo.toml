@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state"]
+members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper"]
 exclude = ["spikes"]
 
 [workspace.package]
@@ -17,6 +17,7 @@ kiln-ops = { path = "crates/kiln-ops" }
 kiln-platform = { path = "crates/kiln-platform" }
 kiln-sys = { path = "crates/kiln-sys" }
 kiln-state = { path = "crates/kiln-state" }
+kiln-helper = { path = "crates/kiln-helper" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,6 +26,10 @@ proptest = "1"
 tempfile = "3"
 # Bundled SQLite: one known version on every platform, no system library needed.
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Helper message authentication (ADR 0009); RustCrypto, MIT/Apache-2.0.
+hmac = "0.13"
+sha2 = "0.11"
+getrandom = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

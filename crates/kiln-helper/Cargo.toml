@@ -1,0 +1,29 @@
+[package]
+name = "kiln-helper"
+description = "Kiln's privileged helper: a fixed list of validated operations over an authenticated local channel (ADR 0009)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kiln-helper"
+path = "src/main.rs"
+
+[dependencies]
+kiln-core.workspace = true
+kiln-platform.workspace = true
+kiln-sys.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

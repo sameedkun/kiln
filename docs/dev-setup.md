@@ -32,6 +32,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-platform` | Adapter traits, hosts block editor | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`), JSONL import | forbidden |
 | `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, …) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, `kiln-helper` binary | forbidden |
 | `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`) | forbidden |
 
 ## Everyday commands
