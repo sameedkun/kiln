@@ -202,17 +202,33 @@ mod tests {
                 .unwrap();
             assert!(status.status.success(), "icacls failed: {status:?}");
         }
-        fn has_guest_deny(path: &Path) -> bool {
-            let out = Command::new("powershell")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    &format!("(Get-Acl -LiteralPath '{}').Sddl", path.display()),
-                ])
+        /// The file's DACL as SDDL, via `icacls /save` (locale-independent, no PowerShell; the
+        /// first CI run showed `Get-Acl` output can't be relied on in runners).
+        fn sddl(path: &Path) -> String {
+            let saved = path.with_extension("acl");
+            let out = Command::new("icacls")
+                .arg(path)
+                .arg("/save")
+                .arg(&saved)
                 .output()
                 .unwrap();
-            let sddl = String::from_utf8_lossy(&out.stdout);
-            sddl.contains("(D;") && sddl.contains(";;;BG)")
+            assert!(out.status.success(), "icacls /save failed: {out:?}");
+            // icacls writes UTF-16LE: "<name>\r\n<SDDL>\r\n".
+            let bytes = fs::read(&saved).unwrap();
+            fs::remove_file(&saved).unwrap();
+            let units: Vec<u16> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect();
+            String::from_utf16_lossy(&units)
+        }
+        fn has_guest_deny(path: &Path) -> bool {
+            let sddl = sddl(path);
+            // An explicit (non-inherited) deny ACE for BUILTIN\Guests: "(D;;<rights>;;;BG)".
+            sddl.split('(')
+                .any(|ace| ace.starts_with("D;;") && ace.trim_end().ends_with(";;;BG)"))
         }
 
         let dir = tempfile::tempdir().unwrap();
@@ -220,12 +236,13 @@ mod tests {
         let target = dir.path().join("kept");
         fs::write(&target, b"old").unwrap();
         deny_guests_write(&target);
-        assert!(has_guest_deny(&target));
+        assert!(has_guest_deny(&target), "setup: {}", sddl(&target));
         write_replacing(&target, b"new").unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new");
         assert!(
             has_guest_deny(&target),
-            "ReplaceFileW must keep the explicit ACE"
+            "ReplaceFileW must keep the explicit ACE: {}",
+            sddl(&target)
         );
 
         let renamed = dir.path().join("dropped");

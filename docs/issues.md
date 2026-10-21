@@ -49,6 +49,7 @@ commits and PRs.
 | [I-37](#i-37) | DNS | NRPT + stub stops resolving when offline and under a full-tunnel VPN | 📌 (NRPT rejected) |
 | [I-38](#i-38) | code | `ReplaceFileW` needs Win32 FFI, but `unsafe` is forbidden | ✅ (ADR 0008) |
 | [I-39](#i-39) | testing | Edge × DNS-over-HTTPS results unreliable (cold session); recheck pending | 🔶 |
+| [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
 
 ---
 
@@ -308,3 +309,19 @@ commits and PRs.
 - The main run's DoH rows came from a cold interactive session (first Edge launches failed). A
   3-trial matrix and a second WireGuard trial are scripted (`part2.ps1 -Phase matrix|wgcheck`)
   but waiting on a working VM ([I-36](#i-36)). Doesn't affect the hosts-block decision.
+
+## Phase 1
+
+<a id="i-40"></a>
+### I-40: ACL test failed only on the GitHub Windows runner ✅
+- **Found:** 2026-10-21, CI run for `f9c3f4b`. `windows_keeps_explicit_aces_where_rename_drops_them`
+  failed at its *setup* assertion: `icacls /deny` reported success, but the test's check (SDDL
+  from PowerShell `Get-Acl`) didn't see the deny ACE. It passed on the dev machine. The product
+  code (`ReplaceFileW`) was never reached.
+- **Cause:** the test's detection depended on PowerShell output in the runner environment, which
+  was not reliable there.
+- **Fix:** read the security descriptor with `icacls <file> /save <out>` (UTF-16 SDDL,
+  locale-independent, no PowerShell), match an explicit `(D;;…;;;BG)` ACE, and include the SDDL
+  in every assertion message. As a side effect the test runs in 0.1 s instead of 2.3 s.
+- **Lesson:** OS-behaviour tests must not depend on shell output formats. Prefer tools with
+  machine-readable output, and always print the observed value on failure.
