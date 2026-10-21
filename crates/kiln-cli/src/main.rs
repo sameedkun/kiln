@@ -1,6 +1,6 @@
 //! `kiln` CLI: previews (`plan`), state inspection (`state info`), hosts block changes
 //! (`hosts set|sync|clear`), the local CA (`ca`), sites and the web server (`link`, `secure`,
-//! `web`), and `undo`.
+//! `web`), PHP runtimes (`php`), and `undo`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,6 +10,7 @@ use kiln_core::Tld;
 use kiln_platform::hosts;
 
 mod apply;
+mod php;
 mod web;
 
 #[derive(Debug, Parser)]
@@ -64,6 +65,11 @@ enum Command {
     Unsecure { name: String },
     /// List linked sites with their URLs.
     Sites,
+    /// PHP runtimes from windows.php.net (verified downloads, into Kiln's own folder).
+    Php {
+        #[command(subcommand)]
+        action: PhpAction,
+    },
     /// Kiln's web server (Caddy, running as kiln-caddy).
     Web {
         #[command(subcommand)]
@@ -82,10 +88,22 @@ enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+enum PhpAction {
+    /// List the PHP versions that can be installed (latest patch of each).
+    Available,
+    /// Download, verify and install a PHP version, e.g. 8.4 (or its exact latest patch).
+    Install { version: String },
+    /// List the PHP versions Kiln has installed.
+    List,
+    /// Delete an installed PHP version.
+    Remove { version: String },
+}
+
+#[derive(Debug, Subcommand)]
 enum WebAction {
-    /// Install Caddy from an official release archive (checked against a pinned SHA-512).
+    /// Download (or take from --archive) the pinned Caddy release, verify its SHA-512, install it.
     Install {
-        /// The release archive you downloaded from Caddy's GitHub releases page.
+        /// Use this already downloaded release archive instead of downloading it.
         #[arg(long)]
         archive: Option<PathBuf>,
     },
@@ -284,6 +302,12 @@ fn main() -> ExitCode {
         Command::Secure { name } => web::set_secure(&name, true),
         Command::Unsecure { name } => web::set_secure(&name, false),
         Command::Sites => web::sites(),
+        Command::Php { action } => match action {
+            PhpAction::Available => php::available(),
+            PhpAction::Install { version } => php::install(&version),
+            PhpAction::List => php::list(),
+            PhpAction::Remove { version } => php::remove(&version),
+        },
         Command::Web { action } => match action {
             WebAction::Install { archive } => web::install(archive),
             WebAction::Start {

@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (6 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (7 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0012 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0013 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -19,7 +19,8 @@
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
 | Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/reload/status`, `hosts sync`. Site changes **reload live** over a per-user admin socket (P1-07). Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
-| Serving a PHP site end to end | **static sites work**; PHP next (P1-08, P1-09) |
+| PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
+| Serving a PHP site end to end | **static sites work**; PHP runtimes installable; php-cgi behind Caddy next (P1-09) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -59,8 +60,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
-| P1-08 | PHP runtime provider | **next** | Shared downloader (also for Caddy) |
-| P1-09 | Process supervisor | later | [I-14](issues.md#i-14) |
+| P1-08 | PHP runtime provider | **done** 2026-10-21 (Windows) | [ADR 0013](adr/0013-downloads-and-php-runtimes.md); see below. Shared verified downloader; `kiln web install` downloads Caddy |
+| P1-09 | Process supervisor | **next** | php-cgi pools behind Caddy; [I-14](issues.md#i-14) |
 | P1-10 | Sites + drivers | later | |
 | P1-11 | Per-site PHP + shims | later | |
 | P1-12 | `kiln doctor` | later | |
@@ -318,6 +319,55 @@ netstat -ano | findstr :2019                # prints nothing: no TCP admin port
 .\target\debug\kiln.exe undo <n>            # the hosts, then the trust operation numbers printed above
 ```
 
+<a id="p1-08"></a>
+### P1-08 delivered (2026-10-21)
+
+Design: [ADR 0013](adr/0013-downloads-and-php-runtimes.md).
+
+- **New crate `kiln-fetch`:** verified downloads.
+  - The expected SHA-256/SHA-512 is known before the first byte. The body is hashed while it
+    streams to `.partial`, and only a matching file is moved into
+    `%LOCALAPPDATA%\Kiln\downloads`.
+  - HTTPS only, redirects included. Server certificates are checked against the Windows
+    certificate store (`rustls-platform-verifier`), and proxies come from the environment.
+  - The cache is reused only after re-hashing. There is a 512 MB cap and a 1 h body timeout
+    ([I-48](issues.md#i-48)).
+  - Client: `ureq` 3 with rustls and ring, so no OpenSSL.
+- **New crate `kiln-php`:**
+  - `index`: parses `releases.json` from `downloads.php.net/~windows/releases/` (where
+    windows.php.net redirects). Per version it picks the x64 NTS build (`nts-vs16/17-x64`).
+    File names must be plain, and SHA-256s are validated.
+  - `resolve`: `8.4` → the latest patch. An exact older patch is refused, because it can't be
+    verified (archives have no checksums).
+  - `install`: verified download; extraction that refuses `..`/absolute paths and symlinks,
+    with a 1 GB cap; `php.ini` from `php.ini-development` plus a Kiln section; `php -v` must
+    report the version with no extension warnings.
+    - A missing Visual C++ runtime is explained, with Microsoft's link, and not installed.
+    - The folder carries an incomplete-marker until the check passes ([I-49](issues.md#i-49)).
+- **`kiln-state`:** migration v3, a `php_versions` table (version, folder, archive, SHA-256).
+- **CLI:** `kiln php available`, `kiln php install <8.4|8.4.27>`, `kiln php list`,
+  `kiln php remove <version>` (only deletes inside Kiln's PHP folder). `kiln web install` now
+  downloads the pinned Caddy itself; `--archive` stays for offline use.
+- **`deny.toml`:** licences are judged for the platforms Kiln ships for. A wasm-only CDLA crate
+  in `rustls-platform-verifier`'s graph is never built into Kiln.
+- **Tests:** 20 new, 148 total.
+  - The downloader against a local server: cache reuse offline, mismatch discarded, tampered
+    cache refetched, SHA-512, redirect, 404, size limit, HTTP refused.
+  - Index parsing and resolution, including an index pointing outside its folder.
+  - `php.ini` rendering, extraction escape refused, interrupted install redone, a failed check
+    leaving nothing behind, `php -v` parsing, and PHP state rows.
+- **Real run (agent session, 2026-10-21):**
+  - `kiln php available` listed 7.4.33 to 8.5.12 from the live index.
+  - `kiln php install 8.4.26` was refused, pointing to 8.4.27.
+  - `kiln php install 8.4` downloaded 34 MB and verified SHA-256 `93bd8a81…a41bf5236`. The
+    first try hit I-48 and then I-49; both are fixed. PHP 8.4.27 installed, with
+    `curl, fileinfo, gd, intl, mbstring, exif, openssl, pdo_mysql, pdo_pgsql, pdo_sqlite,
+    sqlite3, sodium, zip` enabled and loading cleanly. PDO SQLite and OpenSSL work.
+  - Install again was a no-op, remove deleted it, and a reinstall worked offline from the
+    cache.
+  - `kiln web install` downloaded Caddy 2.11.7 from GitHub through its CDN redirect and
+    accepted it on the pinned SHA-512.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -330,7 +380,8 @@ netstat -ano | findstr :2019                # prints nothing: no TCP admin port
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
 | Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21, repeated from a normal terminal with the browser check |
 | Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
-| Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | with P1-08 |
+| Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
+| Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
 | Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
@@ -360,6 +411,7 @@ netstat -ano | findstr :2019                # prints nothing: no TCP admin port
 | 2026-10-21 | **P1-06 browser check passed** (run by the user from a normal PowerShell): `http://hello.test:8080/` served over plain HTTP, `https://shop.test:8443/` shown as secure in Chrome with no warning, and `http://shop.test:8080/` redirected to HTTPS. Hosts block and trust undone afterwards. Confirms I-43 in Chrome and I-45 (fresh state outside the app container). |
 | 2026-10-21 | **P1-07 done:** ADR 0012. A spike showed Caddy's admin endpoint works on a Unix socket on Windows. The admin endpoint now listens only on a per-user socket (I-20 resolved); `kiln-sys` gained `AF_UNIX` connect, and `kiln-web` an admin client with retry (I-46). Site changes reload live, and stop is graceful. 9 new tests, 128 total. Measured: a reload drops about 1 new connection per 3–7 reloads under saturating load, versus about 540 ms of refused connections per restart (I-47). The real-terminal check is left to the user (I-45: `AF_UNIX` is broken in the app container). |
 | 2026-10-21 | **P1-07 live-reload check passed** (run by the user from a normal PowerShell): `kiln unsecure shop` and `kiln secure shop` each reloaded the running server, the PID was 21656 before and after, `admin.sock` existed, `netstat` showed nothing on :2019, `kiln web stop` stopped it, and hosts (#3) and trust (#4) were undone. |
+| 2026-10-21 | **P1-08 done (Windows):** ADR 0013. New `kiln-fetch` (verified HTTPS downloads: digest first, OS trust store, cache) and `kiln-php` (windows.php.net index, latest-patch-only, safe extraction, php.ini defaults, start-up check); `php_versions` table; `kiln php available/install/list/remove`; `kiln web install` downloads Caddy. 20 new tests, 148 total. Real install of PHP 8.4.27 and download of Caddy 2.11.7 verified; fixed I-48 (body timeout) and I-49 (folder rename) on the way. |
 
 ## How to update this file
 

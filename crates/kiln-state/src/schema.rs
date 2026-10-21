@@ -40,6 +40,14 @@ const MIGRATIONS: &[&str] = &[
          secure     INTEGER NOT NULL DEFAULT 0 CHECK (secure IN (0, 1)),
          created_ms INTEGER NOT NULL
      ) STRICT;",
+    // v3: installed PHP runtimes (ADR 0013).
+    "CREATE TABLE php_versions (
+         version      TEXT    PRIMARY KEY,  -- e.g. 8.4.27
+         dir          TEXT    NOT NULL,     -- absolute install folder
+         archive      TEXT    NOT NULL,     -- file name it was installed from
+         sha256       TEXT    NOT NULL,     -- verified digest of that archive
+         installed_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.

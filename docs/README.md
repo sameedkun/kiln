@@ -28,6 +28,7 @@ working name). Start here.
 | [0010](adr/0010-local-certificate-authority.md) | Local CA: `.test`-only (name-constrained) root, DPAPI-protected key, 30-day intermediate for Caddy, per-user reversible trust; Firefox/NSS plan | accepted, implemented (P1-05) |
 | [0011](adr/0011-caddy-integration.md) | Caddy integration: generated JSON, sites HTTP by default with per-site HTTPS, pinned `kiln-caddy` binary, admin endpoint off, background process control | accepted, implemented (P1-06) |
 | [0012](adr/0012-caddy-admin-channel.md) | Caddy admin endpoint only on a per-user Unix socket; live reload over `/load` with retry; graceful stop | accepted, implemented (P1-07) |
+| [0013](adr/0013-downloads-and-php-runtimes.md) | Verified HTTPS downloads (digest known first, OS trust store, cache); PHP NTS runtimes from windows.php.net, latest patch per version only; php.ini defaults; no system-wide installs | accepted, implemented (P1-08) |
 
 ## Conventions
 

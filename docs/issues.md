@@ -57,6 +57,8 @@ commits and PRs.
 | [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; checks run from a normal terminal) |
 | [I-46](#i-46) | Caddy | On Windows, the first admin request after each config load gets an EOF (admin listener swap) | ✅ (retry in the admin client) |
 | [I-47](#i-47) | Caddy | A live reload can close a brand-new connection without a response (about 1 per 3–7 reloads under saturating load, Windows) | 🔶 (accepted; recheck on Linux and newer Caddy) |
+| [I-48](#i-48) | downloads | A 60 s body timeout failed a real 34 MB PHP download on a slow line (ureq's body timeout is total, not idle) | ✅ (1 h total; no stall detection yet) |
+| [I-49](#i-49) | PHP | Renaming the extracted PHP folder into place failed with Access denied | ✅ (extract in place behind an incomplete-marker) |
 
 ---
 
@@ -494,3 +496,30 @@ commits and PRs.
   - The end-to-end test allows at most one empty close per reload and nothing else.
 - **Next:** measure on Linux (SO_REUSEPORT listener sharing) with P1-04, and recheck on newer
   Caddy releases. Report upstream if it still happens.
+
+## P1-08: downloads and PHP runtimes
+
+<a id="i-48"></a>
+### I-48: Download body timeout was total, not idle ✅
+- **Found:** the first real `kiln php install 8.4` stopped at 6.7 of 33.7 MB with `timeout:
+  receive body` after 60 s. The connection was delivering about 110 KB/s.
+  `timeout_recv_body` in ureq 3 limits the **whole** body, not the time between bytes.
+- **Fix:** the body timeout is now 1 hour (`kiln_fetch::BODY_TIMEOUT`), enough for the 512 MB
+  cap on a slow line. The retry downloaded the file in about 5 minutes. Connect (20 s) and
+  response-header (60 s) timeouts are unchanged.
+- **Open:** there's no stall detection, so a dead connection can wait out the hour. Ctrl+C is
+  safe, because a partial file never enters the cache. Add an idle watchdog if users hit it.
+
+<a id="i-49"></a>
+### I-49: Renaming the finished PHP folder failed with "Access is denied" ✅
+- **Found:** the same first install. Download, SHA-256 check, extraction, `php.ini` and
+  `php -v` all passed. The final `rename(8.4.27.partial → 8.4.27)` then failed with os error 5.
+- **Likely causes:**
+  - Real world: antivirus (Defender) still holding the freshly written `.exe`/`.dll` files
+    open for scanning, which blocks renaming the folder they're in.
+  - In the agent session: the MSIX AppData virtualization from I-44/I-45. Directory renames
+    across its layers fail, and `COPY_ALLOWED` can't help with folders.
+- **Fix:** no folder rename. Kiln extracts straight into the final folder, which holds a
+  `.kiln-install-incomplete` marker until the start-up check passes. `is_installed` requires
+  `php.exe` **and** no marker, an interrupted install is redone, and a failure deletes the
+  folder. The retry succeeded in 14 s from the verified cache.

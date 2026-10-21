@@ -335,12 +335,6 @@ pub fn install(archive: Option<PathBuf>) -> Result<(), String> {
             std::env::consts::ARCH
         )
     })?;
-    let Some(archive) = archive else {
-        return Err(format!(
-            "automatic download arrives with P1-08. For now, download\n  {}\nand run `kiln web install --archive <downloaded file>`; Kiln checks it against the pinned SHA-512.",
-            release.download_url()
-        ));
-    };
     let server = server()?;
     if matches!(
         server.status().map_err(|e| e.to_string())?,
@@ -348,6 +342,21 @@ pub fn install(archive: Option<PathBuf>) -> Result<(), String> {
     ) {
         return Err("stop the web server first (`kiln web stop`)".into());
     }
+    let archive = if let Some(archive) = archive {
+        archive
+    } else {
+        // Download the pinned archive; the fetcher refuses anything but its pinned SHA-512.
+        let expected = kiln_fetch::Expected::sha512(release.sha512).map_err(|e| e.to_string())?;
+        let label = format!("Downloading {}", release.archive);
+        crate::php::fetcher()?
+            .fetch(
+                &release.download_url(),
+                release.archive,
+                &expected,
+                &mut crate::php::progress_printer(&label),
+            )
+            .map_err(|e| e.to_string())?
+    };
     let installed =
         kiln_web::release::install(&archive, server.exe()).map_err(|e| e.to_string())?;
     let mut store = open_store()?;

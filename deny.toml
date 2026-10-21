@@ -1,5 +1,15 @@
 # cargo-deny policy: permissive licenses only, no unknown registries or git sources.
 [graph]
+# The platforms Kiln ships for. Dependencies of other targets (e.g. wasm32-only crates) are
+# never built into Kiln, so they are not judged here.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
 all-features = true
 
 [advisories]
