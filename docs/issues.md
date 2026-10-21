@@ -52,9 +52,9 @@ commits and PRs.
 | [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
 | [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
 | [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
-| [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run passed 2026-10-21; browser check with P1-06) |
+| [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run and browser check passed 2026-10-21) |
 | [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there (cause: MSIX virtualization, I-45) | ✅ (workaround: `rename_replace`) |
-| [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 🔶 |
+| [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; checks run from a normal terminal) |
 
 ---
 
@@ -389,6 +389,13 @@ commits and PRs.
   - Caveat found later ([I-45](#i-45)): this run happened inside the Claude desktop app's MSIX
     container. The hosts file (System32) isn't virtualized, so I-42 stands. The trust check
     should be repeated once from a normal terminal, together with the browser check.
+- **Repeated from a normal terminal by the user, 2026-10-21 (with P1-06):**
+  - A fresh state: the first operation was #1, so nothing from the app container was visible.
+  - `kiln ca init` created a new root (SHA-1 `e6201312…e744d2f4`).
+  - `kiln ca trust`: one Windows dialog, then operation #1.
+  - **Chrome showed `https://shop.test:8443/` as secure, with no warning.** The certificate was
+    issued by Caddy from Kiln's intermediate under the name-constrained root.
+  - `kiln undo 1`: removed, no UAC.
 
 <a id="i-44"></a>
 ### I-44: Renames inside the user profile fail with os error 17 ✅ (worked around)
@@ -421,7 +428,7 @@ commits and PRs.
   journal archive, but not for files rewritten in place.
 
 <a id="i-45"></a>
-### I-45: Commands run from the Claude desktop app live in an MSIX container 🔶
+### I-45: Commands run from the Claude desktop app live in an MSIX container 📌
 - **Found:** 2026-10-21, P1-06 manual check. Over plain HTTP, `kiln web start` served the sites
   correctly. HTTPS failed because Caddy couldn't store the `shop.test` certificate:
   `failed storage check: failed to rename …\AppData\Local\Kiln\caddy\storage\…`. Caddy's Go
@@ -441,8 +448,10 @@ commits and PRs.
   - Investigating from outside the container (starting a process through WMI, reading the
     package's `LocalCache`) was blocked in the agent session. That was the right call; the user
     runs the checks instead.
-- **Next:**
-  - The user runs the P1-06 browser check from a normal terminal (Windows Terminal or
-    PowerShell started from the Start menu). The script is in [progress.md](progress.md#p1-06).
+- **Confirmed 2026-10-21:** the user ran the P1-06 script from a normal PowerShell.
+  - Kiln started with an empty journal (operation #1), so the container's state was invisible.
+  - Caddy stored its certificates without error, and HTTPS worked in Chrome.
+- **Rule:**
+  - Manual checks that touch AppData run from a normal terminal, not from the Claude app.
   - `kiln doctor` (P1-12) should warn when Kiln runs in a packaged app's container, because
     its files would then be invisible to the rest of the system.

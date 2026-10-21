@@ -18,7 +18,7 @@
 | Hosts-file editor (`kiln-platform::hosts`) | **done**: byte-safe, property-tested |
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
-| Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/status`, `hosts sync`. Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7; browser check pending ([I-45](issues.md#i-45)) |
+| Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/status`, `hosts sync`. Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
 | Serving a PHP site end to end | **static sites work**; PHP next (P1-08, P1-09) |
 | GUI | **not started** (Phase 4) |
 
@@ -243,7 +243,7 @@ is turned on per site.**
   - HTTPS failed there only because Caddy can't write its certificate storage inside the
     Claude app's MSIX container ([I-45](issues.md#i-45)).
 
-**Browser check to run from a normal terminal** (Windows Terminal or PowerShell from the Start
+**Browser check (passed 2026-10-21, run by the user in Chrome: all three URLs as expected, HTTPS with no warning; hosts and trust undone afterwards)** to run from a normal terminal (Windows Terminal or PowerShell from the Start
 menu, not from the Claude app; state created inside the app isn't visible there):
 
 ```powershell
@@ -268,8 +268,8 @@ cd D:\Code\Rea\laravel-herd\kiln
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
-| Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21 (inside the app container); repeat with the browser check |
-| Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-06)) |
+| Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21, repeated from a normal terminal with the browser check |
+| Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | with P1-08 |
 | Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
@@ -297,6 +297,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-21 | **P1-05 done (Windows):** ADR 0010; `kiln-pki` (name-constrained root + 30-day intermediate, DPAPI-protected key); `kiln-sys::wincrypt`; `TrustCaOp`; `kiln ca init/info/trust`; 13 new tests, 95 total. |
 | 2026-10-21 | **I-43 manual check passed:** `kiln ca init` → `kiln ca trust` (1 Windows dialog) → root in `CurrentUser\Root` (50 → 51) → `kiln undo 2` → back to the 50 baseline thumbprints. Fixed I-44 on the way: renames in `%APPDATA%` failed with os error 17; added `kiln_sys::rename_replace` and banned `std::fs::rename` via `clippy.toml`. |
 | 2026-10-21 | **P1-06 done (Windows):** ADR 0011 (HTTP by default, HTTPS per site); new `kiln-web` crate (typed Caddy config, pinned release install, background process control); `sites` table; `kiln link/unlink/secure/unsecure/sites`, `kiln web …`, `kiln hosts sync`; 24 new tests, 119 total, plus a real-Caddy end-to-end test. Root cause of I-44 found: the Claude desktop app's MSIX AppData virtualization (I-45). Browser check left to the user from a normal terminal. |
+| 2026-10-21 | **P1-06 browser check passed** (run by the user from a normal PowerShell): `http://hello.test:8080/` served over plain HTTP, `https://shop.test:8443/` shown as secure in Chrome with no warning, and `http://shop.test:8080/` redirected to HTTPS. Hosts block and trust undone afterwards. Confirms I-43 in Chrome and I-45 (fresh state outside the app container). |
 
 ## How to update this file
 
