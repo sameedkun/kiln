@@ -460,7 +460,7 @@ commits and PRs.
   - Manual checks that touch AppData run from a normal terminal, not from the Claude app.
   - `kiln doctor` (P1-12) should warn when Kiln runs in a packaged app's container, because
     its files would then be invisible to the rest of the system.
-- **More from P1-07 (2026-10-21):**
+- **More from P1-07 (2026-10-21; the same steps passed from a normal terminal):**
   - `AF_UNIX` sockets don't work in the redirected AppData either. Caddy creates `admin.sock`,
     then fails with `unable to set permissions … The file cannot be accessed by the system`.
     The file can't be removed from inside the container. The same steps work in `%TEMP%`,

@@ -58,7 +58,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-04 | Linux DNS providers | later | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
-| P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; real-terminal check pending ([I-45](issues.md#i-45)) |
+| P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
 | P1-08 | PHP runtime provider | **next** | Shared downloader (also for Caddy) |
 | P1-09 | Process supervisor | later | [I-14](issues.md#i-14) |
 | P1-10 | Sites + drivers | later | |
@@ -300,7 +300,7 @@ Design: [ADR 0012](adr/0012-caddy-admin-channel.md). Resolves [I-20](issues.md#i
   AppData ([I-45](issues.md#i-45)), so `kiln web start` fails there with Caddy's real error,
   which is now shown.
 
-**Live-reload check to run from a normal terminal** (your sites, CA and Caddy from P1-06 are
+**Live-reload check (passed 2026-10-21, run by the user: `unsecure` and `secure` both reloaded with the server PID unchanged (21656); `admin.sock` present as a socket reparse point; nothing on port 2019; graceful stop; hosts and trust undone)** to run from a normal terminal (your sites, CA and Caddy from P1-06 are
 still there; trust and the hosts entries were undone):
 
 ```powershell
@@ -323,7 +323,7 @@ netstat -ano | findstr :2019                # prints nothing: no TCP admin port
 | Item | Ref | Blocking? |
 |---|---|---|
 | Caddy admin over a Unix socket on Windows | [I-20](issues.md#i-20) | done (P1-07) |
-| P1-07 live-reload check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-07)) |
+| P1-07 live-reload check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (user) |
 | Dropped connection at reload, Linux recheck | [I-47](issues.md#i-47) | no (with P1-04) |
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
@@ -359,6 +359,7 @@ netstat -ano | findstr :2019                # prints nothing: no TCP admin port
 | 2026-10-21 | **P1-06 done (Windows):** ADR 0011 (HTTP by default, HTTPS per site); new `kiln-web` crate (typed Caddy config, pinned release install, background process control); `sites` table; `kiln link/unlink/secure/unsecure/sites`, `kiln web …`, `kiln hosts sync`; 24 new tests, 119 total, plus a real-Caddy end-to-end test. Root cause of I-44 found: the Claude desktop app's MSIX AppData virtualization (I-45). Browser check left to the user from a normal terminal. |
 | 2026-10-21 | **P1-06 browser check passed** (run by the user from a normal PowerShell): `http://hello.test:8080/` served over plain HTTP, `https://shop.test:8443/` shown as secure in Chrome with no warning, and `http://shop.test:8080/` redirected to HTTPS. Hosts block and trust undone afterwards. Confirms I-43 in Chrome and I-45 (fresh state outside the app container). |
 | 2026-10-21 | **P1-07 done:** ADR 0012. A spike showed Caddy's admin endpoint works on a Unix socket on Windows. The admin endpoint now listens only on a per-user socket (I-20 resolved); `kiln-sys` gained `AF_UNIX` connect, and `kiln-web` an admin client with retry (I-46). Site changes reload live, and stop is graceful. 9 new tests, 128 total. Measured: a reload drops about 1 new connection per 3–7 reloads under saturating load, versus about 540 ms of refused connections per restart (I-47). The real-terminal check is left to the user (I-45: `AF_UNIX` is broken in the app container). |
+| 2026-10-21 | **P1-07 live-reload check passed** (run by the user from a normal PowerShell): `kiln unsecure shop` and `kiln secure shop` each reloaded the running server, the PID was 21656 before and after, `admin.sock` existed, `netstat` showed nothing on :2019, `kiln web stop` stopped it, and hosts (#3) and trust (#4) were undone. |
 
 ## How to update this file
 
