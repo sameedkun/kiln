@@ -53,10 +53,11 @@ impl Launcher for PhpCgiLauncher {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = command.spawn()?;
+        let child = command.spawn()?;
         #[cfg(windows)]
         if let Err(e) = self.job.assign(&child) {
             // Never run a worker that could outlive the supervisor.
+            let mut child = child;
             let _ = child.kill();
             let _ = child.wait();
             return Err(e);
