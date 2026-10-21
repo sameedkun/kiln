@@ -1,5 +1,5 @@
-//! End-to-end check against a real Caddy: plain HTTP sites, an HTTPS site with a certificate
-//! from Kiln's CA, the redirect, the 404 for unknown hosts, and stop.
+//! End-to-end check against a real Caddy: HTTP by default, HTTPS turned on and off by live
+//! reloads (with requests running), the redirect, the 404, and a graceful stop.
 //!
 //! Needs a Caddy binary: set `KILN_TEST_CADDY` to its path (for example the one `kiln web
 //! install` placed under `%LOCALAPPDATA%\Kiln\bin`). Without it the test only prints a note,
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use kiln_core::{HostName, Tld};
 use kiln_pki::{CaStore, default_protector};
-use kiln_web::{CaFiles, SiteSpec, Status, WebConfig, WebServer};
+use kiln_web::{CaFiles, SiteSpec, Status, WebConfig, WebError, WebServer};
 
 fn caddy() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::var_os("KILN_TEST_CADDY")?);
@@ -101,9 +101,29 @@ fn https_get(port: u16, host: &str, root_der: &[u8]) -> Result<(u16, String), ru
     Ok(get(rustls::StreamOwned::new(conn, sock), host))
 }
 
+/// HTTPS `GET /` to `host`, waiting up to 15 s for Caddy to issue the certificate (it does
+/// that in the background after start-up or a reload).
+fn https_get_eventually(server: &WebServer, port: u16, host: &str, root: &[u8]) -> (u16, String) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match https_get(port, host, root) {
+            Ok(response) => return response,
+            Err(e) if Instant::now() < deadline => {
+                eprintln!("waiting for the certificate: {e}");
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(e) => panic!("HTTPS to {host} failed: {e}\n{}", server.recent_log()),
+        }
+    }
+}
+
+fn port_is_free(port: u16) -> bool {
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).is_ok()
+}
+
 #[test]
-#[allow(clippy::similar_names)] // HTTP and HTTPS ports are the clearest names
-fn serves_http_sites_and_https_only_where_enabled() {
+#[allow(clippy::similar_names, clippy::too_many_lines)] // one end-to-end story
+fn serves_http_by_default_reloads_live_and_stops_gracefully() {
     let Some(caddy) = caddy() else {
         eprintln!("skipped: set KILN_TEST_CADDY to a Caddy binary to run this test");
         return;
@@ -118,85 +138,147 @@ fn serves_http_sites_and_https_only_where_enabled() {
     ca.issue_intermediate(&Tld::default()).unwrap();
     let (root_cert, intermediate_cert, intermediate_key) = ca.web_server_files();
 
+    let server = WebServer::new(exe, dir.path().join("run"));
     let (http_port, https_port) = (free_port(), free_port());
-    let mut config = WebConfig {
+    let blog = site(dir.path(), "blog", false);
+    let shop = site(dir.path(), "shop", false);
+    let with = |secure_shop: bool| WebConfig {
         http_port,
         https_port,
         ipv6: false,
         sites: vec![
-            site(dir.path(), "blog", false),
-            site(dir.path(), "shop", true),
+            blog.clone(),
+            SiteSpec {
+                secure: secure_shop,
+                ..shop.clone()
+            },
         ],
         ca: Some(CaFiles {
-            root_cert,
-            intermediate_cert,
-            intermediate_key,
+            root_cert: root_cert.clone(),
+            intermediate_cert: intermediate_cert.clone(),
+            intermediate_key: intermediate_key.clone(),
         }),
         storage_dir: dir.path().join("run").join("storage"),
-        log_file: dir.path().join("run").join("caddy.log"),
+        log_file: server.log_file(),
+        admin_socket: server.admin_socket(),
     };
-    let server = WebServer::new(exe, dir.path().join("run"));
 
-    let pid = server.start(&config).unwrap();
+    // HTTP by default: no secure site, so no HTTPS listener at all.
+    let pid = server.start(&with(false)).unwrap();
     let result = std::panic::catch_unwind(|| {
         assert_eq!(server.status().unwrap(), Status::Running { pid });
-
-        // Plain site over HTTP.
-        let (code, body) = http_get(http_port, "blog.test");
+        assert!(server.admin_socket().exists(), "admin socket created");
+        assert!(
+            port_is_free(https_port),
+            "no HTTPS listener without a secure site"
+        );
+        let (code, body) = http_get(http_port, "shop.test");
         assert_eq!(code, 200, "{body}");
-        assert!(body.ends_with("blog ok"), "{body}");
+        assert!(body.ends_with("shop ok"), "{body}");
 
-        // Unknown host: 404, not some other site.
-        let (code, body) = http_get(http_port, "nobody.test");
-        assert_eq!(code, 404, "{body}");
-        assert!(body.contains("kiln link"), "{body}");
+        // Keep requesting a site while the config is reloaded underneath it.
+        let stop_load = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let load = {
+            let stop_load = Arc::clone(&stop_load);
+            std::thread::spawn(move || {
+                let (mut ok, mut failed) = (0u32, Vec::new());
+                while !stop_load.load(std::sync::atomic::Ordering::Relaxed) {
+                    let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, http_port)).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    match get(stream, "blog.test") {
+                        (200, body) if body.ends_with("blog ok") => ok += 1,
+                        other => failed.push(other),
+                    }
+                }
+                (ok, failed)
+            })
+        };
 
-        // Secure site: HTTP redirects to HTTPS on the configured port.
+        // Turn HTTPS on for shop: same process, new listener, certificate from Kiln's CA.
+        server.reload(&with(true)).unwrap();
+        assert_eq!(
+            server.status().unwrap(),
+            Status::Running { pid },
+            "no restart"
+        );
         let (code, body) = http_get(http_port, "shop.test");
         assert_eq!(code, 308, "{body}");
         assert!(
             body.contains(&format!("Location: https://shop.test:{https_port}/")),
             "{body}"
         );
-
-        // HTTPS with a certificate that chains to Kiln's root. Caddy issues it in the
-        // background right after start-up, so allow it a moment.
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let (code, body) = loop {
-            match https_get(https_port, "shop.test", &root.der) {
-                Ok(response) => break response,
-                Err(e) if Instant::now() < deadline => {
-                    eprintln!("waiting for the certificate: {e}");
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                Err(e) => panic!("HTTPS to shop.test failed: {e}\n{}", server.recent_log()),
-            }
-        };
+        let (code, body) = https_get_eventually(&server, https_port, "shop.test", &root.der);
         assert_eq!(code, 200, "{body}");
         assert!(body.ends_with("shop ok"), "{body}");
+        assert!(
+            https_get(https_port, "blog.test", &root.der).is_err(),
+            "plain site has no TLS"
+        );
+        let (code, body) = http_get(http_port, "nobody.test");
+        assert_eq!(code, 404, "{body}");
 
-        // A plain site has no certificate, so HTTPS to it fails instead of serving it.
-        assert!(https_get(https_port, "blog.test", &root.der).is_err());
+        // And off again: the HTTPS listener goes away.
+        server.reload(&with(false)).unwrap();
+        assert_eq!(http_get(http_port, "shop.test").0, 200);
+        assert!(
+            port_is_free(https_port),
+            "HTTPS listener closed after the last secure site"
+        );
+
+        // More reloads under load.
+        for round in 0..6 {
+            server.reload(&with(round % 2 == 0)).unwrap();
+        }
+        server.reload(&with(false)).unwrap();
+        stop_load.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (ok, failed) = load.join().unwrap();
+        eprintln!("requests during reloads: {ok} ok, {} failed", failed.len());
+        assert!(ok > 0);
+        // The server never goes down, and nothing is ever served wrong. Caddy on Windows may
+        // close a brand-new connection without a response at a listener handoff: measured at
+        // about one per 3–7 reloads under this saturating load, none without reloads (I-47).
+        let reloads = 9;
+        assert!(
+            failed
+                .iter()
+                .all(|(code, body)| *code == 0 && body.is_empty()),
+            "only empty closes are tolerated: {failed:?}"
+        );
+        assert!(
+            failed.len() <= reloads,
+            "{} failures in {reloads} reloads: {failed:?}",
+            failed.len()
+        );
+
+        // A reload that needs a port someone else holds is refused up front; the running
+        // config stays.
+        let squatter = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken = squatter.local_addr().unwrap().port();
+        let mut blocked = with(true);
+        blocked.https_port = taken;
+        let err = server.reload(&blocked).unwrap_err();
+        assert!(matches!(err, WebError::PortInUse(_)), "{err}");
+        assert_eq!(
+            http_get(http_port, "shop.test").0,
+            200,
+            "old config still serving"
+        );
+        assert_eq!(server.status().unwrap(), Status::Running { pid });
     });
 
-    // Restart with no secure sites: the HTTPS port is released.
-    server.stop().unwrap();
-    assert_eq!(server.status().unwrap(), Status::Stopped);
+    // Graceful stop through the admin API; everything is released.
+    let stopped = server.stop().unwrap();
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
-    config.sites.retain(|s| !s.secure);
-    server.start(&config).unwrap();
-    let https_free = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, https_port)));
-    let (code, _) = http_get(http_port, "blog.test");
-    server.stop().unwrap();
-    assert_eq!(code, 200);
-    assert!(
-        https_free.is_ok(),
-        "HTTPS port not bound without secure sites"
-    );
-    assert!(
-        TcpListener::bind((Ipv4Addr::LOCALHOST, http_port)).is_ok(),
-        "port released on stop"
-    );
+    assert_eq!(stopped, Some(pid));
+    assert_eq!(server.status().unwrap(), Status::Stopped);
+    assert!(!server.admin_socket().exists(), "socket removed");
+    assert!(port_is_free(http_port), "HTTP port released on stop");
+    assert!(matches!(
+        server.reload(&with(false)),
+        Err(WebError::NotRunning)
+    ));
 }

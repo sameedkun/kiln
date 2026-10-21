@@ -32,10 +32,10 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows) | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
-| `kiln-web` | Caddy config (typed JSON), pinned release install, start/stop/status of `kiln-caddy` | forbidden |
-| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/stop/status of `kiln-caddy`, admin client over its Unix socket | forbidden |
+| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, `AF_UNIX` connect, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `secure`, `unsecure`, `sites`, `web install/start/stop/restart/status/config`, `undo`) | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `undo`) | forbidden |
 
 ## Everyday commands
 

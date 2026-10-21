@@ -1,6 +1,6 @@
 # 0011. Caddy integration: generated config, HTTP by default, HTTPS per site
 
-- **Status:** accepted
+- **Status:** accepted; §4 (admin disabled) and §13 (restart on change) amended by [ADR 0012](0012-caddy-admin-channel.md)
 - **Date:** 2026-10-21
 - **Task:** P1-06 · Builds on [ADR 0005](0005-web-server.md), [0010](0010-local-certificate-authority.md)
 

@@ -100,7 +100,9 @@ enum WebAction {
     },
     /// Stop the web server.
     Stop,
-    /// Stop and start the web server, picking up any changes.
+    /// Apply the current sites and settings to the running server without restarting it.
+    Reload,
+    /// Stop and start the web server (needed after changing ports).
     Restart,
     /// Show whether the web server is installed and running.
     Status,
@@ -289,6 +291,7 @@ fn main() -> ExitCode {
                 https_port,
             } => web::start(http_port, https_port),
             WebAction::Stop => web::stop(),
+            WebAction::Reload => web::reload(),
             WebAction::Restart => web::restart(),
             WebAction::Status => web::status(),
             WebAction::Config => web::print_config(),

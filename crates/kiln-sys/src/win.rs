@@ -15,6 +15,10 @@ use windows_sys::Win32::Foundation::{
     ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_PIPE_BUSY,
     ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
+use windows_sys::Win32::Networking::WinSock::{
+    AF_UNIX, INVALID_SOCKET, SOCK_STREAM, SOCKADDR, SOCKADDR_UN, SOCKET, WSADATA, WSAGetLastError,
+    WSAStartup, closesocket, connect, socket,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -401,6 +405,117 @@ fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u
 }
 
 // ---------------------------------------------------------------------------------------------
+// Unix domain sockets (AF_UNIX, Windows 10 1803+)
+// ---------------------------------------------------------------------------------------------
+
+/// Longest socket path `sockaddr_un` can hold, excluding the terminating NUL.
+pub const MAX_UNIX_SOCKET_PATH: usize = 107;
+
+fn winsock_started() -> io::Result<()> {
+    static STARTED: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    let result = *STARTED.get_or_init(|| {
+        // SAFETY: WSADATA is a plain C struct; all-zero is a valid out buffer.
+        let mut data: WSADATA = unsafe { std::mem::zeroed() };
+        // SAFETY: `data` is a valid out pointer. Winsock start-up is reference-counted, so a
+        // start that is never cleaned up only keeps the DLL initialised for the process.
+        unsafe { WSAStartup(0x0202, &raw mut data) }
+    });
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(result))
+    }
+}
+
+fn unix_address(path: &Path) -> io::Result<SOCKADDR_UN> {
+    // UTF-8 bytes, as Go (and so Caddy) passes them, so both sides name the same file.
+    let bytes = path
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket path is not Unicode"))?
+        .as_bytes();
+    if bytes.is_empty() || bytes.len() > MAX_UNIX_SOCKET_PATH || bytes.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "socket path must be 1 to {MAX_UNIX_SOCKET_PATH} bytes without NULs: {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut address = SOCKADDR_UN {
+        sun_family: AF_UNIX,
+        sun_path: [0; 108],
+    };
+    for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+        *slot = i8::from_ne_bytes([*byte]);
+    }
+    Ok(address)
+}
+
+/// A Winsock socket that is closed on drop unless handed off.
+struct OwnedSocket(SOCKET);
+
+impl OwnedSocket {
+    fn new() -> io::Result<Self> {
+        winsock_started()?;
+        // SAFETY: plain call; INVALID_SOCKET is handled below.
+        let socket = unsafe { socket(i32::from(AF_UNIX), SOCK_STREAM, 0) };
+        if socket == INVALID_SOCKET {
+            return Err(last_wsa_error());
+        }
+        Ok(Self(socket))
+    }
+
+    fn into_stream(self) -> std::net::TcpStream {
+        use std::os::windows::io::FromRawSocket;
+        let socket = self.0;
+        std::mem::forget(self);
+        // SAFETY: `socket` is a valid, connected socket that nothing else owns; the stream
+        // becomes its only owner and closes it on drop.
+        unsafe { std::net::TcpStream::from_raw_socket(socket as u64) }
+    }
+}
+
+impl Drop for OwnedSocket {
+    fn drop(&mut self) {
+        // SAFETY: we own this socket and close it exactly once.
+        unsafe { closesocket(self.0) };
+    }
+}
+
+fn last_wsa_error() -> io::Error {
+    // SAFETY: plain call reading the calling thread's last Winsock error.
+    io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
+}
+
+fn addr_len() -> i32 {
+    i32::try_from(std::mem::size_of::<SOCKADDR_UN>()).unwrap_or(i32::MAX)
+}
+
+/// Connects to the Unix domain socket at `path`.
+///
+/// The connection comes back as a [`std::net::TcpStream`] because that is std's wrapper for a
+/// connected Winsock stream socket: reads, writes, timeouts and shutdown behave the same for
+/// `AF_UNIX`. Methods that are about TCP or IP addresses (`peer_addr`, `set_nodelay`, …)
+/// don't apply and may fail.
+pub fn connect_unix(path: &Path) -> io::Result<std::net::TcpStream> {
+    let address = unix_address(path)?;
+    let socket = OwnedSocket::new()?;
+    // SAFETY: `address` is a fully initialised SOCKADDR_UN and its size is passed with it.
+    let result = unsafe {
+        connect(
+            socket.0,
+            (&raw const address).cast::<SOCKADDR>(),
+            addr_len(),
+        )
+    };
+    if result != 0 {
+        return Err(last_wsa_error());
+    }
+    Ok(socket.into_stream())
+}
+
+// ---------------------------------------------------------------------------------------------
 // Elevation
 // ---------------------------------------------------------------------------------------------
 
@@ -515,6 +630,75 @@ mod tests {
         assert_eq!(process.wait(Duration::from_secs(5)).unwrap(), Some(9));
         assert!(!process.is_running().unwrap());
         let _ = child.wait();
+    }
+
+    /// A minimal `AF_UNIX` listener, for tests only: bind, listen, accept one connection.
+    struct TestUnixListener(OwnedSocket);
+
+    impl TestUnixListener {
+        fn bind(path: &Path) -> Self {
+            use windows_sys::Win32::Networking::WinSock::{bind, listen};
+            let address = unix_address(path).unwrap();
+            let socket = OwnedSocket::new().unwrap();
+            // SAFETY: valid socket and fully initialised address of the given size.
+            let bound = unsafe {
+                bind(
+                    socket.0,
+                    (&raw const address).cast::<SOCKADDR>(),
+                    addr_len(),
+                )
+            };
+            assert_eq!(bound, 0, "{}", last_wsa_error());
+            // SAFETY: valid bound socket.
+            assert_eq!(unsafe { listen(socket.0, 1) }, 0, "{}", last_wsa_error());
+            Self(socket)
+        }
+
+        fn accept(&self) -> std::net::TcpStream {
+            use windows_sys::Win32::Networking::WinSock::accept;
+            // SAFETY: valid listening socket; null address pointers are allowed.
+            let client = unsafe { accept(self.0.0, std::ptr::null_mut(), std::ptr::null_mut()) };
+            assert_ne!(client, INVALID_SOCKET, "{}", last_wsa_error());
+            OwnedSocket(client).into_stream()
+        }
+    }
+
+    #[test]
+    fn unix_socket_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sock");
+        assert!(
+            path.to_str().unwrap().len() <= MAX_UNIX_SOCKET_PATH,
+            "temp path too long for this test: {}",
+            path.display()
+        );
+        let listener = TestUnixListener::bind(&path);
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept();
+            let mut buf = [0u8; 5];
+            stream.read_exact(&mut buf).unwrap();
+            stream
+                .write_all(&buf.map(|b| b.to_ascii_uppercase()))
+                .unwrap();
+        });
+        let mut client = connect_unix(&path).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(b"hello").unwrap();
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        assert_eq!(reply, b"HELLO");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn unix_socket_errors_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(connect_unix(&dir.path().join("nobody-listens.sock")).is_err());
+        let long = PathBuf::from(format!("C:\\{}", "x".repeat(MAX_UNIX_SOCKET_PATH)));
+        let err = connect_unix(&long).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
     }
 
     #[test]

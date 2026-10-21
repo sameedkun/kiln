@@ -1,24 +1,24 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (5 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (6 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0011 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0012 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
 | Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
 | Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
-| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing` / `rename_replace`; Windows pipes, SIDs, system directory, UAC launch, process handles |
+| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing` / `rename_replace`; Windows pipes, SIDs, system directory, UAC launch, process handles, `AF_UNIX` connect |
 | Hosts-file editor (`kiln-platform::hosts`) | **done**: byte-safe, property-tested |
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
-| Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/status`, `hosts sync`. Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
+| Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/reload/status`, `hosts sync`. Site changes **reload live** over a per-user admin socket (P1-07). Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
 | Serving a PHP site end to end | **static sites work**; PHP next (P1-08, P1-09) |
 | GUI | **not started** (Phase 4) |
 
@@ -58,8 +58,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-04 | Linux DNS providers | later | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
-| P1-07 | Caddy admin API lockdown + live reload | **next** (or P1-08) | [I-20](issues.md#i-20); P1-06 runs with the admin endpoint disabled and restarts on change |
-| P1-08 | PHP runtime provider | later | |
+| P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; real-terminal check pending ([I-45](issues.md#i-45)) |
+| P1-08 | PHP runtime provider | **next** | Shared downloader (also for Caddy) |
 | P1-09 | Process supervisor | later | [I-14](issues.md#i-14) |
 | P1-10 | Sites + drivers | later | |
 | P1-11 | Per-site PHP + shims | later | |
@@ -260,11 +260,71 @@ cd D:\Code\Rea\laravel-herd\kiln
 .\target\debug\kiln.exe undo <n>            # the hosts and trust operation numbers printed above
 ```
 
+<a id="p1-07"></a>
+### P1-07 delivered (2026-10-21)
+
+Design: [ADR 0012](adr/0012-caddy-admin-channel.md). Resolves [I-20](issues.md#i-20).
+
+- **Spike:** Caddy's admin endpoint works on a Unix socket on Windows.
+  - No TCP admin port is opened, `POST /load` reloads live, and `POST /stop` shuts down
+    cleanly and removes the socket.
+  - Paths must stay under 108 bytes.
+  - On Windows the first admin request after each load gets an EOF ([I-46](issues.md#i-46)).
+- **Config:** `admin.listen = unix/<local data>/caddy/admin.sock` (was: admin disabled).
+  Socket paths over 107 bytes are refused.
+- **`kiln-sys::win::connect_unix`:** `AF_UNIX` connect over Winsock, returned as a std socket
+  stream. Path bytes are UTF-8, as in Go. Tested against a test-only `AF_UNIX` listener.
+- **`kiln-web::admin::AdminClient`:** minimal HTTP/1.1 over the socket (length-delimited,
+  chunked, or read to end of stream). Retries until a response arrives (I-46). `load`, `stop`,
+  `config`.
+- **`WebServer`:**
+  - `reload`: refuses up front if a newly needed port is taken. Caddy validates the config
+    atomically and keeps the old one on error. The config file is updated only on success.
+  - `stop`: graceful through the admin API first, with the verified terminate as a fallback.
+  - The run directory is private (inherits the profile ACL on Windows, `0700` on Unix).
+  - A leftover socket no longer blocks or hides start-up errors, which now include the errors
+    Caddy logged during that start.
+- **CLI:** `link`, `unlink`, `secure` and `unsecure` reload instead of restarting. New
+  `kiln web reload`. `restart` stays for port changes.
+- **Tests:** 9 new, 128 total. The real-Caddy end-to-end test now covers:
+  - start HTTP-only, then reload HTTPS on (same PID, certificate issued) and off (HTTPS
+    listener released);
+  - 9 reloads under continuous load (the server never goes down; at most one empty close per
+    reload, [I-47](issues.md#i-47));
+  - a reload refused for a taken port while the old config keeps serving;
+  - a graceful stop (socket removed, ports released).
+- **Honest numbers ([I-47](issues.md#i-47)):** under a saturating load (about 1,400 new
+  connections/s), a reload drops one brand-new connection per 3–7 reloads. A restart refuses
+  every connection for about 540 ms.
+- **Not checkable from the agent session:** the Claude app's container breaks `AF_UNIX` in
+  AppData ([I-45](issues.md#i-45)), so `kiln web start` fails there with Caddy's real error,
+  which is now shown.
+
+**Live-reload check to run from a normal terminal** (your sites, CA and Caddy from P1-06 are
+still there; trust and the hosts entries were undone):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe hosts sync          # UAC prompt: Yes
+.\target\debug\kiln.exe ca trust            # Windows dialog: Yes
+.\target\debug\kiln.exe web start --http-port 8080 --https-port 8443
+.\target\debug\kiln.exe web status          # note the PID
+.\target\debug\kiln.exe unsecure shop       # "Web server reloaded"; http://shop.test:8080/ now loads over HTTP
+.\target\debug\kiln.exe secure shop         # reloaded; http://shop.test:8080/ jumps to https://shop.test:8443/ (padlock)
+.\target\debug\kiln.exe web status          # same PID: no restart
+dir $env:LOCALAPPDATA\Kiln\caddy            # admin.sock is there
+netstat -ano | findstr :2019                # prints nothing: no TCP admin port
+.\target\debug\kiln.exe web stop            # admin.sock is gone afterwards
+.\target\debug\kiln.exe undo <n>            # the hosts, then the trust operation numbers printed above
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
 |---|---|---|
-| Caddy admin over a Unix socket on Windows | [I-20](issues.md#i-20) | blocks P1-07 |
+| Caddy admin over a Unix socket on Windows | [I-20](issues.md#i-20) | done (P1-07) |
+| P1-07 live-reload check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-07)) |
+| Dropped connection at reload, Linux recheck | [I-47](issues.md#i-47) | no (with P1-04) |
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
@@ -298,6 +358,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-21 | **I-43 manual check passed:** `kiln ca init` → `kiln ca trust` (1 Windows dialog) → root in `CurrentUser\Root` (50 → 51) → `kiln undo 2` → back to the 50 baseline thumbprints. Fixed I-44 on the way: renames in `%APPDATA%` failed with os error 17; added `kiln_sys::rename_replace` and banned `std::fs::rename` via `clippy.toml`. |
 | 2026-10-21 | **P1-06 done (Windows):** ADR 0011 (HTTP by default, HTTPS per site); new `kiln-web` crate (typed Caddy config, pinned release install, background process control); `sites` table; `kiln link/unlink/secure/unsecure/sites`, `kiln web …`, `kiln hosts sync`; 24 new tests, 119 total, plus a real-Caddy end-to-end test. Root cause of I-44 found: the Claude desktop app's MSIX AppData virtualization (I-45). Browser check left to the user from a normal terminal. |
 | 2026-10-21 | **P1-06 browser check passed** (run by the user from a normal PowerShell): `http://hello.test:8080/` served over plain HTTP, `https://shop.test:8443/` shown as secure in Chrome with no warning, and `http://shop.test:8080/` redirected to HTTPS. Hosts block and trust undone afterwards. Confirms I-43 in Chrome and I-45 (fresh state outside the app container). |
+| 2026-10-21 | **P1-07 done:** ADR 0012. A spike showed Caddy's admin endpoint works on a Unix socket on Windows. The admin endpoint now listens only on a per-user socket (I-20 resolved); `kiln-sys` gained `AF_UNIX` connect, and `kiln-web` an admin client with retry (I-46). Site changes reload live, and stop is graceful. 9 new tests, 128 total. Measured: a reload drops about 1 new connection per 3–7 reloads under saturating load, versus about 540 ms of refused connections per restart (I-47). The real-terminal check is left to the user (I-45: `AF_UNIX` is broken in the app container). |
 
 ## How to update this file
 

@@ -29,7 +29,7 @@ commits and PRs.
 | [I-17](#i-17) | web | Unknown hosts get a 200 (Caddy) or the first site (nginx) | 📌 (catch-all 404 in `kiln-web`, P1-06) |
 | [I-18](#i-18) | Caddy | Caddyfile syntax gotchas (inline blocks, `persist`, TLS on HTTP sites) | ✅ |
 | [I-19](#i-19) | nginx | nginx on Windows is 2–25× slower on static files | 📌 (→ Caddy) |
-| [I-20](#i-20) | security | Caddy admin API listens on TCP `localhost:2019`, reachable by any local process | 🔶 |
+| [I-20](#i-20) | security | Caddy admin API listens on TCP `localhost:2019`, reachable by any local process | ✅ (Unix socket, ADR 0012) |
 | [I-21](#i-21) | sandbox | `wsb start` never runs `LogonCommand` (no interactive logon) | ✅ |
 | [I-22](#i-22) | scripting | `R` is a built-in PowerShell alias (`Invoke-History`) | ✅ |
 | [I-23](#i-23) | sandbox | Files in a mapped folder are locked while the Sandbox runs | ✅ |
@@ -55,6 +55,8 @@ commits and PRs.
 | [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run and browser check passed 2026-10-21) |
 | [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there (cause: MSIX virtualization, I-45) | ✅ (workaround: `rename_replace`) |
 | [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; checks run from a normal terminal) |
+| [I-46](#i-46) | Caddy | On Windows, the first admin request after each config load gets an EOF (admin listener swap) | ✅ (retry in the admin client) |
+| [I-47](#i-47) | Caddy | A live reload can close a brand-new connection without a response (about 1 per 3–7 reloads under saturating load, Windows) | 🔶 (accepted; recheck on Linux and newer Caddy) |
 
 ---
 
@@ -193,10 +195,13 @@ commits and PRs.
   worker, ~1,024 connections. Input to choosing Caddy.
 
 <a id="i-20"></a>
-### I-20: Caddy admin API reachable by any local process 🔶
+### I-20: Caddy admin API reachable by any local process ✅
 - `localhost:2019` over TCP lets any local process reconfigure the server.
 - **Next:** verify Caddy admin over a Unix socket on Windows. Otherwise use a random port plus
   `enforce_origin` plus an OS guard. (P1-07.)
+- **Resolved 2026-10-21 (P1-07, [ADR 0012](adr/0012-caddy-admin-channel.md)):** the admin endpoint
+  listens only on a Unix socket in Kiln's per-user run directory (`admin.sock`), which works
+  on Windows 10 1803+. There is no TCP admin port, and other users can't open the socket.
 
 ## Spike 02: Windows DNS
 
@@ -455,3 +460,37 @@ commits and PRs.
   - Manual checks that touch AppData run from a normal terminal, not from the Claude app.
   - `kiln doctor` (P1-12) should warn when Kiln runs in a packaged app's container, because
     its files would then be invisible to the rest of the system.
+- **More from P1-07 (2026-10-21):**
+  - `AF_UNIX` sockets don't work in the redirected AppData either. Caddy creates `admin.sock`,
+    then fails with `unable to set permissions … The file cannot be accessed by the system`.
+    The file can't be removed from inside the container. The same steps work in `%TEMP%`,
+    so the P1-07 check also runs from a normal terminal.
+  - `GetCurrentPackageFullName` returns no package for these processes, so Kiln can't detect
+    the container through package identity. Detection stays an open question for
+    `kiln doctor`.
+
+## P1-07: Caddy admin channel
+
+<a id="i-46"></a>
+### I-46: First admin request after a config load gets an EOF on Windows ✅
+- **Found:** P1-07 spike. On every `/load`, Caddy replaces its admin listener ("stopped
+  previous server" → "admin endpoint started"). The next admin request then gets an EOF before
+  any response; the one after it succeeds. `caddy reload` doesn't retry, so it failed every
+  other time.
+- **Fix:** Kiln's admin client retries a request up to 6 times, 50 ms apart, when the
+  connection fails or closes before a response. Every request Kiln sends is safe to repeat.
+  Verified across 20 reloads in a row.
+
+<a id="i-47"></a>
+### I-47: A live reload can drop a brand-new connection 🔶
+- **Measured (Windows 11, Caddy 2.11.7):** a Rust client opened about 1,400 new connections
+  per second while Kiln reloaded the config.
+  - About one connection per 3–7 reloads was accepted and then closed with no response.
+  - Changing a route and adding/removing the HTTPS server behaved the same: 3–7 per 20.
+  - No reloads: 0 of 2,700. Nothing was ever served wrong (no 404/5xx, no wrong site).
+  - For comparison, a restart is about 540 ms of refused connections per change.
+- **Decision:** accepted for a local dev server. Reloads only happen when the user changes a
+  site, so a person rarely hits it, and refreshing the page fixes it.
+  - The end-to-end test allows at most one empty close per reload and nothing else.
+- **Next:** measure on Linux (SO_REUSEPORT listener sharing) with P1-04, and recheck on newer
+  Caddy releases. Report upstream if it still happens.

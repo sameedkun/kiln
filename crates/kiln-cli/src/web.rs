@@ -1,9 +1,10 @@
-//! Sites and the web server ([ADR 0011]): `kiln link|unlink|secure|unsecure|sites`,
-//! `kiln web install|start|stop|restart|status|config` and `kiln hosts sync`.
+//! Sites and the web server ([ADR 0011], [ADR 0012]): `kiln link|unlink|secure|unsecure|sites`,
+//! `kiln web install|start|stop|reload|restart|status|config` and `kiln hosts sync`.
 //!
 //! Sites are served over plain HTTP unless `kiln secure` turns HTTPS on for them.
 //!
 //! [ADR 0011]: ../../../docs/adr/0011-caddy-integration.md
+//! [ADR 0012]: ../../../docs/adr/0012-caddy-admin-channel.md
 
 use std::net::{Ipv6Addr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -123,11 +124,13 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         sites,
         ca,
         storage_dir: run_dir.join("storage"),
-        log_file: run_dir.join("caddy.log"),
+        log_file: run.log_file(),
+        admin_socket: run.admin_socket(),
     })
 }
 
-/// After a site change: restart the server if it runs, so the change takes effect.
+/// After a site change: reload the running server live (ADR 0012), so the change takes
+/// effect without dropping it.
 fn apply_site_change(store: &StateStore) -> Result<(), String> {
     let server = server()?;
     if matches!(
@@ -135,9 +138,10 @@ fn apply_site_change(store: &StateStore) -> Result<(), String> {
         Status::Running { .. }
     ) {
         let config = web_config(store)?;
-        server.stop().map_err(|e| e.to_string())?;
-        server.start(&config).map_err(|e| e.to_string())?;
-        println!("Web server restarted with the change.");
+        server.reload(&config).map_err(|e| {
+            format!("the change is saved, but the running web server didn't take it: {e}")
+        })?;
+        println!("Web server reloaded with the change.");
     } else {
         println!("The web server isn't running; start it with `kiln web start`.");
     }
@@ -299,6 +303,7 @@ pub fn sites() -> Result<(), String> {
         ca: None,
         storage_dir: PathBuf::new(),
         log_file: PathBuf::new(),
+        admin_socket: PathBuf::new(),
     });
     let in_hosts = hosts_names();
     for record in records {
@@ -404,6 +409,16 @@ pub fn stop() -> Result<(), String> {
 pub fn restart() -> Result<(), String> {
     server()?.stop().map_err(|e| e.to_string())?;
     start(None, None)
+}
+
+/// Re-applies the current sites and settings to the running server without restarting it.
+pub fn reload() -> Result<(), String> {
+    let store = open_store()?;
+    let config = web_config(&store)?;
+    server()?.reload(&config).map_err(|e| e.to_string())?;
+    println!("Web server reloaded.");
+    print_listeners(&config);
+    Ok(())
 }
 
 pub fn status() -> Result<(), String> {

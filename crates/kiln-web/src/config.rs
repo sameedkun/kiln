@@ -1,12 +1,13 @@
-//! Caddy JSON config, generated from typed structs ([ADR 0005], [ADR 0011]).
+//! Caddy JSON config, generated from typed structs ([ADR 0005], [ADR 0011], [ADR 0012]).
 //!
 //! Only the subset of Caddy's schema that Kiln uses is modelled. The invariants that matter
-//! (loopback listeners, a catch-all 404, no automatic HTTPS, no admin endpoint, Kiln's CA
-//! without trust installation, HTTPS only for sites marked secure) are asserted by the tests
-//! at the bottom of this file.
+//! (loopback listeners, a catch-all 404, no automatic HTTPS, the admin endpoint only on a Unix
+//! socket, Kiln's CA without trust installation, HTTPS only for sites marked secure) are
+//! asserted by the tests at the bottom of this file.
 //!
 //! [ADR 0005]: ../../../docs/adr/0005-web-server.md
 //! [ADR 0011]: ../../../docs/adr/0011-caddy-integration.md
+//! [ADR 0012]: ../../../docs/adr/0012-caddy-admin-channel.md
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -20,6 +21,8 @@ pub const CA_ID: &str = "kiln";
 /// Caddy server names, visible in Caddy's logs.
 pub const HTTP_SERVER: &str = "kiln_http";
 pub const HTTPS_SERVER: &str = "kiln_https";
+/// Longest Unix socket path (`sockaddr_un`), excluding the terminating NUL.
+pub const MAX_SOCKET_PATH: usize = 107;
 
 /// Plain-text body for hosts that aren't linked ([I-17]).
 ///
@@ -59,6 +62,8 @@ pub struct WebConfig {
     pub storage_dir: PathBuf,
     /// Caddy's own log file (rolled by Caddy).
     pub log_file: PathBuf,
+    /// The admin endpoint's Unix socket (ADR 0012). Protected by its folder's permissions.
+    pub admin_socket: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -75,6 +80,11 @@ pub enum ConfigError {
     ZeroPort,
     #[error("{} isn't valid Unicode, which Caddy's config requires", .0.display())]
     NonUnicodePath(PathBuf),
+    #[error(
+        "the admin socket path {} is longer than {MAX_SOCKET_PATH} bytes, the limit for Unix sockets",
+        .0.display()
+    )]
+    AdminSocketTooLong(PathBuf),
 }
 
 impl WebConfig {
@@ -134,6 +144,9 @@ impl WebConfig {
         }
         if self.http_port == self.https_port {
             return Err(ConfigError::SamePort(self.http_port));
+        }
+        if utf8(&self.admin_socket)?.len() > MAX_SOCKET_PATH {
+            return Err(ConfigError::AdminSocketTooLong(self.admin_socket.clone()));
         }
         let mut seen = BTreeSet::new();
         for site in &self.sites {
@@ -200,7 +213,7 @@ impl WebConfig {
 
         Ok(Caddy {
             admin: Admin {
-                disabled: true,
+                listen: admin_listen(&self.admin_socket)?,
                 config: AdminConfig { persist: false },
             },
             logging: Logging {
@@ -238,6 +251,11 @@ fn origin(scheme: &str, host: &str, port: u16, default_port: u16) -> String {
     }
 }
 
+/// Caddy's network address for a Unix socket, with forward slashes on Windows.
+fn admin_listen(socket: &Path) -> Result<String, ConfigError> {
+    Ok(format!("unix/{}", utf8(socket)?.replace('\\', "/")))
+}
+
 fn utf8(path: &Path) -> Result<String, ConfigError> {
     path.to_str()
         .map(str::to_owned)
@@ -258,7 +276,8 @@ struct Caddy {
 
 #[derive(Debug, Serialize)]
 struct Admin {
-    disabled: bool,
+    /// `unix/<path>`: never a TCP address (ADR 0012).
+    listen: String,
     config: AdminConfig,
 }
 
@@ -533,6 +552,7 @@ mod tests {
             }),
             storage_dir: "/kiln/caddy/storage".into(),
             log_file: "/kiln/caddy/caddy.log".into(),
+            admin_socket: "/kiln/caddy/admin.sock".into(),
         }
     }
 
@@ -649,14 +669,35 @@ mod tests {
     }
 
     #[test]
-    fn admin_is_disabled_and_nothing_is_persisted() {
+    fn admin_listens_only_on_the_unix_socket_and_nothing_is_persisted() {
         let value = json(&config(vec![site("blog", false)]));
-        assert_eq!(value["admin"]["disabled"], true);
+        assert_eq!(value["admin"]["listen"], "unix//kiln/caddy/admin.sock");
+        assert!(value["admin"].get("disabled").is_none());
         assert_eq!(value["admin"]["config"]["persist"], false);
         assert_eq!(value["storage"]["root"], "/kiln/caddy/storage");
         assert_eq!(
             value["logging"]["logs"]["default"]["writer"]["filename"],
             "/kiln/caddy/caddy.log"
+        );
+    }
+
+    #[test]
+    fn windows_socket_paths_use_forward_slashes() {
+        let mut cfg = config(vec![]);
+        cfg.admin_socket = r"C:\Users\dev\AppData\Local\Kiln\caddy\admin.sock".into();
+        assert_eq!(
+            json(&cfg)["admin"]["listen"],
+            "unix/C:/Users/dev/AppData/Local/Kiln/caddy/admin.sock"
+        );
+    }
+
+    #[test]
+    fn overlong_admin_socket_paths_are_refused() {
+        let mut cfg = config(vec![]);
+        cfg.admin_socket = format!("/{}/admin.sock", "d".repeat(100)).into();
+        assert_eq!(
+            cfg.render(),
+            Err(ConfigError::AdminSocketTooLong(cfg.admin_socket.clone()))
         );
     }
 
