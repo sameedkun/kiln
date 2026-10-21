@@ -1,24 +1,25 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (4 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (5 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0010 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0011 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
 | Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
 | Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
-| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing`; Windows pipes, SIDs, system directory, UAC launch |
+| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing` / `rename_replace`; Windows pipes, SIDs, system directory, UAC launch, process handles |
 | Hosts-file editor (`kiln-platform::hosts`) | **done**: byte-safe, property-tested |
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
-| Serving a PHP site end to end | **not started** (Phase 1) |
+| Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/status`, `hosts sync`. Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7; browser check pending ([I-45](issues.md#i-45)) |
+| Serving a PHP site end to end | **static sites work**; PHP next (P1-08, P1-09) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -54,10 +55,10 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
-| P1-04 | Linux DNS providers | **next** (or P1-05) | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
+| P1-04 | Linux DNS providers | later | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
-| P1-06 | Caddy integration | **next** | Caddy PKI gets `intermediate.crt/.key` + `root.crt` from `CaStore::web_server_files` |
-| P1-07 | Caddy admin API lockdown | later | [I-20](issues.md#i-20) |
+| P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
+| P1-07 | Caddy admin API lockdown + live reload | **next** (or P1-08) | [I-20](issues.md#i-20); P1-06 runs with the admin endpoint disabled and restarts on change |
 | P1-08 | PHP runtime provider | later | |
 | P1-09 | Process supervisor | later | [I-14](issues.md#i-14) |
 | P1-10 | Sites + drivers | later | |
@@ -192,6 +193,73 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
   It surfaced [I-44](issues.md#i-44) (renames failing in the user profile), fixed with
   `kiln_sys::rename_replace`.
 
+<a id="p1-06"></a>
+### P1-06 delivered (2026-10-21)
+
+Design: [ADR 0011](adr/0011-caddy-integration.md). **Sites are plain HTTP by default; HTTPS
+is turned on per site.**
+
+- **New crate `kiln-web`:**
+  - `config`: Caddy JSON from typed structs.
+    - The HTTP server always runs. The HTTPS server exists only when a site is secure.
+    - A secure site gets a `308` redirect on HTTP and a certificate from Kiln's intermediate
+      (`internal` issuer, `install_trust: false`). The root key is never given to Caddy.
+    - Every listener is loopback, every server ends in a 404 catch-all, and both automatic
+      HTTPS and the admin endpoint are off.
+  - `release`: Caddy 2.11.7 archives pinned by SHA-512 (Windows x64/arm64). The binary is
+    extracted as `kiln-caddy.exe` into `%LOCALAPPDATA%\Kiln\bin`.
+  - `process`: background start (validate first, no console window, its own process group),
+    readiness check, and a PID file with the executable path.
+    - Stop and status open the process and compare its image path, so a reused PID is
+      never killed.
+    - A port in use (Herd on 80/443) is reported, with `--http-port` / `--https-port` suggested.
+- **`kiln-state`:** migration v2, a `sites` table (`secure` defaults to 0).
+  `default_local_dir()` points at `%LOCALAPPDATA%\Kiln`.
+- **`kiln-sys::win::Process`:** open by PID, image path, is running, terminate, wait.
+- **CLI:**
+  - Sites: `kiln link [name] [--path] [--secure]`, `kiln unlink`, `kiln secure` /
+    `kiln unsecure`, `kiln sites`.
+  - Web server: `kiln web install --archive`, `kiln web start [--http-port] [--https-port]`,
+    `kiln web stop`, `kiln web restart`, `kiln web status`, `kiln web config`.
+  - DNS: `kiln hosts sync`.
+  - Site changes restart a running server.
+  - Making a site secure re-issues the intermediate if it has fewer than 10 days left, and
+    warns if the root isn't trusted.
+- **Tests:** 24 new, 119 total.
+  - Config invariants, the installer (pinned / unpinned / missing executable), PID-file safety,
+    process handles and site storage.
+  - **A real-Caddy end-to-end test** (`KILN_TEST_CADDY=<caddy.exe> cargo test -p kiln-web
+    --test caddy`):
+    - HTTP returns 200, an unknown host returns 404, and the secure site redirects (308).
+    - HTTPS verifies against Kiln's root with rustls. A plain site has no certificate.
+    - With no secure sites, the HTTPS port isn't bound, and stopping releases the ports.
+    - It passes locally against Caddy 2.11.7. CI skips it until P1-15.
+- **Manual run from the agent session:** install, link `hello` (HTTP) and `shop` (`--secure`),
+  then start.
+  - With default ports, start refused: `127.0.0.1:80 is already in use … Herd?`.
+  - On 8080/8443: HTTP returned 200, `shop.test` redirected (308) to
+    `https://shop.test:8443/some/page`, unknown hosts got 404, and all four listeners were on
+    loopback.
+  - HTTPS failed there only because Caddy can't write its certificate storage inside the
+    Claude app's MSIX container ([I-45](issues.md#i-45)).
+
+**Browser check to run from a normal terminal** (Windows Terminal or PowerShell from the Start
+menu, not from the Claude app; state created inside the app isn't visible there):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe web install --archive spikes\web-server\.cache\dl\caddy_2.11.7_windows_amd64.zip
+.\target\debug\kiln.exe ca init
+.\target\debug\kiln.exe ca trust            # Windows dialog: Yes
+.\target\debug\kiln.exe link hello --path D:\Code\Rea\laravel-herd\demo-sites\hello
+.\target\debug\kiln.exe link shop  --path D:\Code\Rea\laravel-herd\demo-sites\shop --secure
+.\target\debug\kiln.exe hosts sync          # UAC prompt: Yes
+.\target\debug\kiln.exe web start --http-port 8080 --https-port 8443
+# Browser: http://hello.test:8080/ (plain) and https://shop.test:8443/ (padlock, no warning)
+.\target\debug\kiln.exe web stop
+.\target\debug\kiln.exe undo <n>            # the hosts and trust operation numbers printed above
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -200,7 +268,10 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
-| Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21; browser check with P1-06 |
+| Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21 (inside the app container); repeat with the browser check |
+| Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-06)) |
+| Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | with P1-08 |
+| Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
@@ -225,6 +296,7 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
 | 2026-10-21 | **I-42 manual end-to-end passed** on the dev machine: `kiln hosts set demo` (1 UAC prompt) → `demo.test` resolves → `kiln undo 1` (1 UAC prompt) → hosts file SHA-256 identical (`4387EA88…`), ACL identical, Herd's block untouched. |
 | 2026-10-21 | **P1-05 done (Windows):** ADR 0010; `kiln-pki` (name-constrained root + 30-day intermediate, DPAPI-protected key); `kiln-sys::wincrypt`; `TrustCaOp`; `kiln ca init/info/trust`; 13 new tests, 95 total. |
 | 2026-10-21 | **I-43 manual check passed:** `kiln ca init` → `kiln ca trust` (1 Windows dialog) → root in `CurrentUser\Root` (50 → 51) → `kiln undo 2` → back to the 50 baseline thumbprints. Fixed I-44 on the way: renames in `%APPDATA%` failed with os error 17; added `kiln_sys::rename_replace` and banned `std::fs::rename` via `clippy.toml`. |
+| 2026-10-21 | **P1-06 done (Windows):** ADR 0011 (HTTP by default, HTTPS per site); new `kiln-web` crate (typed Caddy config, pinned release install, background process control); `sites` table; `kiln link/unlink/secure/unsecure/sites`, `kiln web …`, `kiln hosts sync`; 24 new tests, 119 total, plus a real-Caddy end-to-end test. Root cause of I-44 found: the Claude desktop app's MSIX AppData virtualization (I-45). Browser check left to the user from a normal terminal. |
 
 ## How to update this file
 

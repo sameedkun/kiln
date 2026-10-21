@@ -1,0 +1,26 @@
+[package]
+name = "kiln-web"
+description = "Kiln's web server integration: Caddy config generated from typed structs, the pinned Caddy binary, and starting/stopping it (ADR 0011)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+kiln-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+kiln-pki.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -30,11 +30,12 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-core` | Domain types (TLD, host names) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
 | `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows) | forbidden |
-| `kiln-state` | SQLite state store (`StateStore`), JSONL import | forbidden |
+| `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
-| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, pipes, SIDs, UAC, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-web` | Caddy config (typed JSON), pinned release install, start/stop/status of `kiln-caddy` | forbidden |
+| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set`, `hosts clear`, `ca init`, `ca info`, `ca trust`, `undo`) | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `secure`, `unsecure`, `sites`, `web install/start/stop/restart/status/config`, `undo`) | forbidden |
 
 ## Everyday commands
 
@@ -51,6 +52,16 @@ More property-test cases (CI uses 512):
 ```sh
 PROPTEST_CASES=20000 cargo test --workspace
 ```
+
+End-to-end test against a real Caddy (skipped unless `KILN_TEST_CADDY` is set; uses only
+temporary folders and free loopback ports):
+
+```sh
+KILN_TEST_CADDY=/path/to/caddy.exe cargo test -p kiln-web --test caddy
+```
+
+Run manual checks that touch `%APPDATA%` / `%LOCALAPPDATA%` from a normal terminal, not from a
+packaged app's terminal ([I-45](issues.md#i-45)).
 
 Read-only preview against the real hosts file (writes nothing):
 

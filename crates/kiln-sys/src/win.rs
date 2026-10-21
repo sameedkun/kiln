@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -31,8 +31,9 @@ use windows_sys::Win32::System::Pipes::{
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
@@ -304,6 +305,102 @@ pub fn connect_pipe(name: &str, timeout: Duration) -> io::Result<File> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Processes
+// ---------------------------------------------------------------------------------------------
+
+/// An open handle to another process, for checking what it is and stopping it.
+///
+/// Holding the handle pins the process object, so a PID checked through [`Process::image_path`]
+/// can't be reused by an unrelated process before [`Process::terminate`] acts on it.
+#[derive(Debug)]
+pub struct Process {
+    handle: OwnedHandle,
+}
+
+impl Process {
+    /// Opens process `pid` with query, terminate and wait rights. `Ok(None)` if no such process
+    /// exists (any more).
+    pub fn open(pid: u32) -> io::Result<Option<Self>> {
+        // SAFETY: plain call; a null return is handled below.
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            // OpenProcess reports a PID that doesn't exist as ERROR_INVALID_PARAMETER.
+            if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        Ok(Some(Self {
+            handle: owned(handle),
+        }))
+    }
+
+    /// Full path of the process's executable (`QueryFullProcessImageNameW`, Win32 form).
+    pub fn image_path(&self) -> io::Result<PathBuf> {
+        let mut buffer = vec![0u16; 32_768];
+        let mut len = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+        // SAFETY: valid process handle; `buffer` holds `len` u16s and `len` is a valid in/out
+        // pointer.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(
+                raw(&self.handle),
+                PROCESS_NAME_WIN32,
+                buffer.as_mut_ptr(),
+                &raw mut len,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.truncate(usize::try_from(len).unwrap_or(0));
+        Ok(PathBuf::from(OsString::from_wide(&buffer)))
+    }
+
+    /// Whether the process is still running.
+    pub fn is_running(&self) -> io::Result<bool> {
+        Ok(self.wait(Duration::ZERO)?.is_none())
+    }
+
+    /// Ends the process immediately with `exit_code` (`TerminateProcess`).
+    pub fn terminate(&self, exit_code: u32) -> io::Result<()> {
+        // SAFETY: valid process handle opened with PROCESS_TERMINATE.
+        if unsafe { TerminateProcess(raw(&self.handle), exit_code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Waits up to `timeout`; returns the exit code, or `None` if still running.
+    pub fn wait(&self, timeout: Duration) -> io::Result<Option<u32>> {
+        wait_for_exit(&self.handle, timeout)
+    }
+}
+
+fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u32>> {
+    let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+    // SAFETY: valid process handle owned by the caller.
+    match unsafe { WaitForSingleObject(raw(handle), ms) } {
+        WAIT_OBJECT_0 => {
+            let mut code = 0u32;
+            // SAFETY: valid process handle; `code` is a valid out pointer.
+            if unsafe { GetExitCodeProcess(raw(handle), &raw mut code) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Some(code))
+        }
+        WAIT_TIMEOUT => Ok(None),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Elevation
 // ---------------------------------------------------------------------------------------------
 
@@ -362,20 +459,7 @@ pub fn spawn_elevated(exe: &Path, args: &[&str]) -> io::Result<ElevatedProcess> 
 impl ElevatedProcess {
     /// Waits up to `timeout`; returns the exit code, or `None` if still running.
     pub fn wait(&self, timeout: Duration) -> io::Result<Option<u32>> {
-        let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
-        // SAFETY: valid process handle owned by `self`.
-        match unsafe { WaitForSingleObject(raw(&self.handle), ms) } {
-            WAIT_OBJECT_0 => {
-                let mut code = 0u32;
-                // SAFETY: valid process handle; `code` is a valid out pointer.
-                if unsafe { GetExitCodeProcess(raw(&self.handle), &raw mut code) } == 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(Some(code))
-            }
-            WAIT_TIMEOUT => Ok(None),
-            _ => Err(io::Error::last_os_error()),
-        }
+        wait_for_exit(&self.handle, timeout)
     }
 }
 
@@ -408,6 +492,35 @@ mod tests {
             "{dir:?}"
         );
         assert!(dir.join(r"drivers\etc").is_dir());
+    }
+
+    #[test]
+    fn process_handle_names_its_image_and_terminates_it() {
+        let ping = system_directory().unwrap().join("PING.EXE");
+        let mut child = std::process::Command::new(&ping)
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let process = Process::open(child.id()).unwrap().expect("child exists");
+        assert!(process.is_running().unwrap());
+        let image = process.image_path().unwrap();
+        assert!(
+            image
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&ping.to_string_lossy()),
+            "{image:?} vs {ping:?}"
+        );
+        process.terminate(9).unwrap();
+        assert_eq!(process.wait(Duration::from_secs(5)).unwrap(), Some(9));
+        assert!(!process.is_running().unwrap());
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn opening_a_process_that_does_not_exist_is_none() {
+        // PIDs are multiples of 4; an odd PID never names a process.
+        assert!(Process::open(0xFFFF_FFF1).unwrap().is_none());
     }
 
     #[test]

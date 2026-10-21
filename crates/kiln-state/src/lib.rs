@@ -1,7 +1,7 @@
 //! Kiln's durable state, stored in one SQLite database per user.
 //!
-//! Phase 1 starts with the operation journal ([`StateStore`] implements
-//! [`kiln_ops::Journal`]) and a small settings table. Sites, runtimes and services join the
+//! It holds the operation journal ([`StateStore`] implements
+//! [`kiln_ops::Journal`]), a settings table and linked sites. Runtimes and services join the
 //! schema through numbered migrations as they are built.
 //!
 //! Durability: WAL mode with `synchronous = FULL`, so a recorded journal entry survives power
@@ -10,9 +10,11 @@
 mod import;
 mod paths;
 mod schema;
+mod sites;
 mod store;
 
 pub use import::ImportReport;
-pub use paths::{DB_FILE, LEGACY_JOURNAL_FILE, default_state_dir};
+pub use paths::{DB_FILE, LEGACY_JOURNAL_FILE, default_local_dir, default_state_dir};
 pub use schema::SCHEMA_VERSION;
+pub use sites::SiteRecord;
 pub use store::{OpenReport, StateError, StateStore};

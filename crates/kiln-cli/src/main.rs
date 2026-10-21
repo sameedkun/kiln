@@ -1,5 +1,6 @@
 //! `kiln` CLI: previews (`plan`), state inspection (`state info`), hosts block changes
-//! (`hosts set|clear`) and `undo`.
+//! (`hosts set|sync|clear`), the local CA (`ca`), sites and the web server (`link`, `secure`,
+//! `web`), and `undo`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,6 +10,7 @@ use kiln_core::Tld;
 use kiln_platform::hosts;
 
 mod apply;
+mod web;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,6 +45,30 @@ enum Command {
         #[command(subcommand)]
         action: CaAction,
     },
+    /// Serve a folder as <name>.test, over plain HTTP unless --secure is given.
+    Link {
+        /// Site name (default: the folder's name), with or without `.test`.
+        name: Option<String>,
+        /// Folder to serve (default: the current folder).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Serve it over HTTPS (same as `kiln secure` afterwards).
+        #[arg(long)]
+        secure: bool,
+    },
+    /// Stop serving a site. Its files are untouched.
+    Unlink { name: String },
+    /// Turn HTTPS on for a site (HTTP then redirects to it). Needs `kiln ca init` once.
+    Secure { name: String },
+    /// Turn HTTPS off for a site again; it is served over plain HTTP.
+    Unsecure { name: String },
+    /// List linked sites with their URLs.
+    Sites,
+    /// Kiln's web server (Caddy, running as kiln-caddy).
+    Web {
+        #[command(subcommand)]
+        action: WebAction,
+    },
     /// Undo a recorded operation by its number (see the output of the command that made it).
     Undo {
         id: u64,
@@ -53,6 +79,33 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum WebAction {
+    /// Install Caddy from an official release archive (checked against a pinned SHA-512).
+    Install {
+        /// The release archive you downloaded from Caddy's GitHub releases page.
+        #[arg(long)]
+        archive: Option<PathBuf>,
+    },
+    /// Start the web server in the background.
+    Start {
+        /// HTTP port (default 80; remembered). Use e.g. 8080 if another server has 80.
+        #[arg(long)]
+        http_port: Option<u16>,
+        /// HTTPS port (default 443; remembered). Only used when a site is secure.
+        #[arg(long)]
+        https_port: Option<u16>,
+    },
+    /// Stop the web server.
+    Stop,
+    /// Stop and start the web server, picking up any changes.
+    Restart,
+    /// Show whether the web server is installed and running.
+    Status,
+    /// Print the Caddy config Kiln would run, without starting anything.
+    Config,
 }
 
 #[derive(Debug, Subcommand)]
@@ -81,6 +134,12 @@ enum HostsAction {
         names: Vec<String>,
         #[arg(long, default_value = "test")]
         tld: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Make Kiln's block list exactly the linked sites.
+    Sync {
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
@@ -148,7 +207,7 @@ enum PlanTarget {
     },
 }
 
-fn system_hosts_path() -> PathBuf {
+pub(crate) fn system_hosts_path() -> PathBuf {
     if cfg!(windows) {
         let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
         PathBuf::from(root).join("System32\\drivers\\etc\\hosts")
@@ -215,6 +274,25 @@ fn main() -> ExitCode {
         Command::Ca {
             action: CaAction::Trust { yes },
         } => apply::ca_trust(yes),
+        Command::Hosts {
+            action: HostsAction::Sync { yes },
+        } => web::hosts_sync(yes),
+        Command::Link { name, path, secure } => web::link(name, path, secure),
+        Command::Unlink { name } => web::unlink(&name),
+        Command::Secure { name } => web::set_secure(&name, true),
+        Command::Unsecure { name } => web::set_secure(&name, false),
+        Command::Sites => web::sites(),
+        Command::Web { action } => match action {
+            WebAction::Install { archive } => web::install(archive),
+            WebAction::Start {
+                http_port,
+                https_port,
+            } => web::start(http_port, https_port),
+            WebAction::Stop => web::stop(),
+            WebAction::Restart => web::restart(),
+            WebAction::Status => web::status(),
+            WebAction::Config => web::print_config(),
+        },
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
     };
     match result {

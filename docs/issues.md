@@ -25,8 +25,8 @@ commits and PRs.
 | [I-13](#i-13) | benchmark | Laravel file sessions under synthetic load distorted throughput about 10× | ✅ |
 | [I-14](#i-14) | runtime | Synchronized php-cgi recycling plus passive health checks caused a 10 s outage | 📌 |
 | [I-15](#i-15) | Caddy | `lb_retries` capped retries and left ~9% errors during recycling | 📌 |
-| [I-16](#i-16) | Caddy | Caddy binds all interfaces by default | 📌 |
-| [I-17](#i-17) | web | Unknown hosts get a 200 (Caddy) or the first site (nginx) | 📌 |
+| [I-16](#i-16) | Caddy | Caddy binds all interfaces by default | 📌 (enforced in `kiln-web`, P1-06) |
+| [I-17](#i-17) | web | Unknown hosts get a 200 (Caddy) or the first site (nginx) | 📌 (catch-all 404 in `kiln-web`, P1-06) |
 | [I-18](#i-18) | Caddy | Caddyfile syntax gotchas (inline blocks, `persist`, TLS on HTTP sites) | ✅ |
 | [I-19](#i-19) | nginx | nginx on Windows is 2–25× slower on static files | 📌 (→ Caddy) |
 | [I-20](#i-20) | security | Caddy admin API listens on TCP `localhost:2019`, reachable by any local process | 🔶 |
@@ -53,7 +53,8 @@ commits and PRs.
 | [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
 | [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
 | [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run passed 2026-10-21; browser check with P1-06) |
-| [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there | ✅ (workaround: `rename_replace`) |
+| [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there (cause: MSIX virtualization, I-45) | ✅ (workaround: `rename_replace`) |
+| [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 🔶 |
 
 ---
 
@@ -385,6 +386,9 @@ commits and PRs.
   - `kiln undo 2 --yes`: one removal dialog (Yes), no UAC. The store is back to 50 certificates,
     and the thumbprints are identical to the baseline.
   - Still to do: the browser check once P1-06 serves a `.test` page.
+  - Caveat found later ([I-45](#i-45)): this run happened inside the Claude desktop app's MSIX
+    container. The hosts file (System32) isn't virtualized, so I-42 stands. The trust check
+    should be repeated once from a normal terminal, together with the browser check.
 
 <a id="i-44"></a>
 ### I-44: Renames inside the user profile fail with os error 17 ✅ (worked around)
@@ -394,9 +398,16 @@ commits and PRs.
 - **Findings:** `std::fs::rename` (plain `MoveFileExW`) fails this way in `%APPDATA%` and
   `%LOCALAPPDATA%`, inside and outside the agent sandbox, but works in `%TEMP%`.
   `MoveFileExW` with `MOVEFILE_COPY_ALLOWED` works, which is why .NET `File.Move` was fine.
-  `ReplaceFileW` fails with "Access is denied" (os error 5) in the same folders. The root cause
-  is probably a file-system filter driver (`fltmc` needs admin, so not confirmed). Other users'
-  machines may behave the same, so Kiln must not rely on plain renames in the profile.
+  `ReplaceFileW` fails with "Access is denied" (os error 5) in the same folders.
+- **Root cause (found during P1-06):** MSIX AppData virtualization, not Kiln and not Windows in
+  general. The commands ran as children of the Claude desktop app
+  (`C:\Program Files\WindowsApps\Claude_…\Claude.exe`), an MSIX-packaged app. Windows
+  redirects such processes' AppData writes into
+  `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\{Local,Roaming}` and merges that with the
+  real folder. A rename between the two layers looks like a move to another volume. Both
+  `…\LocalCache\Local\Kiln` and `…\LocalCache\Roaming\Kiln` exist on the dev machine. Kiln run
+  from a normal terminal isn't affected. Anyone who runs Kiln from another packaged app's
+  terminal would be, so the fix stays. Details and consequences: [I-45](#i-45).
 - **Fix:**
   - New `kiln_sys::rename_replace`: `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`, retried
     with `COPY_ALLOWED` on `ERROR_NOT_SAME_DEVICE`. Used by `kiln-pki` key writes and
@@ -408,3 +419,30 @@ commits and PRs.
 - **Caveat:** the `COPY_ALLOWED` fallback is copy + delete, so it is not atomic. A crash in
   between leaves both files. That is acceptable for Kiln's write-once CA files and the one-time
   journal archive, but not for files rewritten in place.
+
+<a id="i-45"></a>
+### I-45: Commands run from the Claude desktop app live in an MSIX container 🔶
+- **Found:** 2026-10-21, P1-06 manual check. Over plain HTTP, `kiln web start` served the sites
+  correctly. HTTPS failed because Caddy couldn't store the `shop.test` certificate:
+  `failed storage check: failed to rename …\AppData\Local\Kiln\caddy\storage\…`. Caddy's Go
+  file storage uses a plain rename, the same failure as [I-44](#i-44).
+- **Cause:** see I-44. Every process started from the Claude desktop app inherits its MSIX
+  AppData virtualization. That includes `kiln`, `kiln-caddy` and the PowerShell used to verify
+  results. The automated real-Caddy test passed because it runs under `%TEMP%`, which isn't
+  virtualized.
+- **Consequences:**
+  - The Kiln state, CA, sites and Caddy binary created during agent sessions are stored in
+    `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\…`. A normal terminal sees none of them, and
+    `kiln` run there starts fresh.
+  - The hosts file (System32) isn't virtualized, so [I-42](#i-42) stands.
+  - Whether `CurrentUser\Root` changes are virtualized is unverified. The dialog and store
+    write are brokered by the system, so they probably aren't. [I-43](#i-43) gets repeated from
+    a normal terminal.
+  - Investigating from outside the container (starting a process through WMI, reading the
+    package's `LocalCache`) was blocked in the agent session. That was the right call; the user
+    runs the checks instead.
+- **Next:**
+  - The user runs the P1-06 browser check from a normal terminal (Windows Terminal or
+    PowerShell started from the Start menu). The script is in [progress.md](progress.md#p1-06).
+  - `kiln doctor` (P1-12) should warn when Kiln runs in a packaged app's container, because
+    its files would then be invisible to the rest of the system.

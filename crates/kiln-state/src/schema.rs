@@ -33,6 +33,13 @@ const MIGRATIONS: &[&str] = &[
 
      CREATE INDEX operation_events_by_op ON operation_events(op_id, seq);
      CREATE INDEX operations_by_state ON operations(state);",
+    // v2: linked sites (ADR 0011). HTTP unless `secure` is set.
+    "CREATE TABLE sites (
+         host       TEXT    PRIMARY KEY,  -- e.g. blog.test
+         root       TEXT    NOT NULL,     -- document root, absolute
+         secure     INTEGER NOT NULL DEFAULT 0 CHECK (secure IN (0, 1)),
+         created_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.
