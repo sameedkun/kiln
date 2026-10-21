@@ -9,7 +9,7 @@
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
 | Architecture and key decisions | **done**: ADRs 0001–0009 accepted |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
-| Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; real-machine run pending ([I-42](issues.md#i-42)) |
+| Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
 | Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
 | Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
@@ -51,7 +51,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
-| P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41), [I-42](issues.md#i-42) |
+| P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
 | P1-04 | Linux DNS providers | **next** (or P1-05) | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
 | P1-05 | Local CA + trust stores | later | |
@@ -149,8 +149,8 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
   - 1 helper test for deletion of an emptied created file only.
   - 3 full-stack tests on a real pipe: SQLite journal → engine → op → session → helper →
     file, with undo from a separate "process" and session.
-- **Not yet verified on the real machine:** the UAC-launched path changes the real hosts file;
-  the steps are in [I-42](issues.md#i-42).
+- **Verified on the real machine (2026-10-21):** `kiln hosts set demo` → `ping demo.test` →
+  `kiln undo 1` left the hosts file byte-identical, with the same ACL ([I-42](issues.md#i-42)).
 
 ## Open items carried into Phase 1
 
@@ -159,7 +159,7 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 | Caddy admin over a Unix socket on Windows | [I-20](issues.md#i-20) | blocks P1-07 |
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
-| Manual UAC launch check | [I-42](issues.md#i-42) | no (run before 1.0) |
+| Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
 | OpenVPN, Firefox/Chrome, WordPress and Unicode-path tests | spike results | no (Phase 1 integration suite) |
@@ -179,7 +179,8 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 | 2026-10-21 | **Phase 1 started.** I-38 decided (ADR 0008, `kiln-sys`). **P1-01 done:** `kiln-state` SQLite store, journal migration, shared journal contract tests, `kiln state info` (`f9c3f4b`). |
 | 2026-10-21 | CI failed only on Windows: the ACL test's PowerShell `Get-Acl` check (I-40). Fixed by switching detection to `icacls /save`. |
 | 2026-10-21 | **P1-02 done:** ADR 0009; Windows FFI in `kiln-sys::win`; new `kiln-helper` crate and binary (authenticated pipe protocol, fixed operations, hosts write policy); 28 new tests, 70 total. |
-| 2026-10-21 | **P1-03 done:** `HostsBlockOp` (platform-neutral) + `HelperSession` (lazy UAC); helper protocol v2; `kiln hosts set/clear`, `kiln undo`; 12 new tests, 82 total. Real-machine UAC run pending (I-42). |
+| 2026-10-21 | **P1-03 done:** `HostsBlockOp` (platform-neutral) + `HelperSession` (lazy UAC); helper protocol v2; `kiln hosts set/clear`, `kiln undo`; 12 new tests, 82 total. |
+| 2026-10-21 | **I-42 manual end-to-end passed** on the dev machine: `kiln hosts set demo` (1 UAC prompt) → `demo.test` resolves → `kiln undo 1` (1 UAC prompt) → hosts file SHA-256 identical (`4387EA88…`), ACL identical, Herd's block untouched. |
 
 ## How to update this file
 

@@ -51,7 +51,7 @@ commits and PRs.
 | [I-39](#i-39) | testing | Edge × DNS-over-HTTPS results unreliable (cold session); recheck pending | 🔶 |
 | [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
 | [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
-| [I-42](#i-42) | helper | UAC launch path can only be tested manually | 🔶 |
+| [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
 
 ---
 
@@ -339,7 +339,7 @@ commits and PRs.
   pipe client's PID after connect. Tracked for P1-15.
 
 <a id="i-42"></a>
-### I-42: UAC launch is manual-test only 🔶
+### I-42: UAC launch is manual-test only ✅ (verified manually 2026-10-21)
 - `kiln_sys::win::spawn_elevated` (`ShellExecuteExW` `runas`) shows a consent prompt, which CI
   can't click. Everything *after* launch (pipe, identity check, MAC, operations, the real
   binary) is covered automatically in `crates/kiln-helper/tests/session.rs`.
@@ -348,5 +348,16 @@ commits and PRs.
 - **Manual end-to-end (since P1-03):** `cargo build -p kiln-cli -p kiln-helper`, then
   `target\debug\kiln.exe hosts set demo` → one UAC prompt → `ping demo.test` resolves to
   127.0.0.1 → `target\debug\kiln.exe undo <n>` → one UAC prompt → the hosts file is
-  byte-identical to before (compare `certutil -hashfile` output). **Not yet run on the dev
-  machine**; it changes the real hosts file, so it waits for the user's go-ahead.
+  byte-identical to before (compare `certutil -hashfile` output).
+- **Result 2026-10-21 (dev machine, Windows 11 Pro, with Laravel Herd's hosts block present):**
+  - Baseline: SHA-256 `4387EA88…49BE90`, 2,155 bytes, no Kiln block, `demo.test` unresolved.
+  - `kiln hosts set demo --yes`: one UAC prompt, done in 3 s, recorded as operation #1. After
+    it, `demo.test` resolved to 127.0.0.1 (.NET and `ping`). The original 2,155 bytes were an
+    exact prefix with Kiln's block appended, Herd's block was untouched, and the helper process
+    exited.
+  - `kiln undo 1 --yes`: one UAC prompt. The hash is back to `4387EA88…49BE90`, 2,155 bytes,
+    `demo.test` unresolved, the file's security descriptor (including an explicit SYSTEM ACE)
+    is identical, and the journal shows operation #1 as `Reverted`.
+  - Side effect: Kiln's own state database now exists at `%APPDATA%\Kiln\state.db` (one
+    reverted operation).
+
