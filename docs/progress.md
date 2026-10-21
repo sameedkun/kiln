@@ -8,7 +8,7 @@
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
 | Architecture and key decisions | **done**: ADRs 0001–0010 accepted |
-| Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; real `Root` dialog check pending ([I-43](issues.md#i-43)) |
+| Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
@@ -188,7 +188,9 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
 - **Firefox/NSS:** planned in ADR 0010 §10–12. Windows uses Firefox's enterprise-roots setting
   via a journaled `user.js` change, and Linux uses `certutil` NSS imports. Implemented with
   `kiln doctor` and P1-04.
-- **Manual check pending:** the real `CurrentUser\Root` dialog flow ([I-43](issues.md#i-43)).
+- **Manual check done 2026-10-21:** the real `CurrentUser\Root` dialog flow ([I-43](issues.md#i-43)).
+  It surfaced [I-44](issues.md#i-44) (renames failing in the user profile), fixed with
+  `kiln_sys::rename_replace`.
 
 ## Open items carried into Phase 1
 
@@ -198,7 +200,7 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
 | Linux `replace_file`: copy SELinux labels / xattrs | [ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md) | part of P1-04 |
 | Over-the-shoulder elevation verification | [I-41](issues.md#i-41) | P1-15 |
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
-| Manual `Root` store trust check | [I-43](issues.md#i-43) | no |
+| Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21; browser check with P1-06 |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
@@ -222,6 +224,7 @@ Design: [ADR 0010](adr/0010-local-certificate-authority.md).
 | 2026-10-21 | **P1-03 done:** `HostsBlockOp` (platform-neutral) + `HelperSession` (lazy UAC); helper protocol v2; `kiln hosts set/clear`, `kiln undo`; 12 new tests, 82 total. |
 | 2026-10-21 | **I-42 manual end-to-end passed** on the dev machine: `kiln hosts set demo` (1 UAC prompt) → `demo.test` resolves → `kiln undo 1` (1 UAC prompt) → hosts file SHA-256 identical (`4387EA88…`), ACL identical, Herd's block untouched. |
 | 2026-10-21 | **P1-05 done (Windows):** ADR 0010; `kiln-pki` (name-constrained root + 30-day intermediate, DPAPI-protected key); `kiln-sys::wincrypt`; `TrustCaOp`; `kiln ca init/info/trust`; 13 new tests, 95 total. |
+| 2026-10-21 | **I-43 manual check passed:** `kiln ca init` → `kiln ca trust` (1 Windows dialog) → root in `CurrentUser\Root` (50 → 51) → `kiln undo 2` → back to the 50 baseline thumbprints. Fixed I-44 on the way: renames in `%APPDATA%` failed with os error 17; added `kiln_sys::rename_replace` and banned `std::fs::rename` via `clippy.toml`. |
 
 ## How to update this file
 

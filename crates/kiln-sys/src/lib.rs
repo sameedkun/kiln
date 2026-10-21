@@ -7,7 +7,7 @@ mod replace;
 #[allow(unsafe_code)]
 pub mod win;
 
-pub use replace::{replace_file, write_replacing};
+pub use replace::{rename_replace, replace_file, write_replacing};
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub mod wincrypt;

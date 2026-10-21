@@ -106,7 +106,7 @@ impl StateStore {
         if legacy.is_file() && store.operation_count()? == 0 {
             report.imported = Some(store.import_jsonl(&legacy)?);
             let archived = dir.join(format!("{LEGACY_JOURNAL_FILE}.imported"));
-            std::fs::rename(&legacy, &archived).map_err(|source| StateError::Io {
+            kiln_sys::rename_replace(&legacy, &archived).map_err(|source| StateError::Io {
                 path: legacy.clone(),
                 source,
             })?;

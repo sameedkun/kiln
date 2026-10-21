@@ -137,7 +137,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&temp, fs::Permissions::from_mode(0o600)).map_err(io_err(&temp))?;
     }
-    fs::rename(&temp, path).map_err(io_err(path))
+    kiln_sys::rename_replace(&temp, path).map_err(io_err(path))
 }
 
 /// The CA directory.

@@ -52,7 +52,8 @@ commits and PRs.
 | [I-40](#i-40) | CI | ACL test passed locally but failed on the GitHub Windows runner (PowerShell `Get-Acl` check) | ✅ |
 | [I-41](#i-41) | helper | Over-the-shoulder elevation (helper runs as a different admin) not yet verified | 🔶 |
 | [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
-| [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | 🔶 |
+| [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run passed 2026-10-21; browser check with P1-06) |
+| [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there | ✅ (workaround: `rename_replace`) |
 
 ---
 
@@ -364,7 +365,7 @@ commits and PRs.
 
 
 <a id="i-43"></a>
-### I-43: Real `Root` store trust is a manual check 🔶
+### I-43: Real `Root` store trust is a manual check ✅ (verified manually 2026-10-21)
 - Adding to or removing from `Cert:\CurrentUser\Root` makes Windows show its own security
   dialog, which CI can't click. All logic is tested automatically against private per-test
   stores (`KilnTest-<pid>-<n>`, deleted afterwards): trust + undo from the journal, a
@@ -373,3 +374,37 @@ commits and PRs.
   `Get-ChildItem Cert:\CurrentUser\Root | ? Subject -like '*Kiln Local Development CA*'`
   shows it → `kiln undo <n>` (confirm the removal dialog) → gone. Also confirm Edge or Chrome
   shows a `.test` page as secure once P1-06 serves one.
+- **Result 2026-10-21 (dev machine, Windows 11 Pro):**
+  - Baseline: 50 certificates in `CurrentUser\Root`, no Kiln root (thumbprints saved).
+  - `kiln ca init` created the `.test`-only root (SHA-1 `27CF1F33…05ECF1`, expires 2029-10-20)
+    and a 30-day intermediate in `%APPDATA%\Kiln\ca`; the root key is DPAPI-encrypted. The
+    first attempt failed with os error 17 ([I-44](#i-44)).
+  - `kiln ca trust --yes`: one Windows security dialog (Yes), recorded as operation #2. The store
+    held 51 certificates, including the Kiln root with the critical name constraint
+    `Permitted: DNS Name=test`.
+  - `kiln undo 2 --yes`: one removal dialog (Yes), no UAC. The store is back to 50 certificates,
+    and the thumbprints are identical to the baseline.
+  - Still to do: the browser check once P1-06 serves a `.test` page.
+
+<a id="i-44"></a>
+### I-44: Renames inside the user profile fail with os error 17 ✅ (worked around)
+- **Symptom:** the first `kiln ca init` failed with `root.key.protected: The system cannot move
+  the file to a different disk drive. (os error 17)`. The temp file and the target were in the
+  same folder (`%APPDATA%\Kiln\ca`).
+- **Findings:** `std::fs::rename` (plain `MoveFileExW`) fails this way in `%APPDATA%` and
+  `%LOCALAPPDATA%`, inside and outside the agent sandbox, but works in `%TEMP%`.
+  `MoveFileExW` with `MOVEFILE_COPY_ALLOWED` works, which is why .NET `File.Move` was fine.
+  `ReplaceFileW` fails with "Access is denied" (os error 5) in the same folders. The root cause
+  is probably a file-system filter driver (`fltmc` needs admin, so not confirmed). Other users'
+  machines may behave the same, so Kiln must not rely on plain renames in the profile.
+- **Fix:**
+  - New `kiln_sys::rename_replace`: `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`, retried
+    with `COPY_ALLOWED` on `ERROR_NOT_SAME_DEVICE`. Used by `kiln-pki` key writes and
+    `kiln-state`'s legacy-journal archive.
+  - `clippy.toml` bans `std::fs::rename` (`disallowed-methods`), so new code can't reintroduce it.
+  - A Windows regression test renames inside `%LOCALAPPDATA%`.
+  - `write_replacing` (`ReplaceFileW`) is still used only for the system hosts file, where it
+    works (I-42); its doc comment warns against using it in the profile.
+- **Caveat:** the `COPY_ALLOWED` fallback is copy + delete, so it is not atomic. A crash in
+  between leaves both files. That is acceptable for Kiln's write-once CA files and the one-time
+  journal archive, but not for files rewritten in place.

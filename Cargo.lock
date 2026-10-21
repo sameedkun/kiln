@@ -603,6 +603,7 @@ name = "kiln-state"
 version = "0.0.0"
 dependencies = [
  "kiln-ops",
+ "kiln-sys",
  "rusqlite",
  "serde",
  "serde_json",

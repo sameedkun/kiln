@@ -26,8 +26,23 @@ pub fn replace_file(target: &Path, replacement: &Path) -> io::Result<()> {
     platform::replace_file(target, replacement)
 }
 
+/// Renames `from` to `to` (same volume), replacing `to` if it exists, for Kiln's *own* files.
+///
+/// Use this instead of `std::fs::rename`. On Windows, recent `std` renames with the POSIX
+/// semantics of `FileRenameInfoEx`, which some machines reject inside user-profile folders
+/// with "cannot move the file to a different disk drive" (os error 17) even for a rename
+/// within one folder (I-44). This uses classic `MoveFileExW` (`REPLACE_EXISTING |
+/// WRITE_THROUGH`), which works there. To replace a file whose ACL must be kept, use
+/// [`replace_file`] instead.
+pub fn rename_replace(from: &Path, to: &Path) -> io::Result<()> {
+    platform::rename_replace(from, to)
+}
+
 /// Writes `contents` to a new temporary file next to `target`, flushes it to disk and swaps
 /// it in with [`replace_file`]. Readers see either the old or the new contents, never a mix.
+///
+/// On Windows this can fail with "Access is denied" inside the user profile on some machines
+/// (I-44); use it for system files such as `hosts`, and [`rename_replace`] for Kiln's own files.
 pub fn write_replacing(target: &Path, contents: &[u8]) -> io::Result<()> {
     let temp = temp_path_for(target)?;
     let result = (|| {
@@ -93,6 +108,33 @@ mod platform {
             Ok(())
         }
     }
+
+    pub(super) fn rename_replace(from: &Path, to: &Path) -> io::Result<()> {
+        use windows_sys::Win32::Foundation::ERROR_NOT_SAME_DEVICE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+        let from = wide(from);
+        let to = wide(to);
+        let attempt = |flags| {
+            // SAFETY: both are NUL-terminated UTF-16 buffers that outlive the call.
+            if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        };
+        let base = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+        match attempt(base) {
+            // I-44: some machines report same-folder paths in the user profile as being on
+            // different devices. Let Windows copy and delete instead; WRITE_THROUGH makes it
+            // durable, but it is not atomic, so callers must tolerate an interrupted move.
+            Err(e) if e.raw_os_error() == i32::try_from(ERROR_NOT_SAME_DEVICE).ok() => {
+                attempt(base | MOVEFILE_COPY_ALLOWED)
+            }
+            other => other,
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -101,6 +143,11 @@ mod platform {
     use std::io;
     use std::os::unix::fs::{MetadataExt, chown};
     use std::path::Path;
+
+    pub(super) fn rename_replace(from: &Path, to: &Path) -> io::Result<()> {
+        #[allow(clippy::disallowed_methods)] // the Unix implementation of rename_replace
+        fs::rename(from, to)
+    }
 
     pub(super) fn replace_file(target: &Path, replacement: &Path) -> io::Result<()> {
         let meta = fs::metadata(target)?;
@@ -112,6 +159,7 @@ mod platform {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
             Err(e) => return Err(e),
         }
+        #[allow(clippy::disallowed_methods)] // metadata copied above; this is the swap
         fs::rename(replacement, target)
     }
 }
@@ -145,6 +193,53 @@ mod tests {
             replacement.exists(),
             "caller keeps the replacement on failure"
         );
+    }
+
+    #[test]
+    fn rename_replace_creates_and_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        fs::write(&a, b"one").unwrap();
+        rename_replace(&a, &b).unwrap();
+        assert_eq!(fs::read(&b).unwrap(), b"one");
+        fs::write(&a, b"two").unwrap();
+        rename_replace(&a, &b).unwrap();
+        assert_eq!(fs::read(&b).unwrap(), b"two");
+        assert!(!a.exists());
+    }
+
+    /// Regression for I-44: on some Windows machines `std::fs::rename` fails with os error 17
+    /// inside the user profile (outside `%TEMP%`). Kiln's state lives there, so exercise both
+    /// helpers in a real profile folder.
+    #[cfg(windows)]
+    #[test]
+    fn renames_and_replacements_work_inside_the_user_profile() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let Some(base) = std::env::var_os("LOCALAPPDATA") else {
+            return;
+        };
+        let dir = PathBuf::from(base).join(format!(
+            "kiln-sys-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            let (tmp, fin) = (dir.join("key.tmp"), dir.join("key.final"));
+            fs::write(&tmp, b"k1").unwrap();
+            rename_replace(&tmp, &fin).unwrap();
+            fs::write(&tmp, b"k2").unwrap();
+            rename_replace(&tmp, &fin).unwrap();
+            assert_eq!(fs::read(&fin).unwrap(), b"k2");
+            // Note: `write_replacing` (ReplaceFileW) is *not* exercised here. On the machine
+            // that surfaced I-44 it fails with "Access is denied" inside the profile too; it is
+            // only used for the system hosts file, where it was verified end to end (I-42).
+        });
+        let _ = fs::remove_dir_all(&dir);
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     #[test]
@@ -250,6 +345,7 @@ mod tests {
         deny_guests_write(&renamed);
         let temp = dir.path().join("dropped.new");
         fs::write(&temp, b"new").unwrap();
+        #[allow(clippy::disallowed_methods)] // demonstrating what a plain rename does (I-25)
         fs::rename(&temp, &renamed).unwrap();
         assert!(
             !has_guest_deny(&renamed),
