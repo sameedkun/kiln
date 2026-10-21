@@ -357,11 +357,34 @@ mod platform {
         if pid == 0 || !alive(pid) {
             return false;
         }
-        // Linux names the executable; elsewhere the PID file plus liveness has to do (P1-04).
-        match std::fs::read_link(format!("/proc/{pid}/exe")) {
-            Ok(image) => std::fs::canonicalize(exe).is_ok_and(|exe| exe == image),
-            Err(_) => !cfg!(target_os = "linux"),
+        // Linux names the executable exactly.
+        if let Ok(image) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+            return std::fs::canonicalize(exe).is_ok_and(|exe| exe == image);
         }
+        if cfg!(target_os = "linux") {
+            return false;
+        }
+        // Elsewhere (macOS, BSD) ask `ps` for the program it runs. Never assume a live PID is
+        // ours: that would let `stop` signal an unrelated process that reused the PID.
+        let Ok(output) = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        let command = String::from_utf8_lossy(&output.stdout);
+        let command = Path::new(command.trim());
+        if command.is_absolute() {
+            return match (std::fs::canonicalize(command), std::fs::canonicalize(exe)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+        }
+        // Some systems report only the (possibly truncated) name; require it to match.
+        exe.file_name()
+            .zip(command.file_name())
+            .is_some_and(|(want, got)| want == got)
     }
 
     fn signal(pid: u32, name: &str) -> io::Result<()> {
