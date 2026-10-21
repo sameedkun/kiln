@@ -35,9 +35,10 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/stop/status of `kiln-caddy`, admin client over its Unix socket | forbidden |
 | `kiln-fetch` | Verified HTTPS downloads: expected digest first, streaming hash, OS trust store, cache | forbidden |
 | `kiln-php` | PHP runtimes: windows.php.net index, safe extraction, php.ini defaults, start-up check | forbidden |
-| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, `AF_UNIX` connect, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-supervisor` | php-cgi supervisor library and `kiln-supervisor` binary: pools, staggered recycling, respawn, CLI handle | forbidden |
+| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove`, `undo`) | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `undo`) | forbidden |
 
 ## Everyday commands
 
@@ -60,6 +61,7 @@ temporary folders and free loopback ports):
 
 ```sh
 KILN_TEST_CADDY=/path/to/caddy.exe cargo test -p kiln-web --test caddy
+KILN_TEST_CADDY=/path/to/caddy.exe KILN_TEST_PHP="$LOCALAPPDATA/Kiln/php/8.4.27" cargo test -p kiln-web --test php
 ```
 
 Run manual checks that touch `%APPDATA%` / `%LOCALAPPDATA%` from a normal terminal, not from a

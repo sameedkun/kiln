@@ -635,6 +635,7 @@ dependencies = [
  "kiln-pki",
  "kiln-platform",
  "kiln-state",
+ "kiln-supervisor",
  "kiln-sys",
  "kiln-web",
  "time",
@@ -750,6 +751,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln-supervisor"
+version = "0.0.0"
+dependencies = [
+ "kiln-sys",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "kiln-sys"
 version = "0.0.0"
 dependencies = [
@@ -763,6 +775,7 @@ version = "0.0.0"
 dependencies = [
  "kiln-core",
  "kiln-pki",
+ "kiln-supervisor",
  "kiln-sys",
  "rustls",
  "rustls-pki-types",

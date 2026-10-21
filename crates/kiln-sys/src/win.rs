@@ -29,6 +29,11 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
 };
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
@@ -405,6 +410,61 @@ fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u
 }
 
 // ---------------------------------------------------------------------------------------------
+// Job objects
+// ---------------------------------------------------------------------------------------------
+
+/// A job object that ends every process in it when the last handle to it closes, i.e. when
+/// its owner exits for any reason ([ADR 0014] §3).
+///
+/// [ADR 0014]: ../../../docs/adr/0014-php-cgi-supervisor.md
+#[derive(Debug)]
+pub struct KillOnCloseJob {
+    handle: OwnedHandle,
+}
+
+impl KillOnCloseJob {
+    pub fn new() -> io::Result<Self> {
+        // SAFETY: null attributes and name create an unnamed job with default security.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Self {
+            handle: owned(handle),
+        };
+        // SAFETY: a plain C struct for which all-zero means "no limits".
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: valid job handle; `info` is the struct this information class expects, and
+        // its size is passed with it.
+        let ok = unsafe {
+            SetInformationJobObject(
+                raw(&job.handle),
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast::<c_void>(),
+                u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                    .unwrap_or(u32::MAX),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    /// Puts `child` in the job, so it ends when the job closes.
+    pub fn assign(&self, child: &std::process::Child) -> io::Result<()> {
+        // SAFETY: both handles are valid: the job's is owned by `self`, and the child's is
+        // owned by `child` for the duration of this call.
+        let ok = unsafe { AssignProcessToJobObject(raw(&self.handle), child.as_raw_handle()) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Unix domain sockets (AF_UNIX, Windows 10 1803+)
 // ---------------------------------------------------------------------------------------------
 
@@ -699,6 +759,27 @@ mod tests {
         let long = PathBuf::from(format!("C:\\{}", "x".repeat(MAX_UNIX_SOCKET_PATH)));
         let err = connect_unix(&long).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+    }
+
+    #[test]
+    fn closing_the_job_ends_its_processes() {
+        let ping = system_directory().unwrap().join("PING.EXE");
+        let mut child = std::process::Command::new(&ping)
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let job = KillOnCloseJob::new().unwrap();
+        job.assign(&child).unwrap();
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "running while the job is open"
+        );
+        drop(job);
+        let process = Process::open(child.id()).unwrap();
+        let exited = process.is_none_or(|p| p.wait(Duration::from_secs(5)).unwrap().is_some());
+        assert!(exited, "closing the job ended the process");
+        let _ = child.wait();
     }
 
     #[test]

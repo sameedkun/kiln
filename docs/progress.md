@@ -1,26 +1,26 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (7 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (8 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0013 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0014 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
 | Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
 | Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
-| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing` / `rename_replace`; Windows pipes, SIDs, system directory, UAC launch, process handles, `AF_UNIX` connect |
+| OS wrappers (`kiln-sys`) | **growing**: `replace_file` / `write_replacing` / `rename_replace`; Windows pipes, SIDs, system directory, UAC launch, process handles, `AF_UNIX` connect, kill-on-close jobs; shared background-process helpers |
 | Hosts-file editor (`kiln-platform::hosts`) | **done**: byte-safe, property-tested |
 | Web server choice | **done**: Caddy ([spike 01](spikes/results/01-web-server.md)) |
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
 | Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/reload/status`, `hosts sync`. Site changes **reload live** over a per-user admin socket (P1-07). Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
-| Serving a PHP site end to end | **static sites work**; PHP runtimes installable; php-cgi behind Caddy next (P1-09) |
+| Serving a PHP site end to end | **works** (Windows): linked sites run PHP through supervised php-cgi workers behind Caddy; framework drivers next (P1-10) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -61,8 +61,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
 | P1-08 | PHP runtime provider | **done** 2026-10-21 (Windows) | [ADR 0013](adr/0013-downloads-and-php-runtimes.md); see below. Shared verified downloader; `kiln web install` downloads Caddy |
-| P1-09 | Process supervisor | **next** | php-cgi pools behind Caddy; [I-14](issues.md#i-14) |
-| P1-10 | Sites + drivers | later | |
+| P1-09 | Process supervisor | **done** 2026-10-22 (Windows) | [ADR 0014](adr/0014-php-cgi-supervisor.md); see below. php-cgi pools behind Caddy, staggered recycling |
+| P1-10 | Sites + drivers | **next** | park; Laravel `public/` and other framework drivers |
 | P1-11 | Per-site PHP + shims | later | |
 | P1-12 | `kiln doctor` | later | |
 | P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | later | |
@@ -368,6 +368,66 @@ Design: [ADR 0013](adr/0013-downloads-and-php-runtimes.md).
   - `kiln web install` downloaded Caddy 2.11.7 from GitHub through its CDN redirect and
     accepted it on the pinned SHA-512.
 
+<a id="p1-09"></a>
+### P1-09 delivered (2026-10-22)
+
+Design: [ADR 0014](adr/0014-php-cgi-supervisor.md). Linked sites now run PHP.
+
+- **New crate and binary `kiln-supervisor`** (next to `kiln.exe`, so rebuilding `kiln` isn't
+  blocked by a running server):
+  - `pools.json` is the desired state, re-read when it changes.
+  - Worker *i* of *N* recycles after `500 + i·500/N` requests (staggered, I-14).
+  - Exited workers restart on the same port.
+  - Only a non-zero exit is a failure ([I-51](issues.md#i-51)), and a quick failure backs off
+    0.25 s → 5 s.
+  - Every worker sits in a **kill-on-close job**, so workers can't outlive the supervisor and
+    nothing is ever killed by image name (Herd's php-cgi is safe).
+  - Removing `pools.json` stops it gracefully.
+- **`kiln-sys`:** `win::KillOnCloseJob`, and `background` (PID files that verify the
+  executable, background spawn, verified terminate), now shared by Caddy and the supervisor.
+- **`kiln-web`:** with a pool, every site gets Caddy's `php_fastcgi` route as typed JSON
+  (checked against `caddy adapt`):
+  - directory redirect, `index.php` front controller, `*.php` → FastCGI, static files direct;
+  - `least_conn`, retries bounded by time (2 s / 50 ms), no passive health checks (I-14, I-15).
+  - Without PHP, sites stay static.
+- **CLI:**
+  - `kiln web start` starts the workers first, then Caddy. `stop` stops Caddy, then the
+    supervisor. `status` shows the PHP pool.
+  - `kiln php default <version>` and `kiln php workers <n>` switch a running server live
+    (both pools side by side, Caddy reload, 5 s drain, retire old).
+  - `kiln php remove` refuses the version that's serving sites.
+- **Tests:** 19 new, 167 total. The real end-to-end test (`KILN_TEST_CADDY` +
+  `KILN_TEST_PHP`) uses a real supervisor, real php-cgi 8.4.27 and real Caddy:
+  - PHP, front controller, directory redirect, `.php` files and static files;
+  - **400 requests while workers recycle every 10–16 requests: 0 failures, 25–34 different
+    php-cgi processes**, in all 12 runs;
+  - a live pool switch under load costs at most one request at the Caddy reload
+    ([I-50](issues.md#i-50));
+  - stopping the supervisor leaves no worker running.
+- **Found and fixed on the way:**
+  - healthy workers held back as "crashes" ([I-51](issues.md#i-51));
+  - perl edits using `|` delimiters mangled two files. Caught by the compiler, rewritten, and
+    such edits are no longer used.
+- **Not checkable from the agent session:** `kiln web start` (I-45). Script below.
+
+**Check to run from a normal terminal** (the demo site
+`D:\Code\Rea\laravel-herd\demo-sites\phpdemo` is ready):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe php install 8.4      # ~34 MB from windows.php.net, SHA-256 verified
+.\target\debug\kiln.exe link phpdemo --path D:\Code\Rea\laravel-herd\demo-sites\phpdemo
+.\target\debug\kiln.exe hosts sync           # UAC prompt: Yes; note the operation number
+.\target\debug\kiln.exe web start --http-port 8080 --https-port 8443
+# Browser: http://phpdemo.test:8080/ and http://phpdemo.test:8080/any/path
+#          (PHP version, the path, and the php-cgi PID; reload: the PID changes as workers take turns)
+.\target\debug\kiln.exe web status           # Caddy + "PHP 8.4.27: 4 php-cgi workers on …"
+Get-Process php-cgi | Select-Object Id, Path # 4 workers, all under %LOCALAPPDATA%\Kiln\php
+.\target\debug\kiln.exe web stop             # stops Caddy, then the supervisor and all 4 workers
+Get-Process php-cgi -ErrorAction SilentlyContinue | Where-Object Path -like "*\Kiln\php\*"   # nothing
+.\target\debug\kiln.exe undo <n>             # the hosts operation number
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -380,6 +440,8 @@ Design: [ADR 0013](adr/0013-downloads-and-php-runtimes.md).
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
 | Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21, repeated from a normal terminal with the browser check |
 | Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
+| P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-09)) |
+| Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
 | Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
@@ -412,6 +474,7 @@ Design: [ADR 0013](adr/0013-downloads-and-php-runtimes.md).
 | 2026-10-21 | **P1-07 done:** ADR 0012. A spike showed Caddy's admin endpoint works on a Unix socket on Windows. The admin endpoint now listens only on a per-user socket (I-20 resolved); `kiln-sys` gained `AF_UNIX` connect, and `kiln-web` an admin client with retry (I-46). Site changes reload live, and stop is graceful. 9 new tests, 128 total. Measured: a reload drops about 1 new connection per 3–7 reloads under saturating load, versus about 540 ms of refused connections per restart (I-47). The real-terminal check is left to the user (I-45: `AF_UNIX` is broken in the app container). |
 | 2026-10-21 | **P1-07 live-reload check passed** (run by the user from a normal PowerShell): `kiln unsecure shop` and `kiln secure shop` each reloaded the running server, the PID was 21656 before and after, `admin.sock` existed, `netstat` showed nothing on :2019, `kiln web stop` stopped it, and hosts (#3) and trust (#4) were undone. |
 | 2026-10-21 | **P1-08 done (Windows):** ADR 0013. New `kiln-fetch` (verified HTTPS downloads: digest first, OS trust store, cache) and `kiln-php` (windows.php.net index, latest-patch-only, safe extraction, php.ini defaults, start-up check); `php_versions` table; `kiln php available/install/list/remove`; `kiln web install` downloads Caddy. 20 new tests, 148 total. Real install of PHP 8.4.27 and download of Caddy 2.11.7 verified; fixed I-48 (body timeout) and I-49 (folder rename) on the way. |
+| 2026-10-22 | **P1-09 done (Windows):** ADR 0014. New `kiln-supervisor` (separate binary; `pools.json` desired state; staggered recycle limits; respawn on the same port; crash = non-zero exit; kill-on-close job), `kiln-sys::background` shared helpers, PHP routes in the Caddy config (`php_fastcgi` expansion, `least_conn`, time-bounded retries, no passive checks). `kiln web start/stop/status` manage the pool; `kiln php default/workers` switch live. 19 new tests, 167 total; real end-to-end: 400 requests across about 30 recycling workers, 0 failures. Found I-50 (Caddy reload vs recycling, one request) and fixed I-51. |
 
 ## How to update this file
 

@@ -11,6 +11,7 @@ use kiln_platform::hosts;
 
 mod apply;
 mod php;
+mod pool;
 mod web;
 
 #[derive(Debug, Parser)]
@@ -97,6 +98,10 @@ enum PhpAction {
     List,
     /// Delete an installed PHP version.
     Remove { version: String },
+    /// Choose the PHP version that serves sites (applied live if the server runs).
+    Default { version: String },
+    /// Set how many php-cgi workers serve sites (1–32, default 4; applied live).
+    Workers { count: usize },
 }
 
 #[derive(Debug, Subcommand)]
@@ -307,6 +312,8 @@ fn main() -> ExitCode {
             PhpAction::Install { version } => php::install(&version),
             PhpAction::List => php::list(),
             PhpAction::Remove { version } => php::remove(&version),
+            PhpAction::Default { version } => php::set_default(&version),
+            PhpAction::Workers { count } => php::set_workers(count),
         },
         Command::Web { action } => match action {
             WebAction::Install { archive } => web::install(archive),

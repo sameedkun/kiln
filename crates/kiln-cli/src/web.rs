@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use kiln_core::{HostName, Tld};
 use kiln_state::{SiteRecord, StateStore};
+use kiln_supervisor::Pools;
 use kiln_web::{CaFiles, SiteSpec, Status, WebConfig, WebServer};
 
 use crate::apply;
@@ -126,6 +127,7 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         storage_dir: run_dir.join("storage"),
         log_file: run.log_file(),
         admin_socket: run.admin_socket(),
+        php_upstreams: crate::pool::running_upstreams()?,
     })
 }
 
@@ -304,6 +306,7 @@ pub fn sites() -> Result<(), String> {
         storage_dir: PathBuf::new(),
         log_file: PathBuf::new(),
         admin_socket: PathBuf::new(),
+        php_upstreams: Vec::new(),
     });
     let in_hosts = hosts_names();
     for record in records {
@@ -385,11 +388,33 @@ pub fn start(http_port: Option<u16>, https_port: Option<u16>) -> Result<(), Stri
             .set_setting(HTTPS_PORT_KEY, &port.to_string())
             .map_err(|e| e.to_string())?;
     }
-    let config = web_config(&store)?;
     let server = server()?;
-    let pid = server.start(&config).map_err(|e| e.to_string())?;
+    if let Status::Running { pid } = server.status().map_err(|e| e.to_string())? {
+        return Err(format!("Kiln's web server is already running (PID {pid})"));
+    }
+    // PHP workers first, so Caddy never points at ports nobody listens on.
+    let supervisor = crate::pool::supervisor()?;
+    let pools = crate::pool::plan(&store)?;
+    if let Some(pools) = &pools {
+        supervisor.start(pools).map_err(|e| e.to_string())?;
+    }
+    let config = match web_config(&store) {
+        Ok(config) => config,
+        Err(e) => {
+            let _ = supervisor.stop();
+            return Err(e);
+        }
+    };
+    let pid = match server.start(&config) {
+        Ok(pid) => pid,
+        Err(e) => {
+            let _ = supervisor.stop();
+            return Err(e.to_string());
+        }
+    };
     println!("Web server started (PID {pid}).");
     print_listeners(&config);
+    print_php(pools.as_ref());
     for site in &config.sites {
         println!("  {}", config.site_url(site));
     }
@@ -397,6 +422,26 @@ pub fn start(http_port: Option<u16>, https_port: Option<u16>) -> Result<(), Stri
         println!("No sites linked yet. Run `kiln link` in a project folder.");
     }
     Ok(())
+}
+
+fn print_php(pools: Option<&Pools>) {
+    match pools.and_then(|p| p.pools.first()) {
+        Some(pool) => {
+            let ports: Vec<String> = pool.workers.iter().map(|w| w.port.to_string()).collect();
+            println!(
+                "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
+                pool.id,
+                pool.workers.len(),
+                ports.join(", ")
+            );
+        }
+        None if cfg!(windows) => println!(
+            "No PHP installed, so sites are served as static files. Add PHP with `kiln php install 8.4`."
+        ),
+        None => {
+            println!("PHP for sites comes to this platform with P1-04; sites are static for now.");
+        }
+    }
 }
 
 fn print_listeners(config: &WebConfig) {
@@ -412,11 +457,17 @@ pub fn stop() -> Result<(), String> {
         Some(pid) => println!("Web server stopped (PID {pid})."),
         None => println!("The web server wasn't running."),
     }
+    if let Some(pid) = crate::pool::supervisor()?
+        .stop()
+        .map_err(|e| format!("cannot stop the PHP supervisor: {e}"))?
+    {
+        println!("PHP workers stopped (supervisor PID {pid}).");
+    }
     Ok(())
 }
 
 pub fn restart() -> Result<(), String> {
-    server()?.stop().map_err(|e| e.to_string())?;
+    stop()?;
     start(None, None)
 }
 
@@ -453,6 +504,24 @@ pub fn status() -> Result<(), String> {
         ),
         Status::Stopped => println!("Not running. Start it with `kiln web start`."),
     }
+    let supervisor = crate::pool::supervisor()?;
+    match supervisor.status().map_err(|e| e.to_string())? {
+        kiln_sys::background::ProcStatus::Running { pid } => {
+            let pools = supervisor.pools().map_err(|e| e.to_string())?;
+            print_php(pools.as_ref());
+            println!(
+                "PHP supervisor PID {pid}; log: {}",
+                supervisor.log_path().display()
+            );
+        }
+        _ => match crate::pool::chosen_php(&store)? {
+            Some(php) => println!(
+                "PHP {} will serve sites when the server starts.",
+                php.version
+            ),
+            None => print_php(None),
+        },
+    }
     println!("Config: {}", server.config_path().display());
     Ok(())
 }
@@ -476,4 +545,23 @@ pub fn hosts_sync(yes: bool) -> Result<(), String> {
     let tld = Tld::default();
     let (tld, entries) = apply::site_entries(&names, tld.as_str())?;
     apply::hosts_set(tld, entries, yes)
+}
+
+/// Reloads the running server with `php_upstreams` instead of the running pool's, for a
+/// pool switch ([ADR 0014] §11).
+///
+/// [ADR 0014]: ../../../docs/adr/0014-php-cgi-supervisor.md
+pub fn reload_with_php(php_upstreams: &[std::net::SocketAddr]) -> Result<(), String> {
+    let store = open_store()?;
+    let mut config = web_config(&store)?;
+    config.php_upstreams = php_upstreams.to_vec();
+    server()?.reload(&config).map_err(|e| e.to_string())
+}
+
+/// Whether Caddy is running.
+pub fn is_running() -> Result<bool, String> {
+    Ok(matches!(
+        server()?.status().map_err(|e| e.to_string())?,
+        Status::Running { .. }
+    ))
 }

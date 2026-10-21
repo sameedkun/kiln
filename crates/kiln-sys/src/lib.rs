@@ -2,6 +2,7 @@
 //! `unsafe` ([ADR 0008](../../../docs/adr/0008-unsafe-confined-to-kiln-sys.md)); callers get
 //! plain Rust types and `std::io::Result`.
 
+pub mod background;
 mod replace;
 #[cfg(windows)]
 #[allow(unsafe_code)]

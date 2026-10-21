@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use kiln_core::HostName;
 use serde::Serialize;
@@ -64,6 +65,8 @@ pub struct WebConfig {
     pub log_file: PathBuf,
     /// The admin endpoint's Unix socket (ADR 0012). Protected by its folder's permissions.
     pub admin_socket: PathBuf,
+    /// php-cgi workers (ADR 0014). Empty: sites are served as static files only.
+    pub php_upstreams: Vec<SocketAddr>,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -167,6 +170,15 @@ impl WebConfig {
             .collect()
     }
 
+    /// PHP through the worker pool when there is one, static files otherwise.
+    fn site_handler(&self, root: &Path) -> Result<Handler, ConfigError> {
+        if self.php_upstreams.is_empty() {
+            Handler::files(root)
+        } else {
+            Handler::php(root, &self.php_upstreams)
+        }
+    }
+
     fn build(&self) -> Result<Caddy, ConfigError> {
         self.check()?;
 
@@ -177,9 +189,9 @@ impl WebConfig {
             if site.secure {
                 let target = origin("https", host, self.https_port, 443) + "{http.request.uri}";
                 plain_routes.push(Route::for_host(host, Handler::redirect(target)));
-                tls_routes.push(Route::for_host(host, Handler::files(&site.root)?));
+                tls_routes.push(Route::for_host(host, self.site_handler(&site.root)?));
             } else {
-                plain_routes.push(Route::for_host(host, Handler::files(&site.root)?));
+                plain_routes.push(Route::for_host(host, self.site_handler(&site.root)?));
             }
         }
         plain_routes.push(Route::not_linked());
@@ -370,10 +382,20 @@ impl Route {
     fn for_host(host: &str, handler: Handler) -> Self {
         Self {
             matchers: vec![Matcher {
-                host: vec![host.to_owned()],
+                host: Some(vec![host.to_owned()]),
+                ..Matcher::default()
             }],
             handle: vec![handler],
             terminal: true,
+        }
+    }
+
+    /// A step inside a subroute: optional matcher, one handler, not terminal.
+    fn step(matcher: Option<Matcher>, handler: Handler) -> Self {
+        Self {
+            matchers: matcher.into_iter().collect(),
+            handle: vec![handler],
+            terminal: false,
         }
     }
 
@@ -393,16 +415,34 @@ impl Route {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct Matcher {
-    host: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Vec<&'static str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<FileMatcher>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not: Option<Vec<Matcher>>,
+}
+
+#[derive(Debug, Serialize)]
+struct FileMatcher {
+    try_files: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    split_path: Option<Vec<&'static str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    try_policy: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "handler", rename_all = "snake_case")]
 enum Handler {
     FileServer {
-        root: String,
+        /// Absent inside a PHP subroute, which sets `vars.root` instead.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        root: Option<String>,
         index_names: Vec<&'static str>,
     },
     StaticResponse {
@@ -412,13 +452,151 @@ enum Handler {
         #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
     },
+    Subroute {
+        routes: Vec<Route>,
+    },
+    Vars {
+        root: String,
+    },
+    Rewrite {
+        uri: &'static str,
+    },
+    ReverseProxy {
+        load_balancing: LoadBalancing,
+        transport: FastCgiTransport,
+        upstreams: Vec<Upstream>,
+    },
 }
+
+/// [ADR 0014] §7: no passive health checks, retries bounded by time (I-14, I-15).
+#[derive(Debug, Serialize)]
+struct LoadBalancing {
+    selection_policy: SelectionPolicy,
+    /// Nanoseconds.
+    try_duration: u64,
+    /// Nanoseconds.
+    try_interval: u64,
+    retry_match: Vec<MethodMatcher>,
+}
+
+#[derive(Debug, Serialize)]
+struct SelectionPolicy {
+    policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct MethodMatcher {
+    method: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct FastCgiTransport {
+    protocol: &'static str,
+    split_path: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct Upstream {
+    dial: String,
+}
+
+/// How long Caddy keeps retrying other workers while one is recycling.
+pub const PHP_TRY_DURATION: Duration = Duration::from_secs(2);
+pub const PHP_TRY_INTERVAL: Duration = Duration::from_millis(50);
 
 impl Handler {
     fn files(root: &Path) -> Result<Self, ConfigError> {
         Ok(Self::FileServer {
-            root: utf8(root)?,
+            root: Some(utf8(root)?),
             index_names: vec!["index.html", "index.htm"],
+        })
+    }
+
+    /// What Caddy's `php_fastcgi` shorthand expands to (checked against `caddy adapt`):
+    /// directory redirect, front-controller rewrite, `*.php` to the workers, static files.
+    fn php(root: &Path, upstreams: &[SocketAddr]) -> Result<Self, ConfigError> {
+        let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+        Ok(Self::Subroute {
+            routes: vec![
+                Route::step(None, Self::Vars { root: utf8(root)? }),
+                Route::step(
+                    Some(Matcher {
+                        file: Some(FileMatcher {
+                            try_files: vec!["{http.request.uri.path}/index.php"],
+                            split_path: None,
+                            try_policy: None,
+                        }),
+                        not: Some(vec![Matcher {
+                            path: Some(vec!["*/"]),
+                            ..Matcher::default()
+                        }]),
+                        ..Matcher::default()
+                    }),
+                    Self::StaticResponse {
+                        status_code: 308,
+                        headers: BTreeMap::from([(
+                            "Location",
+                            vec![
+                                "{http.request.orig_uri.path}/{http.request.orig_uri.prefixed_query}"
+                                    .to_owned(),
+                            ],
+                        )]),
+                        body: None,
+                    },
+                ),
+                Route::step(
+                    Some(Matcher {
+                        file: Some(FileMatcher {
+                            try_files: vec![
+                                "{http.request.uri.path}",
+                                "{http.request.uri.path}/index.php",
+                                "index.php",
+                            ],
+                            split_path: Some(vec![".php"]),
+                            try_policy: Some("first_exist_fallback"),
+                        }),
+                        ..Matcher::default()
+                    }),
+                    Self::Rewrite {
+                        uri: "{http.matchers.file.relative}",
+                    },
+                ),
+                Route::step(
+                    Some(Matcher {
+                        path: Some(vec!["*.php"]),
+                        ..Matcher::default()
+                    }),
+                    Self::ReverseProxy {
+                        load_balancing: LoadBalancing {
+                            selection_policy: SelectionPolicy {
+                                policy: "least_conn",
+                            },
+                            try_duration: nanos(PHP_TRY_DURATION),
+                            try_interval: nanos(PHP_TRY_INTERVAL),
+                            retry_match: vec![MethodMatcher {
+                                method: vec!["GET", "HEAD"],
+                            }],
+                        },
+                        transport: FastCgiTransport {
+                            protocol: "fastcgi",
+                            split_path: vec![".php"],
+                        },
+                        upstreams: upstreams
+                            .iter()
+                            .map(|addr| Upstream {
+                                dial: addr.to_string(),
+                            })
+                            .collect(),
+                    },
+                ),
+                Route::step(
+                    None,
+                    Self::FileServer {
+                        root: None,
+                        index_names: vec!["index.html", "index.htm"],
+                    },
+                ),
+            ],
         })
     }
 
@@ -553,6 +731,7 @@ mod tests {
             storage_dir: "/kiln/caddy/storage".into(),
             log_file: "/kiln/caddy/caddy.log".into(),
             admin_socket: "/kiln/caddy/admin.sock".into(),
+            php_upstreams: Vec::new(),
         }
     }
 
@@ -666,6 +845,108 @@ mod tests {
                 assert_eq!(last["handle"][0]["status_code"], 404, "{name}");
             }
         }
+    }
+
+    fn with_php(sites: Vec<SiteSpec>) -> WebConfig {
+        let mut cfg = config(sites);
+        cfg.php_upstreams = vec![
+            "127.0.0.1:9101".parse().unwrap(),
+            "127.0.0.1:9102".parse().unwrap(),
+        ];
+        cfg
+    }
+
+    /// The handler list inside a site's subroute, as (matcher, handler) pairs.
+    fn php_steps(site_route: &Value) -> &Vec<Value> {
+        let handler = &site_route["handle"][0];
+        assert_eq!(handler["handler"], "subroute");
+        handler["routes"].as_array().unwrap()
+    }
+
+    #[test]
+    fn with_a_pool_every_site_runs_php_like_caddys_php_fastcgi() {
+        let value = json(&with_php(vec![site("blog", false), site("shop", true)]));
+        let servers = servers(&value);
+        let blog = &servers[HTTP_SERVER]["routes"][0];
+        let steps = php_steps(blog);
+        let handlers: Vec<&str> = steps
+            .iter()
+            .map(|s| s["handle"][0]["handler"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            handlers,
+            [
+                "vars",
+                "static_response",
+                "rewrite",
+                "reverse_proxy",
+                "file_server"
+            ]
+        );
+        assert_eq!(steps[0]["handle"][0]["root"], "/srv/blog");
+        assert_eq!(steps[1]["handle"][0]["status_code"], 308, "dir → dir/");
+        assert_eq!(
+            steps[2]["match"][0]["file"]["try_files"],
+            serde_json::json!([
+                "{http.request.uri.path}",
+                "{http.request.uri.path}/index.php",
+                "index.php"
+            ]),
+            "front controller fallback"
+        );
+        assert_eq!(steps[3]["match"][0]["path"], serde_json::json!(["*.php"]));
+        let proxy = &steps[3]["handle"][0];
+        assert_eq!(proxy["transport"]["protocol"], "fastcgi");
+        assert_eq!(
+            proxy["transport"]["split_path"],
+            serde_json::json!([".php"])
+        );
+        assert_eq!(
+            proxy["upstreams"],
+            serde_json::json!([{"dial": "127.0.0.1:9101"}, {"dial": "127.0.0.1:9102"}])
+        );
+        assert!(
+            steps[4]["handle"][0].get("root").is_none(),
+            "uses vars.root"
+        );
+
+        // The secure site runs PHP on HTTPS; its HTTP route stays a redirect.
+        let shop_tls = &servers[HTTPS_SERVER]["routes"][0];
+        assert_eq!(php_steps(shop_tls)[0]["handle"][0]["root"], "/srv/shop");
+        assert_eq!(
+            servers[HTTP_SERVER]["routes"][1]["handle"][0]["status_code"],
+            308
+        );
+    }
+
+    #[test]
+    fn php_load_balancing_never_quarantines_and_retries_by_time() {
+        let value = json(&with_php(vec![site("blog", false)]));
+        let proxy = &php_steps(&servers(&value)[HTTP_SERVER]["routes"][0])[3]["handle"][0];
+        let lb = &proxy["load_balancing"];
+        assert_eq!(lb["selection_policy"]["policy"], "least_conn");
+        assert_eq!(
+            lb["try_duration"], 2_000_000_000u64,
+            "I-15: bounded by time"
+        );
+        assert_eq!(lb["try_interval"], 50_000_000u64);
+        assert!(lb.get("retries").is_none(), "I-15: never lb_retries");
+        assert!(
+            proxy.get("health_checks").is_none(),
+            "I-14: no passive quarantine"
+        );
+        assert_eq!(
+            lb["retry_match"][0]["method"],
+            serde_json::json!(["GET", "HEAD"])
+        );
+    }
+
+    #[test]
+    fn without_a_pool_sites_stay_static() {
+        let value = json(&config(vec![site("blog", false)]));
+        let route = &servers(&value)[HTTP_SERVER]["routes"][0];
+        assert_eq!(route["handle"][0]["handler"], "file_server");
+        assert!(!value.to_string().contains("reverse_proxy"));
     }
 
     #[test]

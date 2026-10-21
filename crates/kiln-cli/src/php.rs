@@ -148,6 +148,11 @@ pub fn list() -> Result<(), String> {
 
 pub fn remove(version: &str) -> Result<(), String> {
     let mut store = open_store()?;
+    if crate::pool::running()?.is_some_and(|p| p.pools.iter().any(|pool| pool.id == version)) {
+        return Err(format!(
+            "PHP {version} is serving sites right now; switch with `kiln php default <other>` or stop the server first"
+        ));
+    }
     let Some(record) = store
         .php_versions()
         .map_err(|e| e.to_string())?
@@ -178,5 +183,53 @@ pub fn remove(version: &str) -> Result<(), String> {
     }
     store.remove_php(version).map_err(|e| e.to_string())?;
     println!("Removed PHP {version} ({}).", record.dir.display());
+    Ok(())
+}
+
+/// `kiln php default <version>`: the PHP that serves sites.
+pub fn set_default(version: &str) -> Result<(), String> {
+    let mut store = open_store()?;
+    let installed = store.php_versions().map_err(|e| e.to_string())?;
+    if !installed
+        .iter()
+        .any(|r| r.version == version && kiln_php::is_installed(&r.dir))
+    {
+        return Err(format!(
+            "PHP {version} isn't installed; see `kiln php list`, or `kiln php install {version}`"
+        ));
+    }
+    store
+        .set_setting(crate::pool::DEFAULT_KEY, version)
+        .map_err(|e| e.to_string())?;
+    println!("PHP {version} now serves sites.");
+    apply_pool_change(&store)
+}
+
+/// `kiln php workers <n>`: php-cgi workers per pool.
+pub fn set_workers(count: usize) -> Result<(), String> {
+    let max = kiln_supervisor::pools::MAX_WORKERS;
+    if !(1..=max).contains(&count) {
+        return Err(format!("choose between 1 and {max} workers"));
+    }
+    let mut store = open_store()?;
+    store
+        .set_setting(crate::pool::WORKERS_KEY, &count.to_string())
+        .map_err(|e| e.to_string())?;
+    println!("{count} php-cgi worker(s) per pool.");
+    apply_pool_change(&store)
+}
+
+/// Applies a changed pool to a running server without downtime, or leaves it for the next
+/// start.
+fn apply_pool_change(store: &StateStore) -> Result<(), String> {
+    if crate::pool::running()?.is_none() || !crate::web::is_running()? {
+        println!("It takes effect when the web server starts (`kiln web start`).");
+        return Ok(());
+    }
+    let Some(new) = crate::pool::plan(store)? else {
+        return Ok(());
+    };
+    crate::pool::switch(&new, crate::web::reload_with_php)?;
+    println!("Switched the running server over without downtime.");
     Ok(())
 }

@@ -23,8 +23,8 @@ commits and PRs.
 | [I-11](#i-11) | coexistence | Herd kills every `nginx.exe` on the machine when it starts | 📌 |
 | [I-12](#i-12) | TLS | Windows Schannel clients hard-fail revocation checks against a local CA | 📌 |
 | [I-13](#i-13) | benchmark | Laravel file sessions under synthetic load distorted throughput about 10× | ✅ |
-| [I-14](#i-14) | runtime | Synchronized php-cgi recycling plus passive health checks caused a 10 s outage | 📌 |
-| [I-15](#i-15) | Caddy | `lb_retries` capped retries and left ~9% errors during recycling | 📌 |
+| [I-14](#i-14) | runtime | Synchronized php-cgi recycling plus passive health checks caused a 10 s outage | 📌 (staggered limits + no passive checks in P1-09) |
+| [I-15](#i-15) | Caddy | `lb_retries` capped retries and left ~9% errors during recycling | 📌 (time-bounded retries in P1-09) |
 | [I-16](#i-16) | Caddy | Caddy binds all interfaces by default | 📌 (enforced in `kiln-web`, P1-06) |
 | [I-17](#i-17) | web | Unknown hosts get a 200 (Caddy) or the first site (nginx) | 📌 (catch-all 404 in `kiln-web`, P1-06) |
 | [I-18](#i-18) | Caddy | Caddyfile syntax gotchas (inline blocks, `persist`, TLS on HTTP sites) | ✅ |
@@ -59,6 +59,8 @@ commits and PRs.
 | [I-47](#i-47) | Caddy | A live reload can close a brand-new connection without a response (about 1 per 3–7 reloads under saturating load, Windows) | 🔶 (accepted; recheck on Linux and newer Caddy) |
 | [I-48](#i-48) | downloads | A 60 s body timeout failed a real 34 MB PHP download on a slow line (ureq's body timeout is total, not idle) | ✅ (1 h total; no stall detection yet) |
 | [I-49](#i-49) | PHP | Renaming the extracted PHP folder into place failed with Access denied | ✅ (extract in place behind an incomplete-marker) |
+| [I-50](#i-50) | Caddy | A request in flight during a Caddy reload can't be retried if its worker is recycling at that moment (502) | 🔶 (rare at real limits; accepted) |
+| [I-51](#i-51) | supervisor | "Exited within 1 s" wrongly treated busy, healthy workers as crashed | ✅ (crash = non-zero exit) |
 
 ---
 
@@ -523,3 +525,39 @@ commits and PRs.
   `.kiln-install-incomplete` marker until the start-up check passes. `is_installed` requires
   `php.exe` **and** no marker, an interrupted install is redone, and a failure deletes the
   folder. The retry succeeded in 14 s from the verified cache.
+
+## P1-09: php-cgi supervisor
+
+<a id="i-50"></a>
+### I-50: A Caddy reload can turn one request into a 502 if a worker recycles at that moment 🔶
+- **Found:** the P1-09 end-to-end test switches pools live (old and new workers side by side,
+  Caddy reloaded to the new upstreams, the old pool retired after a grace period). It saw
+  exactly one 502 in most switches, although steady-state recycling had none.
+- **Cause, from Caddy's log:** `dialing backend: … actively refused` after about 50 ms, or
+  `wsarecv: … forcibly closed` after about 3 ms. In steady state Caddy retries both for up to
+  2 s. But on a config reload Caddy cancels the previous config's context. A request still
+  being handled by that config stops retrying after one `try_interval`, and fails if its
+  worker happened to be restarting at that moment.
+- **Not the cause:** retiring the old pool too early. A 5 s grace (`RETIRE_GRACE`) is in
+  place and the 502s remained. The grace stays, because it protects long requests on the old
+  workers.
+- **Impact:** needs a reload *and* a recycle at the same instant.
+  - The test recycles every 10–16 requests on purpose, so it hits this almost every time.
+  - With the real limit (500–875 per worker), it's a fraction of a millisecond per reload.
+  - Reloads only happen when the user changes sites or PHP settings.
+- **Decision:** accepted. The test allows at most two failed requests (502 or empty close,
+  I-47) for its one reload, and nothing else.
+- **Next:** report upstream (letting a draining config finish its retries), and recheck on
+  Linux with P1-04.
+
+<a id="i-51"></a>
+### I-51: Healthy workers recycling within a second were treated as crashed ✅
+- **Found:** the first real run of the P1-09 test. With a recycle limit of 10, workers served
+  their requests and exited cleanly within a second. The supervisor's rule ("exited within
+  1 s of starting = crash") backed them off for 0.25–1 s, and the log showed "exited right
+  after starting" for healthy workers.
+- **Fix:** the exit code decides. `php-cgi` exits **0** at `PHP_FCGI_MAX_REQUESTS`, and that
+  is restarted at once. Only a non-zero exit is a failure, and only a quick failure backs off.
+  New unit tests cover a busy worker recycling within 200 ms and a late failure.
+- **Result:** 400 requests across 25–34 different php-cgi processes (about 24–31 recycles)
+  with 0 failures, in every one of 12 runs.

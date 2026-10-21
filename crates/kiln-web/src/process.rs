@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use kiln_sys::background::{self, PidFile};
+
 use crate::admin::{AdminClient, AdminError};
 use crate::config::{ConfigError, WebConfig};
 
@@ -34,17 +36,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whether Kiln's web server is running.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Status {
-    Stopped,
-    Running {
-        pid: u32,
-    },
-    /// A PID file is left over, but that process has exited (or is now something else).
-    Stale {
-        pid: u32,
-    },
-}
+pub use kiln_sys::background::ProcStatus as Status;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {
@@ -128,38 +120,19 @@ impl WebServer {
         }
     }
 
-    fn pid_path(&self) -> PathBuf {
-        self.dir.join(PID_FILE)
-    }
-
     fn console_log_path(&self) -> PathBuf {
         self.dir.join(CONSOLE_LOG_FILE)
     }
 
-    /// The recorded PID, if a PID file exists and names this server's executable.
-    fn recorded(&self) -> Result<Option<u32>, WebError> {
-        let path = self.pid_path();
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_err(format!("cannot read {}", path.display()))(e)),
-        };
-        let mut lines = text.lines();
-        let pid = lines.next().and_then(|l| l.trim().parse().ok());
-        let exe = lines.next().map(PathBuf::from);
-        match (pid, exe) {
-            (Some(pid), Some(exe)) if exe == self.exe => Ok(Some(pid)),
-            // Unreadable, or written for another executable: treat as a stale PID 0.
-            _ => Ok(Some(0)),
-        }
+    fn pid_file(&self) -> PidFile {
+        PidFile::new(self.dir.join(PID_FILE), self.exe.clone())
     }
 
     pub fn status(&self) -> Result<Status, WebError> {
-        Ok(match self.recorded()? {
-            None => Status::Stopped,
-            Some(pid) if platform::is_ours(pid, &self.exe) => Status::Running { pid },
-            Some(pid) => Status::Stale { pid },
-        })
+        self.pid_file().status().map_err(io_err(format!(
+            "cannot read {}",
+            self.dir.join(PID_FILE).display()
+        )))
     }
 
     /// Writes the config for `config`, validates it with Caddy and starts Caddy in the
@@ -181,7 +154,7 @@ impl WebServer {
             }
         }
 
-        platform::create_private_dir(&self.dir)
+        background::create_private_dir(&self.dir)
             .map_err(io_err(format!("cannot create {}", self.dir.display())))?;
         let config_path = self.config_path();
         write_atomically(&config_path, json.as_bytes())?;
@@ -217,13 +190,12 @@ impl WebServer {
             .stdin(Stdio::null())
             .stdout(console)
             .stderr(console_err);
-        let mut child = platform::spawn_background(&mut command)
+        let mut child = background::spawn_background(&mut command)
             .map_err(io_err(format!("cannot start {}", self.exe.display())))?;
         let pid = child.id();
-        write_atomically(
-            &self.pid_path(),
-            format!("{pid}\n{}\n", self.exe.display()).as_bytes(),
-        )?;
+        self.pid_file()
+            .write(pid)
+            .map_err(io_err("cannot record the web server's PID"))?;
 
         let deadline = Instant::now() + READY_TIMEOUT;
         loop {
@@ -283,10 +255,11 @@ impl WebServer {
     pub fn stop(&self) -> Result<Option<u32>, WebError> {
         let stopped = match self.status()? {
             Status::Running { pid } => {
-                let exited = || !platform::is_ours(pid, &self.exe);
-                let graceful = self.admin().stop().is_ok() && wait_until(exited, STOP_TIMEOUT);
+                let exited = || !background::is_ours(pid, &self.exe);
+                let graceful =
+                    self.admin().stop().is_ok() && background::wait_until(exited, STOP_TIMEOUT);
                 if !graceful {
-                    platform::terminate(pid, &self.exe, STOP_TIMEOUT)
+                    background::terminate(pid, &self.exe, STOP_TIMEOUT)
                         .map_err(io_err(format!("cannot stop the web server (PID {pid})")))?;
                 }
                 Some(pid)
@@ -303,13 +276,9 @@ impl WebServer {
     /// on start, and a leftover must never hide the error that matters (I-45).
     fn forget(&self) -> Result<(), WebError> {
         let _ = fs::remove_file(self.admin_socket());
-        match fs::remove_file(self.pid_path()) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(io_err(format!(
-                "cannot remove {}",
-                self.pid_path().display()
-            ))(e)),
-            _ => Ok(()),
-        }
+        self.pid_file()
+            .remove()
+            .map_err(io_err("cannot remove the web server's PID file"))
     }
 
     /// Caddy's own log file; put this in [`WebConfig::log_file`].
@@ -354,17 +323,6 @@ impl WebServer {
     }
 }
 
-fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while !done() {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    true
-}
-
 fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")
@@ -375,180 +333,6 @@ fn write_atomically(path: &Path, data: &[u8]) -> Result<(), WebError> {
     fs::write(&temp, data).map_err(io_err(format!("cannot write {}", temp.display())))?;
     kiln_sys::rename_replace(&temp, path)
         .map_err(io_err(format!("cannot replace {}", path.display())))
-}
-
-#[cfg(windows)]
-mod platform {
-    use std::io;
-    use std::os::windows::process::CommandExt;
-    use std::path::Path;
-    use std::process::{Child, Command};
-    use std::time::Duration;
-
-    use kiln_sys::win::Process;
-
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-
-    /// The run directory inherits the per-user profile ACL (the user, SYSTEM, Administrators),
-    /// which is what protects the admin socket in it (ADR 0012).
-    pub fn create_private_dir(dir: &Path) -> io::Result<()> {
-        std::fs::create_dir_all(dir)
-    }
-
-    /// No console window, its own process group (so Ctrl+C in the terminal doesn't reach it),
-    /// and out of the caller's job object where that's allowed, so it outlives `kiln`.
-    pub fn spawn_background(command: &mut Command) -> io::Result<Child> {
-        let flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
-        command.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB);
-        match command.spawn() {
-            // A job that forbids breakaway refuses the flag; start inside it instead.
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                command.creation_flags(flags);
-                command.spawn()
-            }
-            other => other,
-        }
-    }
-
-    fn same_file(a: &Path, b: &Path) -> bool {
-        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-            (Ok(a), Ok(b)) => a
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&b.to_string_lossy()),
-            _ => a
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&b.to_string_lossy()),
-        }
-    }
-
-    /// Opens `pid` only if it is running and its executable is `exe`.
-    fn open_ours(pid: u32, exe: &Path) -> io::Result<Option<Process>> {
-        let process = match Process::open(pid) {
-            Ok(Some(process)) => process,
-            Ok(None) => return Ok(None),
-            // Another user's or a protected process: by definition not ours.
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        if !process.is_running()? || !same_file(&process.image_path()?, exe) {
-            return Ok(None);
-        }
-        Ok(Some(process))
-    }
-
-    pub fn is_ours(pid: u32, exe: &Path) -> bool {
-        matches!(open_ours(pid, exe), Ok(Some(_)))
-    }
-
-    pub fn terminate(pid: u32, exe: &Path, timeout: Duration) -> io::Result<()> {
-        let Some(process) = open_ours(pid, exe)? else {
-            return Ok(());
-        };
-        process.terminate(1)?;
-        match process.wait(timeout)? {
-            Some(_) => Ok(()),
-            None => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "the process didn't exit after being terminated",
-            )),
-        }
-    }
-}
-
-#[cfg(unix)]
-mod platform {
-    use std::io;
-    use std::path::Path;
-    use std::process::{Child, Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    /// Mode 0700: the admin socket inside is reachable by this user only (ADR 0012).
-    pub fn create_private_dir(dir: &Path) -> io::Result<()> {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-    }
-
-    pub fn spawn_background(command: &mut Command) -> io::Result<Child> {
-        use std::os::unix::process::CommandExt;
-        // Own process group, so Ctrl+C in the terminal doesn't reach it.
-        command.process_group(0);
-        command.spawn()
-    }
-
-    fn alive(pid: u32) -> bool {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    }
-
-    pub fn is_ours(pid: u32, exe: &Path) -> bool {
-        if pid == 0 || !alive(pid) {
-            return false;
-        }
-        // Linux names the executable exactly.
-        if let Ok(image) = std::fs::read_link(format!("/proc/{pid}/exe")) {
-            return std::fs::canonicalize(exe).is_ok_and(|exe| exe == image);
-        }
-        if cfg!(target_os = "linux") {
-            return false;
-        }
-        // Elsewhere (macOS, BSD) ask `ps` for the program it runs. Never assume a live PID is
-        // ours: that would let `stop` signal an unrelated process that reused the PID.
-        let Ok(output) = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .stderr(Stdio::null())
-            .output()
-        else {
-            return false;
-        };
-        let command = String::from_utf8_lossy(&output.stdout);
-        let command = Path::new(command.trim());
-        if command.is_absolute() {
-            return match (std::fs::canonicalize(command), std::fs::canonicalize(exe)) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => false,
-            };
-        }
-        // Some systems report only the (possibly truncated) name; require it to match.
-        exe.file_name()
-            .zip(command.file_name())
-            .is_some_and(|(want, got)| want == got)
-    }
-
-    fn signal(pid: u32, name: &str) -> io::Result<()> {
-        let status = Command::new("kill")
-            .args([&format!("-{name}"), &pid.to_string()])
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!("kill -{name} {pid} failed")))
-        }
-    }
-
-    pub fn terminate(pid: u32, exe: &Path, timeout: Duration) -> io::Result<()> {
-        if !is_ours(pid, exe) {
-            return Ok(());
-        }
-        signal(pid, "TERM")?;
-        let deadline = Instant::now() + timeout;
-        while alive(pid) {
-            if Instant::now() >= deadline {
-                signal(pid, "KILL")?;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -604,6 +388,7 @@ mod tests {
             storage_dir: dir.path().join("storage"),
             log_file: dir.path().join(LOG_FILE),
             admin_socket: dir.path().join(ADMIN_SOCKET_FILE),
+            php_upstreams: Vec::new(),
         };
         let err = server.start(&config).unwrap_err();
         assert!(matches!(err, WebError::MissingBinary(_)), "{err}");
