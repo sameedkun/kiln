@@ -56,7 +56,7 @@ Details in [progress.md](progress.md#phase-0).
 |---|---|---|---|
 | P1-01 | State store (SQLite) and journal migration from JSONL | — | **done** 2026-10-21 (`kiln-state`) |
 | P1-02 | `kiln-helper` (Windows): fixed operation list, named pipe with an ACL for the installing user, signed requests | P1-01 | **done** 2026-10-21 ([ADR 0009](adr/0009-windows-privileged-helper.md)) |
-| P1-03 | `HostsBlock` DNS provider (Windows): `ReplaceFileW`, read-only refusal, sharing-violation retry, create-if-missing | P1-02 | [I-25](issues.md#i-25)–[I-27](issues.md#i-27), ADR 0006 |
+| P1-03 | `HostsBlock` DNS provider (Windows): `ReplaceFileW`, read-only refusal, sharing-violation retry, create-if-missing | P1-02 | **done** 2026-10-21 (`kiln_platform::hosts_op`, `kiln_helper::session`) |
 | P1-04 | Linux DNS: detect systemd-resolved / NetworkManager, hosts fallback via polkit | P1-01 | — |
 | P1-05 | Local CA: `.test`-only (name-constrained), key protected by DPAPI/libsecret, user-store trust by default, Firefox/NSS | P1-02 | Spike 01 PKI results, [I-12](issues.md#i-12) |
 | P1-06 | Caddy integration: typed JSON config, loopback bind, `skip_install_trust`, catch-all 404, Kiln-named binary | P1-05 | [I-11](issues.md#i-11), [I-16](issues.md#i-16), [I-17](issues.md#i-17) |

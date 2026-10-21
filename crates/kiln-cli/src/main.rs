@@ -1,12 +1,14 @@
-//! `kiln` CLI. Read-only so far: previews (`plan`) and state inspection (`state info`).
+//! `kiln` CLI: previews (`plan`), state inspection (`state info`), hosts block changes
+//! (`hosts set|clear`) and `undo`.
 
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use kiln_core::{HostName, Tld};
-use kiln_platform::{DnsEntry, hosts};
+use kiln_core::Tld;
+use kiln_platform::hosts;
+
+mod apply;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -30,6 +32,44 @@ enum Command {
     State {
         #[command(subcommand)]
         action: StateAction,
+    },
+    /// Manage Kiln's block in the system hosts file (Windows; needs administrator approval).
+    Hosts {
+        #[command(subcommand)]
+        action: HostsAction,
+    },
+    /// Undo a recorded operation by its number (see the output of the command that made it).
+    Undo {
+        id: u64,
+        /// Undo even if the target was edited by hand since (overwrites those edits).
+        #[arg(long)]
+        force: bool,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum HostsAction {
+    /// Make Kiln's block contain exactly these site names (replacing its previous content).
+    Set {
+        /// Site names, with or without the TLD (e.g. `blog` or `blog.test`).
+        #[arg(required = true)]
+        names: Vec<String>,
+        #[arg(long, default_value = "test")]
+        tld: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Remove Kiln's block from the hosts file.
+    Clear {
+        #[arg(long, default_value = "test")]
+        tld: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
     },
 }
 
@@ -96,23 +136,7 @@ fn system_hosts_path() -> PathBuf {
 }
 
 fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), String> {
-    let tld = Tld::new(tld).map_err(|e| e.to_string())?;
-    let entries = names
-        .iter()
-        .map(|name| {
-            let fqdn = if name.ends_with(&format!(".{tld}")) {
-                name.clone()
-            } else {
-                format!("{name}.{tld}")
-            };
-            HostName::new(&fqdn, &tld).map(|name| DnsEntry {
-                name,
-                ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
+    let (_tld, entries) = apply::site_entries(names, tld)?;
     let path = file.unwrap_or_else(system_hosts_path);
     let current =
         std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -138,7 +162,7 @@ fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), 
         .map_err(|e| e.to_string())?
         .len();
     println!("Lines outside Kiln's block stay unchanged ({other} bytes of other content).");
-    println!("Nothing was written. Applying arrives with the privileged helper in Phase 1.");
+    println!("Nothing was written. Use `kiln hosts set` to apply.");
     Ok(())
 }
 
@@ -151,6 +175,16 @@ fn main() -> ExitCode {
         Command::State {
             action: StateAction::Info { dir },
         } => state_info(dir),
+        Command::Hosts {
+            action: HostsAction::Set { names, tld, yes },
+        } => apply::site_entries(&names, &tld)
+            .and_then(|(tld, entries)| apply::hosts_set(tld, entries, yes)),
+        Command::Hosts {
+            action: HostsAction::Clear { tld, yes },
+        } => Tld::new(&tld)
+            .map_err(|e| e.to_string())
+            .and_then(|tld| apply::hosts_set(tld, Vec::new(), yes)),
+        Command::Undo { id, force, yes } => apply::undo(id, force, yes),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

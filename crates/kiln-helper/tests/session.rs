@@ -68,13 +68,13 @@ fn a_full_session_writes_and_removes_the_block() {
     );
 
     let written = client
-        .hosts_set_block("test", &entries(&["blog.test", "shop.test"]))
+        .hosts_set_block("test", &entries(&["blog.test", "shop.test"]), false)
         .unwrap();
     assert!(!written.created && !written.unchanged);
     let text = fs::read_to_string(&hosts).unwrap();
     assert!(text.contains("127.0.0.1 blog.test\r\n") && text.contains("127.0.0.1 shop.test\r\n"));
 
-    client.hosts_set_block("test", &[]).unwrap();
+    client.hosts_set_block("test", &[], false).unwrap();
     assert_eq!(
         fs::read(&hosts).unwrap(),
         ORIGINAL,
@@ -116,6 +116,7 @@ fn invalid_requests_are_refused_and_change_nothing() {
             .call(&Request::HostsSetBlock {
                 tld: tld.into(),
                 entries: vec![e.clone()],
+                remove_file_if_empty: false,
             })
             .unwrap();
         assert!(

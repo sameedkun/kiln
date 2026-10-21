@@ -345,3 +345,8 @@ commits and PRs.
   binary) is covered automatically in `crates/kiln-helper/tests/session.rs`.
 - **Manual check:** `cargo test -p kiln-sys -- --ignored elevation_runs_and_reports_the_exit_code`
   (approve the prompt; expects exit code 7). Run it once per Windows release and before 1.0.
+- **Manual end-to-end (since P1-03):** `cargo build -p kiln-cli -p kiln-helper`, then
+  `target\debug\kiln.exe hosts set demo` → one UAC prompt → `ping demo.test` resolves to
+  127.0.0.1 → `target\debug\kiln.exe undo <n>` → one UAC prompt → the hosts file is
+  byte-identical to before (compare `certutil -hashfile` output). **Not yet run on the dev
+  machine**; it changes the real hosts file, so it waits for the user's go-ahead.

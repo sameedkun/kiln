@@ -29,11 +29,11 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 |---|---|---|
 | `kiln-core` | Domain types (TLD, host names) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
-| `kiln-platform` | Adapter traits, hosts block editor | forbidden |
+| `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts` trait) | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`), JSONL import | forbidden |
 | `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, …) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
-| `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, `kiln-helper` binary | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`) | forbidden |
+| `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set`, `hosts clear`, `undo`) | forbidden |
 
 ## Everyday commands
 

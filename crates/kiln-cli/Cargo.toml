@@ -15,6 +15,9 @@ path = "src/main.rs"
 kiln-core.workspace = true
 kiln-platform.workspace = true
 kiln-state.workspace = true
+kiln-ops.workspace = true
+kiln-helper.workspace = true
+kiln-sys.workspace = true
 clap.workspace = true
 
 [lints]

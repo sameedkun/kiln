@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (2 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-21 · **Current phase:** **Phase 1 in progress** (3 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -8,7 +8,8 @@
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
 | Architecture and key decisions | **done**: ADRs 0001–0009 accepted |
-| Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations; not yet called by `kiln` (P1-03) |
+| Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
+| Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; real-machine run pending ([I-42](issues.md#i-42)) |
 | Repository, CI, license and dependency policy | **done** (plus a CI guard keeping `unsafe` inside `kiln-sys`) |
 | Operation engine (`kiln-ops`) | **done**: engine, rollback, undo, recovery, shared journal contract tests |
 | Durable state (`kiln-state`) | **done**: SQLite store, journal with full history, one-time JSONL import |
@@ -51,8 +52,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 |---|---|---|---|
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41), [I-42](issues.md#i-42) |
-| P1-03 | `HostsBlock` provider (Windows) | **next** | an `Operation` that calls the helper: prepare reads hosts, apply = `HostsSetBlock`, revert restores |
-| P1-04 | Linux DNS providers | later | |
+| P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
+| P1-04 | Linux DNS providers | **next** (or P1-05) | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
 | P1-05 | Local CA + trust stores | later | |
 | P1-06 | Caddy integration | later | |
 | P1-07 | Caddy admin API lockdown | later | [I-20](issues.md#i-20) |
@@ -120,6 +121,37 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
   `--hosts` refused. The end-to-end suite passed 20 of 20 repeated runs.
 - **Not yet:** `kiln` doesn't call the helper. That's the hosts `Operation` in P1-03.
 
+### P1-03 delivered (2026-10-21)
+
+- **`kiln_platform::hosts_op::HostsBlockOp`** (platform-neutral, journal kind
+  `dns.hosts.block`) makes Kiln's block contain exactly a set of names. It sits behind a small
+  `PrivilegedHosts` trait, so Linux reuses it with a polkit writer.
+  - `prepare` records the previous Kiln block and whether the file existed.
+  - `apply` and `revert` **ask for elevation only when something has to change**. Re-applying,
+    verifying and crash recovery never prompt.
+  - `revert` restores the *previous block*, so other tools' later edits survive. It refuses a
+    hand-edited block unless `--force`, and deletes the file only if Kiln created it.
+  - `register_hosts_block` lets a later process rebuild the op from the journal.
+- **`kiln_helper::session::HelperSession`**: a lazily launched, shared helper session. The
+  first real write launches `kiln-helper` (one UAC prompt), and the rest of the batch reuses
+  it. A declined prompt becomes "nothing was changed".
+- **Helper protocol v2** ([ADR 0009 amendment](adr/0009-windows-privileged-helper.md)):
+  `remove_file_if_empty` deletes a file only if it would be left with zero bytes (undoing a
+  creation).
+- **CLI:** `kiln hosts set <names…>` / `kiln hosts clear` show a preview with before/after,
+  confirm (`--yes` to skip), apply through the engine with the SQLite journal, and print the
+  operation number. `kiln undo <n> [--force]` undoes it. Both roll back interrupted operations
+  first.
+- **Tests:** 12 new (82 total).
+  - 8 operation tests with a direct writer: byte-exact undo, no privileged call when nothing
+    changes (including recovery), drift protection, foreign edits survive, a created file is
+    deleted, the previous block is restored, params round-trip, preview.
+  - 1 helper test for deletion of an emptied created file only.
+  - 3 full-stack tests on a real pipe: SQLite journal → engine → op → session → helper →
+    file, with undo from a separate "process" and session.
+- **Not yet verified on the real machine:** the UAC-launched path changes the real hosts file;
+  the steps are in [I-42](issues.md#i-42).
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -147,6 +179,7 @@ Design: [ADR 0009](adr/0009-windows-privileged-helper.md). Summary of what exist
 | 2026-10-21 | **Phase 1 started.** I-38 decided (ADR 0008, `kiln-sys`). **P1-01 done:** `kiln-state` SQLite store, journal migration, shared journal contract tests, `kiln state info` (`f9c3f4b`). |
 | 2026-10-21 | CI failed only on Windows: the ACL test's PowerShell `Get-Acl` check (I-40). Fixed by switching detection to `icacls /save`. |
 | 2026-10-21 | **P1-02 done:** ADR 0009; Windows FFI in `kiln-sys::win`; new `kiln-helper` crate and binary (authenticated pipe protocol, fixed operations, hosts write policy); 28 new tests, 70 total. |
+| 2026-10-21 | **P1-03 done:** `HostsBlockOp` (platform-neutral) + `HelperSession` (lazy UAC); helper protocol v2; `kiln hosts set/clear`, `kiln undo`; 12 new tests, 82 total. Real-machine UAC run pending (I-42). |
 
 ## How to update this file
 

@@ -32,6 +32,7 @@ pub enum ClientError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostsWritten {
     pub created: bool,
+    pub deleted: bool,
     pub unchanged: bool,
     pub bytes_before: u64,
     pub bytes_after: u64,
@@ -78,10 +79,12 @@ impl HelperClient {
     }
 
     /// Makes Kiln's hosts block contain exactly `entries` under `tld` (empty removes it).
+    /// `remove_file_if_empty` deletes a file left with zero bytes (undoing a creation).
     pub fn hosts_set_block(
         &mut self,
         tld: &str,
         entries: &[DnsEntry],
+        remove_file_if_empty: bool,
     ) -> Result<HostsWritten, ClientError> {
         let entries = entries
             .iter()
@@ -93,14 +96,17 @@ impl HelperClient {
         match self.call(&Request::HostsSetBlock {
             tld: tld.to_owned(),
             entries,
+            remove_file_if_empty,
         })? {
             Response::HostsWritten {
                 created,
+                deleted,
                 unchanged,
                 bytes_before,
                 bytes_after,
             } => Ok(HostsWritten {
                 created,
+                deleted,
                 unchanged,
                 bytes_before,
                 bytes_after,

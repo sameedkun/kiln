@@ -54,7 +54,11 @@ fn handle(request: Request, summary: &mut Summary, config: &ServerConfig) -> Res
             protocol: PROTOCOL_VERSION,
             helper_pid: std::process::id(),
         },
-        Request::HostsSetBlock { tld, entries } => {
+        Request::HostsSetBlock {
+            tld,
+            entries,
+            remove_file_if_empty,
+        } => {
             let entries = match validate::hosts_entries(&tld, &entries) {
                 Ok(e) => e,
                 Err(message) => {
@@ -64,11 +68,12 @@ fn handle(request: Request, summary: &mut Summary, config: &ServerConfig) -> Res
                     };
                 }
             };
-            match hosts::set_block(&config.hosts_path, &entries) {
+            match hosts::set_block(&config.hosts_path, &entries, remove_file_if_empty) {
                 Ok(out) => {
                     summary.hosts_writes += u64::from(!out.unchanged);
                     Response::HostsWritten {
                         created: out.created,
+                        deleted: out.deleted,
                         unchanged: out.unchanged,
                         bytes_before: out.bytes_before,
                         bytes_after: out.bytes_after,

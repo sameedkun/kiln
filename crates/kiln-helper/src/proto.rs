@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 
 /// Protocol label mixed into every MAC.
-pub const PROTOCOL: &str = "kiln-helper/1";
+pub const PROTOCOL: &str = "kiln-helper/2";
 /// Version reported by `Ping`; client and helper must match exactly.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// v2 (P1-03): `HostsSetBlock.remove_file_if_empty`, `HostsWritten.deleted`.
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Largest accepted frame, in bytes.
 pub const MAX_FRAME: usize = 1 << 20;
 /// Largest accepted number of hosts entries in one request.
@@ -34,6 +35,10 @@ pub enum Request {
     HostsSetBlock {
         tld: String,
         entries: Vec<HostEntry>,
+        /// Delete the file if it would end up with zero bytes (undoing a creation). A file
+        /// with any other content is never deleted.
+        #[serde(default)]
+        remove_file_if_empty: bool,
     },
     Shutdown,
 }
@@ -55,6 +60,8 @@ pub enum Response {
     HostsWritten {
         /// The hosts file did not exist and was created (revert should delete it).
         created: bool,
+        /// The file was deleted (`remove_file_if_empty` and nothing else left).
+        deleted: bool,
         /// Nothing needed to change.
         unchanged: bool,
         bytes_before: u64,
@@ -347,6 +354,7 @@ pub(crate) mod tests {
                 name: "blog.test".into(),
                 ip: "127.0.0.1".parse().unwrap(),
             }],
+            remove_file_if_empty: true,
         };
         let mut server = server_over(request_frame(KEY, 1, &req));
         assert_eq!(server.next_request().unwrap(), (1, req));

@@ -16,6 +16,9 @@ const RETRY_DELAYS_MS: [u64; 5] = [50, 100, 200, 400, 800];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub created: bool,
+    /// The file was removed because it would have been empty and the caller asked for that
+    /// (undoing a `created`).
+    pub deleted: bool,
     pub unchanged: bool,
     pub bytes_before: u64,
     pub bytes_after: u64,
@@ -66,7 +69,15 @@ fn len(bytes: &[u8]) -> u64 {
 /// it). Preserves every other byte, keeps the file's ACLs (`ReplaceFileW`), refuses a
 /// read-only file, retries while another program holds it locked, and creates a missing
 /// file (reported as `created`).
-pub fn set_block(path: &Path, entries: &[DnsEntry]) -> Result<Outcome, Failure> {
+///
+/// With `remove_file_if_empty`, a file that would end up with **zero bytes** is deleted
+/// instead of left empty. That is how reverting a `created` restores "no hosts file"; a file
+/// with any other content is never deleted.
+pub fn set_block(
+    path: &Path,
+    entries: &[DnsEntry],
+    remove_file_if_empty: bool,
+) -> Result<Outcome, Failure> {
     let current = with_retry(|| match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -77,6 +88,7 @@ pub fn set_block(path: &Path, entries: &[DnsEntry]) -> Result<Outcome, Failure> 
         if entries.is_empty() {
             return Ok(Outcome {
                 created: false,
+                deleted: false,
                 unchanged: true,
                 bytes_before: 0,
                 bytes_after: 0,
@@ -94,6 +106,7 @@ pub fn set_block(path: &Path, entries: &[DnsEntry]) -> Result<Outcome, Failure> 
             .map_err(|e| failure(ErrorCode::Io, e.to_string()))?;
         return Ok(Outcome {
             created: true,
+            deleted: false,
             unchanged: false,
             bytes_before: 0,
             bytes_after: len(&updated),
@@ -108,9 +121,11 @@ pub fn set_block(path: &Path, entries: &[DnsEntry]) -> Result<Outcome, Failure> 
         };
         failure(code, e.to_string())
     })?;
-    if updated == current {
+    let delete = remove_file_if_empty && updated.is_empty();
+    if updated == current && !delete {
         return Ok(Outcome {
             created: false,
+            deleted: false,
             unchanged: true,
             bytes_before: len(&current),
             bytes_after: len(&current),
@@ -126,9 +141,14 @@ pub fn set_block(path: &Path, entries: &[DnsEntry]) -> Result<Outcome, Failure> 
             "the hosts file is marked read-only; another tool or an administrator may have locked it on purpose",
         ));
     }
-    with_retry(|| kiln_sys::write_replacing(path, &updated))?;
+    if delete {
+        with_retry(|| fs::remove_file(path))?;
+    } else {
+        with_retry(|| kiln_sys::write_replacing(path, &updated))?;
+    }
     Ok(Outcome {
         created: false,
+        deleted: delete,
         unchanged: false,
         bytes_before: len(&current),
         bytes_after: len(&updated),
@@ -158,7 +178,7 @@ mod tests {
         let path = dir.path().join("hosts");
         fs::write(&path, ORIGINAL).unwrap();
 
-        let out = set_block(&path, &entries(&["blog.test"])).unwrap();
+        let out = set_block(&path, &entries(&["blog.test"]), false).unwrap();
         assert!(!out.created && !out.unchanged);
         assert!(
             fs::read_to_string(&path)
@@ -167,12 +187,12 @@ mod tests {
         );
 
         assert!(
-            set_block(&path, &entries(&["blog.test"]))
+            set_block(&path, &entries(&["blog.test"]), false)
                 .unwrap()
                 .unchanged,
             "idempotent"
         );
-        set_block(&path, &[]).unwrap();
+        set_block(&path, &[], false).unwrap();
         assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
     }
 
@@ -181,12 +201,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hosts");
         assert!(
-            set_block(&path, &[]).unwrap().unchanged,
+            set_block(&path, &[], false).unwrap().unchanged,
             "nothing to remove, nothing created"
         );
         assert!(!path.exists());
-        assert!(set_block(&path, &entries(&["a.test"])).unwrap().created);
+        assert!(
+            set_block(&path, &entries(&["a.test"]), false)
+                .unwrap()
+                .created
+        );
         assert!(path.exists());
+    }
+
+    #[test]
+    fn undoing_a_creation_deletes_only_an_otherwise_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hosts");
+        assert!(
+            set_block(&path, &entries(&["a.test"]), false)
+                .unwrap()
+                .created
+        );
+        let out = set_block(&path, &[], true).unwrap();
+        assert!(out.deleted);
+        assert!(!path.exists(), "back to no hosts file");
+
+        // Never deleted when anything else is in the file, even if asked.
+        fs::write(&path, ORIGINAL).unwrap();
+        set_block(&path, &entries(&["a.test"]), false).unwrap();
+        assert!(!set_block(&path, &[], true).unwrap().deleted);
+        assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
     }
 
     #[test]
@@ -198,7 +242,7 @@ mod tests {
         perms.set_readonly(true);
         fs::set_permissions(&path, perms.clone()).unwrap();
 
-        let err = set_block(&path, &entries(&["a.test"])).unwrap_err();
+        let err = set_block(&path, &entries(&["a.test"]), false).unwrap_err();
         assert_eq!(err.code, ErrorCode::HostsReadOnly);
         assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
 
@@ -213,7 +257,9 @@ mod tests {
         let path = dir.path().join("hosts");
         fs::write(&path, format!("{}\n", hosts::END_MARKER)).unwrap();
         assert_eq!(
-            set_block(&path, &entries(&["a.test"])).unwrap_err().code,
+            set_block(&path, &entries(&["a.test"]), false)
+                .unwrap_err()
+                .code,
             ErrorCode::HostsMalformed
         );
     }
@@ -236,7 +282,11 @@ mod tests {
             sleep(Duration::from_millis(120));
             drop(lock);
         });
-        assert!(!set_block(&path, &entries(&["a.test"])).unwrap().unchanged);
+        assert!(
+            !set_block(&path, &entries(&["a.test"]), false)
+                .unwrap()
+                .unchanged
+        );
         release.join().unwrap();
 
         let _held = OpenOptions::new()
@@ -245,7 +295,9 @@ mod tests {
             .open(&path)
             .unwrap();
         assert_eq!(
-            set_block(&path, &entries(&["b.test"])).unwrap_err().code,
+            set_block(&path, &entries(&["b.test"]), false)
+                .unwrap_err()
+                .code,
             ErrorCode::HostsBusy
         );
     }

@@ -417,8 +417,11 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "kiln-core",
+ "kiln-helper",
+ "kiln-ops",
  "kiln-platform",
  "kiln-state",
+ "kiln-sys",
 ]
 
 [[package]]
@@ -437,7 +440,9 @@ dependencies = [
  "getrandom",
  "hmac",
  "kiln-core",
+ "kiln-ops",
  "kiln-platform",
+ "kiln-state",
  "kiln-sys",
  "serde",
  "serde_json",
@@ -464,6 +469,8 @@ dependencies = [
  "kiln-core",
  "kiln-ops",
  "proptest",
+ "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

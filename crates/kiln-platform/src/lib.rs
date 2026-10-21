@@ -5,6 +5,7 @@
 //! tests (apply → verify → revert → original state).
 
 pub mod hosts;
+pub mod hosts_op;
 
 use std::net::IpAddr;
 

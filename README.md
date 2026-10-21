@@ -48,6 +48,15 @@ Try the read-only preview (nothing is written):
 cargo run -p kiln-cli -- plan hosts blog shop
 ```
 
+On Windows, Kiln can already manage its hosts block for real. It shows a preview, asks for
+confirmation, then shows one administrator prompt, and every change can be undone:
+
+```sh
+cargo build -p kiln-cli -p kiln-helper
+target/debug/kiln hosts set blog shop      # blog.test, shop.test -> 127.0.0.1
+target/debug/kiln undo <number-it-printed> # back to the exact previous bytes
+```
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

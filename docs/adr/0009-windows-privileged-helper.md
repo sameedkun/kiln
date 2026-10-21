@@ -97,6 +97,16 @@ writing. We want neither.
     it on a real pipe in-process (unelevated, with a temporary hosts file), while the
     binary always uses the real system path.
 
+### Amendment 1 (2026-10-21, P1-03): protocol v2
+
+Undoing an operation that *created* the hosts file must return to "no hosts file".
+`HostsSetBlock` gains `remove_file_if_empty: bool` (default `false`). When it is set and the
+file would end up with **zero bytes** after Kiln's block is removed, the helper deletes the
+file instead of leaving it empty. A file with any other content is never deleted. The
+response reports `deleted`. This is a narrowing of `HostsSetBlock`, not a new capability:
+the helper still writes or deletes only the fixed hosts path. The protocol label and version
+are now `kiln-helper/2` / `2`; client and helper must match exactly.
+
 ## Consequences
 
 - One UAC prompt per user action that touches the system, and none for everything else.
