@@ -165,13 +165,11 @@ mod tests {
 
     #[test]
     fn the_tool_comes_from_the_shim_file_name() {
-        assert_eq!(Tool::from_exe(Path::new(r"C:\x\php.exe")), Some(Tool::Php));
-        assert_eq!(
-            Tool::from_exe(Path::new("/x/composer")),
-            Some(Tool::Composer)
-        );
-        assert_eq!(Tool::from_exe(Path::new(r"C:\x\PHP.EXE")), Some(Tool::Php));
-        assert_eq!(Tool::from_exe(Path::new(r"C:\x\kiln-shim.exe")), None);
+        let dir = Path::new("shims");
+        assert_eq!(Tool::from_exe(&dir.join("php.exe")), Some(Tool::Php));
+        assert_eq!(Tool::from_exe(&dir.join("composer")), Some(Tool::Composer));
+        assert_eq!(Tool::from_exe(&dir.join("PHP.EXE")), Some(Tool::Php));
+        assert_eq!(Tool::from_exe(&dir.join("kiln-shim.exe")), None);
     }
 
     #[test]
