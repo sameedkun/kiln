@@ -305,23 +305,33 @@ mod tests {
 
     #[test]
     fn holders_are_described_for_people() {
+        // Built with `join`, so these are real paths on every OS the tests run on.
+        let path = |parts: &[&str]| parts.iter().collect::<PathBuf>();
         let herd = Holder::new(
             812,
-            Some(PathBuf::from(r"C:\Program Files\Herd\bin\nginx\nginx.exe")),
+            Some(path(&[
+                "Program Files",
+                "Herd",
+                "bin",
+                "nginx",
+                "nginx.exe",
+            ])),
         );
         assert_eq!(herd.describe(), "Laravel Herd (nginx.exe)");
-        let apache = Holder::new(9, Some(PathBuf::from(r"C:\Apache24\bin\httpd.exe")));
+        let httpd = path(&["Apache24", "bin", "httpd.exe"]);
+        let apache = Holder::new(9, Some(httpd.clone()));
         assert_eq!(
             apache.describe(),
-            r"Apache httpd (C:\Apache24\bin\httpd.exe)"
+            format!("Apache httpd ({})", httpd.display())
         );
         assert!(Holder::new(4, None).describe().contains("IIS"));
         assert_eq!(
             Holder::new(77, None).describe(),
             "a program Kiln can't inspect"
         );
-        let other = Holder::new(5, Some(PathBuf::from(r"C:\apps\thing.exe")));
-        assert_eq!(other.describe(), r"C:\apps\thing.exe");
+        let thing = path(&["apps", "thing.exe"]);
+        let other = Holder::new(5, Some(thing.clone()));
+        assert_eq!(other.describe(), thing.display().to_string());
     }
 
     #[test]
