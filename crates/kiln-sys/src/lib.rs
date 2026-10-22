@@ -12,3 +12,6 @@ pub use replace::{rename_replace, replace_file, write_replacing};
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub mod wincrypt;
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+pub mod xattr;

@@ -61,6 +61,27 @@ fn with_retry<T>(mut attempt: impl FnMut() -> io::Result<T>) -> Result<T, Failur
     }
 }
 
+/// Replaces the file atomically. Where it is a mount point (containers, WSL), Linux refuses
+/// the rename (`EBUSY` / `EXDEV`), and it is written in place instead (ADR 0020 §8).
+fn write_hosts(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    match kiln_sys::write_replacing(path, bytes) {
+        Err(e) if cfg!(unix) && matches!(e.raw_os_error(), Some(16 | 18)) => {
+            let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+            file.write_all(bytes)?;
+            file.sync_all()
+        }
+        // Root gets `EPERM` only for an immutable file (`chattr +i`): locked on purpose.
+        Err(e) if cfg!(unix) && e.raw_os_error() == Some(1) => Err(io::Error::new(
+            e.kind(),
+            format!(
+                "{e}: the hosts file is probably immutable (`lsattr {0}` shows `i`), locked on purpose by an administrator or another tool; Kiln leaves it alone (unlock it with `sudo chattr -i {0}` only if you mean to)",
+                path.display()
+            ),
+        )),
+        other => other,
+    }
+}
+
 fn len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
@@ -78,6 +99,16 @@ pub fn set_block(
     entries: &[DnsEntry],
     remove_file_if_empty: bool,
 ) -> Result<Outcome, Failure> {
+    // Replacing a symlink would replace the link, not the file it points to (ADR 0020 §8).
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(failure(
+            ErrorCode::Io,
+            format!(
+                "{} is a symbolic link; Kiln only edits a regular hosts file, because writing it would replace the link",
+                path.display()
+            ),
+        ));
+    }
     let current = with_retry(|| match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -144,7 +175,7 @@ pub fn set_block(
     if delete {
         with_retry(|| fs::remove_file(path))?;
     } else {
-        with_retry(|| kiln_sys::write_replacing(path, &updated))?;
+        with_retry(|| write_hosts(path, &updated))?;
     }
     Ok(Outcome {
         created: false,
@@ -262,6 +293,25 @@ mod tests {
                 .code,
             ErrorCode::HostsMalformed
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_hosts_file_is_refused_and_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-hosts");
+        let link = dir.path().join("hosts");
+        fs::write(&real, ORIGINAL).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = set_block(&link, &entries(&["a.test"]), false).unwrap_err();
+        assert!(err.message.contains("symbolic link"), "{}", err.message);
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&real).unwrap(), ORIGINAL);
     }
 
     /// Another program holding the file without sharing makes the helper wait and retry.

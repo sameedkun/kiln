@@ -1,6 +1,8 @@
 //! `kiln-helper` binary: started elevated by `kiln`, serves one authenticated session.
 //!
-//! Usage (internal): `kiln-helper --pipe <name> --client-pid <pid> --key <64 hex chars>`
+//! Usage (internal):
+//! - Windows: `kiln-helper --pipe <name> --client-pid <pid> --key <64 hex chars>` (ADR 0009)
+//! - Linux: `pkexec kiln-helper --stdio`; the key is the first line on stdin (ADR 0020)
 //!
 //! Exit codes: 0 session completed, 2 session failed, 3 session deadline passed,
 //! 64 bad arguments.
@@ -8,7 +10,11 @@
 use std::process::ExitCode;
 
 const USAGE: &str =
-    "usage: kiln-helper --pipe <name> --client-pid <pid> --key <64 hex chars> (started by kiln)";
+    "usage: kiln-helper --pipe <name> --client-pid <pid> --key <64 hex chars> (Windows)
+       kiln-helper --stdio (Linux; started by kiln through pkexec)";
+
+/// A session must finish within this; a stuck client can't keep a privileged process alive.
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -54,10 +60,30 @@ fn parse(args: &[String]) -> Result<Args, String> {
     })
 }
 
+/// Runs `session` on a thread and waits at most [`DEADLINE`] for it. Exiting ends a blocked
+/// session thread with the process.
+fn with_deadline<E: std::fmt::Display + Send + 'static>(
+    session: impl FnOnce() -> Result<kiln_helper::server::Summary, E> + Send + 'static,
+) -> ExitCode {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(session());
+    });
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Ok(_)) => ExitCode::SUCCESS,
+        Ok(Err(e)) => {
+            eprintln!("kiln-helper: {e}");
+            ExitCode::from(2)
+        }
+        Err(_) => {
+            eprintln!("kiln-helper: session deadline passed");
+            ExitCode::from(3)
+        }
+    }
+}
+
 #[cfg(windows)]
 fn run(args: Args) -> ExitCode {
-    use std::time::Duration;
-
     // Fixed target from the OS, never from the (inherited) environment: ADR 0009 §10.
     let hosts_path = match kiln_sys::win::system_directory() {
         Ok(dir) => dir.join(r"drivers\etc\hosts"),
@@ -72,33 +98,39 @@ fn run(args: Args) -> ExitCode {
         key: args.key,
         hosts_path,
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(kiln_helper::server::serve(&config));
-    });
-    // The session must finish within the deadline; a stuck client cannot keep an elevated
-    // process alive. Exiting ends the blocked session thread with the process.
-    match rx.recv_timeout(Duration::from_secs(120)) {
-        Ok(Ok(_)) => ExitCode::SUCCESS,
-        Ok(Err(e)) => {
-            eprintln!("kiln-helper: {e}");
-            ExitCode::from(2)
-        }
-        Err(_) => {
-            eprintln!("kiln-helper: session deadline passed");
-            ExitCode::from(3)
-        }
-    }
+    with_deadline(move || kiln_helper::server::serve(&config))
 }
 
 #[cfg(not(windows))]
 fn run(_args: Args) -> ExitCode {
-    eprintln!("kiln-helper: this platform uses polkit instead (P1-04)");
-    ExitCode::from(2)
+    eprintln!("kiln-helper: on this platform kiln starts it with --stdio (through pkexec)");
+    ExitCode::from(64)
+}
+
+/// `--stdio` (ADR 0020 §4–5): the session runs on stdin/stdout, and the hosts file is always
+/// `/etc/hosts`, whatever the (cleared) environment says. Nothing else may print to stdout.
+#[cfg(unix)]
+fn run_stdio() -> ExitCode {
+    with_deadline(|| {
+        kiln_helper::server::serve_stdio(
+            std::io::stdin().lock(),
+            std::io::stdout(),
+            std::path::Path::new("/etc/hosts"),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn run_stdio() -> ExitCode {
+    eprintln!("kiln-helper: --stdio is for Linux; on Windows kiln starts it with --pipe");
+    ExitCode::from(64)
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--stdio"] {
+        return run_stdio();
+    }
     match parse(&args) {
         Ok(args) => run(args),
         Err(e) => {

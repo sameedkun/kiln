@@ -29,7 +29,6 @@ pub fn site_entries(names: &[String], tld: &str) -> Result<(Tld, Vec<DnsEntry>),
 }
 
 /// Asks `question [y/N]` on the terminal; anything but y/yes (including no input) is "no".
-#[cfg_attr(not(windows), allow(dead_code))] // only the Windows commands change the system so far
 pub fn confirm(question: &str) -> bool {
     print!("{question} [y/N] ");
     let _ = std::io::stdout().flush();
@@ -40,8 +39,11 @@ pub fn confirm(question: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-#[cfg(windows)]
-mod windows {
+/// Journaled system changes through the privileged helper: UAC on Windows, polkit or sudo on
+/// Linux ([ADR 0020]). CA trust and shims are Windows-only until P1-04 parts b and d.
+///
+/// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
+mod system {
     use std::path::PathBuf;
     use std::rc::Rc;
 
@@ -50,11 +52,36 @@ mod windows {
     use kiln_ops::{Engine, Operation, Registry};
     use kiln_platform::DnsEntry;
     use kiln_platform::hosts_op::{HostsBlockOp, PrivilegedHosts, register_hosts_block};
+    #[cfg(windows)]
     use kiln_platform::trust::{TrustCaOp, register_trust_ca};
+    #[cfg(windows)]
     use kiln_platform::user_path::{RegistryPath, UserPathOp, register_user_path};
     use kiln_state::StateStore;
 
-    use super::{ca_store, confirm, print_preview};
+    #[cfg(windows)]
+    use super::ca_store;
+    use super::{confirm, print_preview};
+
+    /// How the user is asked for administrator rights, for prompts.
+    const APPROVAL: &str = if cfg!(windows) {
+        "Windows will ask for administrator approval if needed."
+    } else {
+        "You'll be asked for an administrator password if needed."
+    };
+
+    /// The system hosts file, from the OS, never from the environment.
+    #[cfg(windows)]
+    fn hosts_path() -> Result<PathBuf, String> {
+        Ok(kiln_sys::win::system_directory()
+            .map_err(|e| e.to_string())?
+            .join(r"drivers\etc\hosts"))
+    }
+
+    #[cfg(not(windows))]
+    #[allow(clippy::unnecessary_wraps)] // same signature as on Windows
+    fn hosts_path() -> Result<PathBuf, String> {
+        Ok(PathBuf::from("/etc/hosts"))
+    }
 
     pub struct Context {
         pub engine: Engine<StateStore>,
@@ -73,9 +100,7 @@ mod windows {
                 import.events
             );
         }
-        let hosts_path = kiln_sys::win::system_directory()
-            .map_err(|e| e.to_string())?
-            .join(r"drivers\etc\hosts");
+        let hosts_path = hosts_path()?;
         let helper = default_helper_exe().map_err(|e| e.to_string())?;
         if !helper.is_file() {
             return Err(format!(
@@ -87,8 +112,11 @@ mod windows {
         let writer: Rc<dyn PrivilegedHosts> = session.clone();
         let mut registry = Registry::default();
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
-        register_trust_ca(&mut registry);
-        register_user_path(&mut registry, Rc::new(RegistryPath));
+        #[cfg(windows)]
+        {
+            register_trust_ca(&mut registry);
+            register_user_path(&mut registry, Rc::new(RegistryPath));
+        }
         let mut engine = Engine::new(store, registry);
         let recovery = engine.recover().map_err(|e| e.to_string())?;
         if !recovery.rolled_back.is_empty() {
@@ -124,9 +152,7 @@ mod windows {
             entries,
         ));
         print_preview(&op.preview().map_err(|e| e.to_string())?, "(no Kiln block)");
-        if !yes
-            && !confirm("Apply this change? Windows will ask for administrator approval if needed.")
-        {
+        if !yes && !confirm(&format!("Apply this change? {APPROVAL}")) {
             println!("Nothing was changed.");
             return Ok(());
         }
@@ -168,7 +194,7 @@ mod windows {
             ));
         }
         println!("Undo operation #{id}: {what}.");
-        if !yes && !confirm("Undo it? Windows will ask for administrator approval if needed.") {
+        if !yes && !confirm(&format!("Undo it? {APPROVAL}")) {
             println!("Nothing was changed.");
             return Ok(());
         }
@@ -191,6 +217,7 @@ mod windows {
         result
     }
 
+    #[cfg(windows)]
     /// `kiln shims install` ([ADR 0016] §8, §11): copies `kiln-shim` in as `php.exe` and
     /// `composer.exe`, then puts their folder first on the user PATH as a journaled, undoable
     /// operation, after showing which `php` new terminals get now and after.
@@ -255,6 +282,7 @@ mod windows {
         Ok(())
     }
 
+    #[cfg(windows)]
     /// Trusts Kiln's root for the current Windows user (no administrator rights; Windows
     /// shows its own confirmation dialog).
     pub fn ca_trust(yes: bool) -> Result<(), String> {
@@ -375,21 +403,12 @@ pub fn ca_info() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub use windows::{ca_trust, hosts_set, shims_install, undo, undo_all};
+pub use system::{ca_trust, shims_install};
+pub use system::{hosts_set, undo, undo_all};
 
 #[cfg(not(windows))]
 pub fn ca_trust(_yes: bool) -> Result<(), String> {
     Err("trusting the CA is not available on this platform yet (Linux: P1-04)".into())
-}
-
-#[cfg(not(windows))]
-pub fn hosts_set(_tld: Tld, _entries: Vec<DnsEntry>, _yes: bool) -> Result<(), String> {
-    Err("changing the hosts file is not available on this platform yet (Linux: P1-04)".into())
-}
-
-#[cfg(not(windows))]
-pub fn undo(_id: Option<u64>, _force: bool, _yes: bool) -> Result<(), String> {
-    Err("undo is not available on this platform yet (Linux: P1-04)".into())
 }
 
 #[cfg(not(windows))]
@@ -398,7 +417,7 @@ pub fn shims_install(_yes: bool) -> Result<(), String> {
 }
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(windows)]
 pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
     path.split(';')
@@ -411,6 +430,19 @@ pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Where `name` resolves on `path` (a `PATH` value): the first executable file, like a shell.
+#[cfg(unix)]
+pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
+
 /// How a journal state reads in a sentence.
 pub(crate) fn state_word(state: kiln_ops::OpState) -> &'static str {
     use kiln_ops::OpState;
@@ -421,9 +453,4 @@ pub(crate) fn state_word(state: kiln_ops::OpState) -> &'static str {
         OpState::Reverted => "undone",
         OpState::Stuck => "stuck (needs attention)",
     }
-}
-
-#[cfg(not(windows))]
-pub fn undo_all() -> Result<Vec<u64>, String> {
-    Err("undoing system changes is not available on this platform yet (Linux: P1-04)".into())
 }

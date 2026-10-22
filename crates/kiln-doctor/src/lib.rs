@@ -97,6 +97,8 @@ pub struct Facts {
     pub certificates: Option<CertFacts>,
     pub shims: ShimFacts,
     pub others: OtherToolsFacts,
+    /// How this machine resolves names (Linux; `None` elsewhere).
+    pub resolver: Option<ResolverFacts>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -187,6 +189,17 @@ pub struct SiteFacts {
     pub stale_hosts: Vec<String>,
 }
 
+/// How a Linux machine resolves names ([ADR 0020] §2).
+///
+/// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolverFacts {
+    /// The `hosts:` line of `/etc/nsswitch.conf`, without the key; `None` if absent.
+    pub nsswitch_hosts: Option<String>,
+    /// Who manages `/etc/resolv.conf`: `"systemd-resolved"`, `"NetworkManager"`, or `None`.
+    pub resolv_conf_manager: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteDns {
     pub host: String,
@@ -227,7 +240,7 @@ pub fn diagnose(facts: &Facts) -> Report {
     findings.extend(web(&facts.web));
     findings.extend(php(&facts.php));
     findings.extend(sites(&facts.sites));
-    findings.extend(dns(&facts.sites));
+    findings.extend(dns(&facts.sites, facts.resolver.as_ref()));
     if let Some(certs) = &facts.certificates {
         findings.extend(certificates(certs));
     }
@@ -503,7 +516,7 @@ fn sites(facts: &SiteFacts) -> Vec<Finding> {
     out
 }
 
-fn dns(facts: &SiteFacts) -> Vec<Finding> {
+fn dns(facts: &SiteFacts, resolver: Option<&ResolverFacts>) -> Vec<Finding> {
     let area = Area::Dns;
     let mut out = Vec::new();
     let missing: Vec<&str> = facts
@@ -560,6 +573,61 @@ fn dns(facts: &SiteFacts) -> Vec<Finding> {
             area,
             Status::Ok,
             "every site resolves to this computer",
+        ));
+    }
+    if let Some(resolver) = resolver {
+        out.extend(resolver_findings(resolver));
+    }
+    out
+}
+
+/// Whether the `hosts:` line of `nsswitch.conf` consults `/etc/hosts` (`files`) before any DNS
+/// source (`dns`, `resolve`). `[...]` actions are ignored.
+#[must_use]
+pub fn hosts_file_first(nsswitch_hosts: &str) -> bool {
+    let sources: Vec<&str> = nsswitch_hosts
+        .split_whitespace()
+        .filter(|s| !s.starts_with('['))
+        .collect();
+    let position = |name: &str| sources.iter().position(|s| *s == name);
+    match position("files") {
+        None => false,
+        Some(files) => ["dns", "resolve"]
+            .iter()
+            .filter_map(|dns| position(dns))
+            .all(|dns| files < dns),
+    }
+}
+
+fn resolver_findings(facts: &ResolverFacts) -> Vec<Finding> {
+    let area = Area::Dns;
+    let mut out = Vec::new();
+    match facts.nsswitch_hosts.as_deref() {
+        Some(line) if !hosts_file_first(line) => out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!("/etc/nsswitch.conf has `hosts: {line}`, so /etc/hosts, where Kiln's names are, isn't consulted first"),
+            ),
+            "put `files` first on the hosts: line of /etc/nsswitch.conf",
+        )),
+        Some(_) => out.push(finding(
+            area,
+            Status::Ok,
+            "/etc/hosts is consulted before DNS (nsswitch.conf)",
+        )),
+        None => {}
+    }
+    if let Some(manager) = &facts.resolv_conf_manager {
+        let also = if manager == "systemd-resolved" {
+            ", which answers from /etc/hosts too"
+        } else {
+            ""
+        };
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("DNS is managed by {manager}{also}"),
         ));
     }
     out
@@ -1084,6 +1152,37 @@ mod tests {
         assert_eq!(of(&report, Area::Shims)[0].status, Status::Warn);
         facts.shims.php_on_path = Some(shims_dir.join("php.exe"));
         assert_eq!(of(&diagnose(&facts), Area::Shims)[0].status, Status::Ok);
+    }
+
+    #[test]
+    fn nsswitch_order_decides_whether_etc_hosts_is_read_first() {
+        assert!(hosts_file_first(
+            "files mdns4_minimal [NOTFOUND=return] dns"
+        ));
+        assert!(hosts_file_first(
+            "files myhostname resolve [!UNAVAIL=return] dns"
+        ));
+        assert!(hosts_file_first("files"));
+        assert!(!hosts_file_first("resolve [!UNAVAIL=return] files dns"));
+        assert!(!hosts_file_first("dns files"));
+        assert!(!hosts_file_first("mdns4_minimal dns"));
+
+        let mut facts = base();
+        facts.resolver = Some(ResolverFacts {
+            nsswitch_hosts: Some("dns files".into()),
+            resolv_conf_manager: Some("systemd-resolved".into()),
+        });
+        let report = diagnose(&facts);
+        let dns = of(&report, Area::Dns);
+        assert!(
+            dns.iter()
+                .any(|f| f.status == Status::Warn && f.message.contains("dns files"))
+        );
+        assert!(dns.iter().any(|f| f.message.contains("systemd-resolved")));
+
+        facts.resolver.as_mut().unwrap().nsswitch_hosts =
+            Some("files mdns4_minimal [NOTFOUND=return] dns".into());
+        assert!(diagnose(&facts).worst() <= Status::Info);
     }
 
     #[test]

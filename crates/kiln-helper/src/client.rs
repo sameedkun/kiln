@@ -1,15 +1,14 @@
-//! `kiln`'s side of a helper session.
+//! `kiln`'s side of a helper session: the same authenticated client over a Windows named
+//! pipe (ADR 0009) or the stdin/stdout of a helper started by `pkexec` (ADR 0020).
 
-use std::fs::File;
+use std::fmt::Debug;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::time::Duration;
 
 use kiln_platform::DnsEntry;
-use kiln_sys::win::{ElevatedProcess, connect_pipe, spawn_elevated};
 
 use crate::proto::{
     Channel, ErrorCode, HostEntry, PROTOCOL_VERSION, ProtoError, Request, Response, SessionKey,
-    new_pipe_name, new_session_key, to_hex,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -38,25 +37,35 @@ pub struct HostsWritten {
     pub bytes_after: u64,
 }
 
+/// A byte stream a session can run over.
+pub trait Stream: Read + Write + Debug {}
+impl<T: Read + Write + Debug> Stream for T {}
+
 /// An authenticated session with a running helper.
 #[derive(Debug)]
 pub struct HelperClient {
-    channel: Channel<File>,
+    channel: Channel<Box<dyn Stream>>,
 }
 
 impl HelperClient {
-    /// Connects to the helper's pipe and checks it speaks our protocol.
-    pub fn connect(
-        pipe_name: &str,
-        key: SessionKey,
-        timeout: Duration,
-    ) -> Result<Self, ClientError> {
-        let file = connect_pipe(pipe_name, timeout).map_err(ClientError::Connect)?;
+    /// A session over `stream`, checked with a `Ping` (the helper must speak our protocol).
+    pub fn over(stream: impl Stream + 'static, key: SessionKey) -> Result<Self, ClientError> {
         let mut client = Self {
-            channel: Channel::new(file, key),
+            channel: Channel::new(Box::new(stream), key),
         };
         client.ping()?;
         Ok(client)
+    }
+
+    /// Connects to the helper's pipe and checks it speaks our protocol.
+    #[cfg(windows)]
+    pub fn connect(
+        pipe_name: &str,
+        key: SessionKey,
+        timeout: std::time::Duration,
+    ) -> Result<Self, ClientError> {
+        let file = kiln_sys::win::connect_pipe(pipe_name, timeout).map_err(ClientError::Connect)?;
+        Self::over(file, key)
     }
 
     fn call(&mut self, request: &Request) -> Result<Response, ClientError> {
@@ -126,19 +135,94 @@ impl HelperClient {
 
 /// Starts `helper_exe` through UAC with a fresh pipe name and session key, then connects.
 /// One consent prompt; the helper serves this session only.
+#[cfg(windows)]
 pub fn launch(
     helper_exe: &Path,
-    timeout: Duration,
-) -> Result<(ElevatedProcess, HelperClient), ClientError> {
+    timeout: std::time::Duration,
+) -> Result<(kiln_sys::win::ElevatedProcess, HelperClient), ClientError> {
+    use crate::proto::{new_pipe_name, new_session_key, to_hex};
     let key = new_session_key();
     let pipe = new_pipe_name();
     let pid = std::process::id().to_string();
     let key_hex = to_hex(&key);
-    let process = spawn_elevated(
+    let process = kiln_sys::win::spawn_elevated(
         helper_exe,
         &["--pipe", &pipe, "--client-pid", &pid, "--key", &key_hex],
     )
     .map_err(ClientError::Launch)?;
     let client = HelperClient::connect(&pipe, key, timeout)?;
     Ok((process, client))
+}
+
+/// How the helper is started as root on this machine: `pkexec` (polkit), else `sudo`
+/// ([ADR 0020] §3).
+///
+/// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
+#[cfg(unix)]
+fn root_launcher() -> Option<(std::path::PathBuf, &'static [&'static str])> {
+    // Fixed locations, not PATH: what asks for the administrator password must be the
+    // system's own program.
+    let find = |name: &str| {
+        ["/usr/bin", "/bin", "/usr/local/bin"]
+            .iter()
+            .map(|dir| Path::new(dir).join(name))
+            .find(|path| path.is_file())
+    };
+    find("pkexec")
+        .map(|p| (p, &[][..]))
+        .or_else(|| find("sudo").map(|p| (p, &["--"][..])))
+}
+
+/// Starts `helper_exe --stdio` as root (one password prompt), sends the session key on its
+/// stdin and checks it answers. A declined prompt is a `Launch` error with
+/// `PermissionDenied`.
+#[cfg(unix)]
+pub fn launch(helper_exe: &Path) -> Result<(std::process::Child, HelperClient), ClientError> {
+    use std::process::{Command, Stdio};
+
+    use crate::proto::{Joined, new_session_key, write_key_line};
+
+    let (launcher, launcher_args) = root_launcher().ok_or_else(|| {
+        ClientError::Launch(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "neither pkexec (polkit) nor sudo is installed; install one, e.g. `sudo apt install pkexec`",
+        ))
+    })?;
+    let mut child = Command::new(&launcher)
+        .args(launcher_args)
+        .arg(helper_exe)
+        .arg("--stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(ClientError::Launch)?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        unreachable!("both are piped above");
+    };
+    let key = new_session_key();
+    let started = write_key_line(&mut stdin, &key)
+        .map_err(|e| ClientError::Protocol(e.into()))
+        .and_then(|()| HelperClient::over(Joined::new(stdout, stdin), key));
+    match started {
+        Ok(client) => Ok((child, client)),
+        Err(e) => {
+            // pkexec exits 126 when the dialog is dismissed and 127 when authorization
+            // fails; sudo exits 1 after failed password attempts.
+            let declined = child
+                .wait()
+                .ok()
+                .and_then(|status| status.code())
+                .is_some_and(|code| {
+                    matches!(code, 126 | 127) || (code == 1 && launcher.ends_with("sudo"))
+                });
+            if declined {
+                Err(ClientError::Launch(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "administrator authentication was declined",
+                )))
+            } else {
+                Err(e)
+            }
+        }
+    }
 }

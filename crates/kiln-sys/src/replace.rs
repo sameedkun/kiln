@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   explicit ACEs), attributes and alternate data streams. A rename would drop explicit ACEs
 ///   (spike 02, I-25).
 /// - **Unix:** copies the target's mode and owner onto `replacement`, then renames.
-///   `SELinux` labels and other `xattrs` are not copied yet (P1-04).
+///   On Linux its extended attributes too, including the `SELinux` label (ADR 0020 §8).
 ///
 /// Both files must be on the same volume, and `target` must exist: a missing target is an
 /// `io::ErrorKind::NotFound` error, and creating files is the caller's decision. On success
@@ -159,6 +159,8 @@ mod platform {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
             Err(e) => return Err(e),
         }
+        #[cfg(target_os = "linux")]
+        crate::xattr::copy_all(target, replacement)?;
         #[allow(clippy::disallowed_methods)] // metadata copied above; this is the swap
         fs::rename(replacement, target)
     }
@@ -279,6 +281,29 @@ mod tests {
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o640
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_keeps_extended_attributes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("hosts");
+        fs::write(&target, b"old").unwrap();
+        if let Err(e) = crate::xattr::set(&target, b"user.kiln-test", b"label") {
+            eprintln!("skipped: this file system has no user xattrs ({e})");
+            return;
+        }
+        write_replacing(&target, b"new").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(
+            crate::xattr::get(&target, b"user.kiln-test").unwrap(),
+            b"label"
+        );
+        assert!(
+            crate::xattr::list(&target)
+                .unwrap()
+                .contains(&b"user.kiln-test".to_vec())
         );
     }
 

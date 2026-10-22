@@ -105,6 +105,8 @@ pub enum ProtoError {
     SeqMismatch { got: u64, expected: u64 },
     #[error("malformed message: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("the session key line is malformed")]
+    BadKeyLine,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -186,6 +188,65 @@ pub fn new_pipe_name() -> String {
     let mut id = [0u8; 16];
     getrandom::fill(&mut id).expect("OS random source");
     format!("kiln-helper-{}", to_hex(&id))
+}
+
+/// Length of the line `kiln` sends first on a stdio session (ADR 0020 §4): the session key as
+/// 64 hex digits, then `\n`.
+pub const KEY_LINE_LEN: usize = KEY_LEN * 2 + 1;
+
+/// Sends the session key as the first line of a stdio session. The key never goes in
+/// arguments: on Linux any user can read a process's command line.
+pub fn write_key_line(stream: &mut impl Write, key: &SessionKey) -> io::Result<()> {
+    stream.write_all(format!("{}\n", to_hex(key)).as_bytes())?;
+    stream.flush()
+}
+
+/// Reads the key line, exactly [`KEY_LINE_LEN`] bytes and no more, so the frames after it are
+/// left in the stream.
+pub fn read_key_line(stream: &mut impl Read) -> Result<SessionKey, ProtoError> {
+    let mut line = [0u8; KEY_LINE_LEN];
+    stream.read_exact(&mut line).map_err(|e| match e.kind() {
+        io::ErrorKind::UnexpectedEof => ProtoError::Closed,
+        _ => e.into(),
+    })?;
+    let (hex, newline) = line.split_at(KEY_LEN * 2);
+    if newline != b"\n" {
+        return Err(ProtoError::BadKeyLine);
+    }
+    std::str::from_utf8(hex)
+        .ok()
+        .and_then(from_hex)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(ProtoError::BadKeyLine)
+}
+
+/// One channel over two streams: a child's stdout to read and its stdin to write.
+#[derive(Debug)]
+pub struct Joined<R, W> {
+    reader: R,
+    writer: W,
+}
+
+impl<R, W> Joined<R, W> {
+    pub fn new(reader: R, writer: W) -> Self {
+        Self { reader, writer }
+    }
+}
+
+impl<R: Read, W> Read for Joined<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl<R, W: Write> Write for Joined<R, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
 }
 
 fn write_frame(stream: &mut impl Write, bytes: &[u8]) -> Result<(), ProtoError> {

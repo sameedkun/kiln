@@ -1,23 +1,28 @@
 //! A lazily started, shared helper session that implements
 //! [`kiln_platform::hosts_op::PrivilegedHosts`]: the first write that actually needs
-//! elevation launches `kiln-helper` (one UAC prompt); later writes in the same batch reuse it.
+//! elevation launches `kiln-helper` (one UAC prompt on Windows, one polkit or sudo password
+//! prompt on Linux); later writes in the same batch reuse it.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::client::{ClientError, HelperClient, launch};
 use kiln_core::Tld;
 use kiln_ops::OpError;
 use kiln_platform::DnsEntry;
 use kiln_platform::hosts_op::PrivilegedHosts;
-use kiln_sys::win::ElevatedProcess;
 
-use crate::client::{ClientError, HelperClient, launch};
+#[cfg(windows)]
+type Process = kiln_sys::win::ElevatedProcess;
+#[cfg(unix)]
+type Process = std::process::Child;
 
-/// `kiln-helper.exe` next to the running executable (how Kiln is installed and how cargo
-/// lays out `target/<profile>`).
+/// `kiln-helper` next to the running executable (how Kiln is installed and how cargo lays
+/// out `target/<profile>`).
 pub fn default_helper_exe() -> std::io::Result<PathBuf> {
-    Ok(std::env::current_exe()?.with_file_name("kiln-helper.exe"))
+    Ok(std::env::current_exe()?
+        .with_file_name(format!("kiln-helper{}", std::env::consts::EXE_SUFFIX)))
 }
 
 #[derive(Debug)]
@@ -34,7 +39,7 @@ enum Source {
 #[derive(Debug, Default)]
 struct State {
     client: Option<HelperClient>,
-    process: Option<ElevatedProcess>,
+    process: Option<Process>,
     launches: u32,
     writes: u32,
 }
@@ -97,7 +102,7 @@ impl HelperSession {
         let mut state = self.state.borrow_mut();
         let result = state.client.take().map_or(Ok(()), HelperClient::shutdown);
         if let Some(process) = state.process.take() {
-            let _ = process.wait(Duration::from_secs(10));
+            wait(process);
         }
         result
     }
@@ -118,7 +123,7 @@ impl PrivilegedHosts for HelperSession {
                     timeout,
                 } => {
                     let (process, client) =
-                        launch(helper_exe, *timeout).map_err(|e| op_error(&e))?;
+                        start(helper_exe, *timeout).map_err(|e| op_error(&e))?;
                     state.launches += 1;
                     state.process = Some(process);
                     state.client = Some(client);
@@ -140,5 +145,41 @@ impl PrivilegedHosts for HelperSession {
 impl Drop for HelperSession {
     fn drop(&mut self) {
         let _ = self.finish();
+    }
+}
+
+#[cfg(windows)]
+fn start(
+    helper_exe: &std::path::Path,
+    timeout: Duration,
+) -> Result<(Process, HelperClient), ClientError> {
+    launch(helper_exe, timeout)
+}
+
+/// No timeout on Linux: the password prompt waits for the user, and polkit ends it itself.
+#[cfg(unix)]
+fn start(
+    helper_exe: &std::path::Path,
+    _timeout: Duration,
+) -> Result<(Process, HelperClient), ClientError> {
+    launch(helper_exe)
+}
+
+#[cfg(windows)]
+#[allow(clippy::needless_pass_by_value)] // the handle is closed once the helper has exited
+fn wait(process: Process) {
+    let _ = process.wait(Duration::from_secs(10));
+}
+
+/// Waits briefly for the helper to exit after `Shutdown`. A root process can't be killed from
+/// here, and its own 120 s deadline ends it anyway.
+#[cfg(unix)]
+fn wait(mut process: Process) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if !matches!(process.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }

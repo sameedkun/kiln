@@ -807,6 +807,7 @@ dependencies = [
 name = "kiln-sys"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "tempfile",
  "windows-sys 0.61.2",
 ]
