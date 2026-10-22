@@ -51,7 +51,52 @@ impl Listeners {
         Self(kiln_sys::win::tcp_listeners().unwrap_or_default())
     }
 
-    #[cfg(not(windows))]
+    /// From `/proc/net/tcp{,6}`; a socket's PID comes from the `/proc/<pid>/fd` link that
+    /// names its inode. Sockets of processes this user can't inspect (root's, other users')
+    /// get PID 0, "a program Kiln can't inspect".
+    #[cfg(target_os = "linux")]
+    pub fn now() -> Self {
+        let sockets: Vec<(SocketAddr, u64)> = ["/proc/net/tcp", "/proc/net/tcp6"]
+            .iter()
+            .filter_map(|file| std::fs::read_to_string(file).ok())
+            .flat_map(|text| kiln_coexist::parse_proc_net_tcp(&text))
+            .collect();
+        let mut owners = std::collections::HashMap::new();
+        for process in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+            let Some(pid) = process
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            for fd in std::fs::read_dir(process.path().join("fd"))
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let inode = std::fs::read_link(fd.path()).ok().and_then(|target| {
+                    target
+                        .to_str()?
+                        .strip_prefix("socket:[")?
+                        .strip_suffix(']')?
+                        .parse::<u64>()
+                        .ok()
+                });
+                if let Some(inode) = inode {
+                    owners.entry(inode).or_insert(pid);
+                }
+            }
+        }
+        Self(
+            sockets
+                .into_iter()
+                .map(|(addr, inode)| (addr, owners.get(&inode).copied().unwrap_or(0)))
+                .collect(),
+        )
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn now() -> Self {
         Self::default()
     }
@@ -83,7 +128,11 @@ pub(crate) fn holder(pid: u32) -> Holder {
 
 #[cfg(not(windows))]
 pub(crate) fn holder(pid: u32) -> Holder {
-    Holder::new(pid, None)
+    // Linux names a process's program in `/proc`; elsewhere it isn't inspected yet.
+    let image = (pid != 0)
+        .then(|| std::fs::read_link(format!("/proc/{pid}/exe")).ok())
+        .flatten();
+    Holder::new(pid, image)
 }
 
 /// Whether Kiln could listen on `port`: on `127.0.0.1` and, where IPv6 works, on `::1`.

@@ -166,7 +166,7 @@ impl Holder {
             };
         }
         // PID 4 is the System process; on port 80/443 that is http.sys, usually for IIS.
-        if self.pid == 4 {
+        if cfg!(windows) && self.pid == 4 {
             return "the Windows HTTP service (IIS / http.sys)".to_owned();
         }
         match (&self.image, self.file_name()) {
@@ -266,6 +266,44 @@ pub fn pick(preferred: &[u16], is_free: impl Fn(u16) -> bool) -> Option<u16> {
     preferred.iter().copied().find(|&port| is_free(port))
 }
 
+/// Listening TCP sockets in the text of Linux's `/proc/net/tcp` or `/proc/net/tcp6`, as
+/// `(address, socket inode)`. The inode links a socket to the process holding it, through
+/// `/proc/<pid>/fd`.
+#[must_use]
+pub fn parse_proc_net_tcp(text: &str) -> Vec<(std::net::SocketAddr, u64)> {
+    // The kernel prints each 32-bit word of an address in host byte order; Kiln runs on
+    // little-endian CPUs (x86-64, AArch64).
+    fn word(hex: &str) -> Option<[u8; 4]> {
+        u32::from_str_radix(hex, 16).ok().map(u32::to_le_bytes)
+    }
+    fn address(field: &str) -> Option<std::net::SocketAddr> {
+        let (ip, port) = field.split_once(':')?;
+        let port = u16::from_str_radix(port, 16).ok()?;
+        let ip: std::net::IpAddr = match ip.len() {
+            8 => std::net::Ipv4Addr::from(word(ip)?).into(),
+            32 => {
+                let mut bytes = [0u8; 16];
+                for (i, chunk) in bytes.chunks_mut(4).enumerate() {
+                    chunk.copy_from_slice(&word(ip.get(i * 8..i * 8 + 8)?)?);
+                }
+                std::net::Ipv6Addr::from(bytes).into()
+            }
+            _ => return None,
+        };
+        Some(std::net::SocketAddr::new(ip, port))
+    }
+    const LISTEN: &str = "0A";
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.get(3) != Some(&LISTEN) {
+                return None;
+            }
+            Some((address(fields.get(1)?)?, fields.get(9)?.parse().ok()?))
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,7 +362,11 @@ mod tests {
             apache.describe(),
             format!("Apache httpd ({})", httpd.display())
         );
-        assert!(Holder::new(4, None).describe().contains("IIS"));
+        assert_eq!(
+            Holder::new(4, None).describe().contains("IIS"),
+            cfg!(windows),
+            "PID 4 is http.sys only on Windows"
+        );
         assert_eq!(
             Holder::new(77, None).describe(),
             "a program Kiln can't inspect"
@@ -374,6 +416,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn listening_sockets_are_read_from_proc_net_tcp() {
+        // Real lines from Ubuntu 24.04: Kiln's Caddy on 127.0.0.1:8080, systemd-resolved on
+        // 127.0.0.53:53, an established connection (state 01, ignored).
+        let v4 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41234 1 0000000000000000 100 0 0 10 0\n   1: 3500007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   991        0 5678 1 0000000000000000 100 0 0 10 5\n   2: 0100007F:1F90 0100007F:9C40 01 00000000:00000000 00:00000000 00000000  1000        0 0 1 0000000000000000 20 4 30 10 -1\n";
+        assert_eq!(
+            parse_proc_net_tcp(v4),
+            vec![
+                ("127.0.0.1:8080".parse().unwrap(), 41234),
+                ("127.0.0.53:53".parse().unwrap(), 5678),
+            ]
+        );
+        let v6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000000000000000000001000000:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41235 1 0000000000000000 100 0 0 10 0\n   1: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 900 1 0000000000000000 100 0 0 10 0\n";
+        assert_eq!(
+            parse_proc_net_tcp(v6),
+            vec![
+                ("[::1]:8080".parse().unwrap(), 41235),
+                ("[::]:22".parse().unwrap(), 900),
+            ]
+        );
+        assert_eq!(parse_proc_net_tcp("garbage\nnot a line\n"), vec![]);
+    }
     #[test]
     fn the_first_free_port_wins() {
         assert_eq!(pick(&HTTP_PORTS, |p| p != 80), Some(8080));
