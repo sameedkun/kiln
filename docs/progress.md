@@ -666,7 +666,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-11 check from a normal terminal (shims + PATH) | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
-| P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-13)) |
+| P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -709,6 +709,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-12 done:** ADR 0017. `kiln doctor` (read-only, fixes as commands, `--json`, exit 1 on failure); new `kiln-doctor` crate (pure rules); `kiln-sys` TCP listener owners, process parents, query-only process open. Detects the packaged-app container (I-45: the real path is `E:WindowsApps…` on this machine), ports held by other programs, PHP/pool/DNS/CA/shim problems, and explains Schannel revocation (I-12). 11 new tests, 203 total. |
 | 2026-10-22 | **P1-12 checked by the user from a normal PowerShell:** idle: "normal terminal", ports 8080/8443 free, Caddy and PHP 8.3.36/8.4.27 found, and three accurate warnings (old demo links not in hosts, CA trust undone, `php` is Herd's). After `web start`: all four listeners reported as Kiln's web server (PID 15852), pool 8.4.27 with 4 workers listening. `--json` worked; exit code 0. |
 | 2026-10-22 | **P1-13 done:** ADR 0018. `kiln history [--all]` (plain descriptions, times), `kiln undo` without a number (newest change in effect; clear refusal otherwise), `kiln uninstall [--dry-run|--keep-files|--yes]` and `kiln plan uninstall` (full plan: stop, undo newest first, delete Kiln's two folders with sizes, never-touched list; stops and deletes nothing if an undo fails; never deletes a folder holding a project; doesn't follow junctions). 9 new tests, 212 total, including a sandboxed real-binary uninstall. |
+| 2026-10-22 | **P1-13 checked by the user from a normal PowerShell:** `hosts sync` (#8); `history` showed #8 in effect and `--all` all 8 operations (CA trust ×2, hosts ×5, PATH) with plain descriptions; `uninstall --dry-run` planned undo #8 and the deletion of `LocalKiln` (308.7 MB) and `RoamingKiln`; `undo` without a number undid #8 (1 UAC prompt), and a second `undo` reported nothing in effect; a **real `kiln uninstall`** deleted both Kiln folders and left the programs; `demo-sites` (projects) untouched. The user's machine now has no Kiln state; later manual checks start with `kiln php install` / `kiln web install`. |
 
 ## How to update this file
 
