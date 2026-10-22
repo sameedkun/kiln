@@ -408,7 +408,7 @@ Design: [ADR 0014](adr/0014-php-cgi-supervisor.md). Linked sites now run PHP.
   - healthy workers held back as "crashes" ([I-51](issues.md#i-51));
   - perl edits using `|` delimiters mangled two files. Caught by the compiler, rewritten, and
     such edits are no longer used.
-- **Not checkable from the agent session:** `kiln web start` (I-45). Script below.
+- **Checked by the user from a normal terminal (2026-10-22):** see the P1-10 log row.
 
 **Check to run from a normal terminal** (the demo site
 `D:\Code\Rea\laravel-herd\demo-sites\phpdemo` is ready):
@@ -493,8 +493,8 @@ cd D:\Code\Rea\laravel-herd\kiln
 | Manual UAC launch check | [I-42](issues.md#i-42) | done 2026-10-21; repeat before 1.0 |
 | Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21, repeated from a normal terminal with the browser check |
 | Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
-| P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-09)) |
-| P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-10)) |
+| P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
+| P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -531,6 +531,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-09 done (Windows):** ADR 0014. New `kiln-supervisor` (separate binary; `pools.json` desired state; staggered recycle limits; respawn on the same port; crash = non-zero exit; kill-on-close job), `kiln-sys::background` shared helpers, PHP routes in the Caddy config (`php_fastcgi` expansion, `least_conn`, time-bounded retries, no passive checks). `kiln web start/stop/status` manage the pool; `kiln php default/workers` switch live. 19 new tests, 167 total; real end-to-end: 400 requests across about 30 recycling workers, 0 failures. Found I-50 (Caddy reload vs recycling, one request) and fixed I-51. |
 | 2026-10-22 | **CI:** macOS moved to nightly + manual dispatch; Windows and Linux on every push (`c37bf8a`). The macOS job takes about 30 s but waited many minutes for a runner. |
 | 2026-10-22 | **P1-10 done:** ADR 0015. New `kiln-sites` (document-root drivers for Laravel, Symfony, Drupal, Craft, Bedrock, WordPress, PHP, static; links + parked folders with precedence), `parked` table, `kiln park/unpark`, richer `kiln sites`, hosts sync covering parked sites. Valet considered, not used. 10 new tests, 177 total; the real Caddy+PHP test confirms a parked Laravel project never serves `.env`. |
+| 2026-10-22 | **P1-08/09/10 checked by the user from a normal PowerShell:** `kiln php install 8.4` (33.7 MB, SHA-256 verified, `php -v` 8.4.27); `kiln park demo-sites` found `larademo` (laravel → `public`) and `phpdemo`; `hosts sync` (#5); `web start` brought up 4 php-cgi workers, all under `%LOCALAPPDATA%Kilnphp8.4.27`; in Chrome `phpdemo.test` served PHP 8.4.27 from different worker PIDs (16624, 2564), `/any/path` and `larademo.test/hello` went through the front controller, and `/artisan` wasn't served; `web stop` left no Kiln php-cgi running; unpark and `undo 5` cleaned up. |
 
 ## How to update this file
 
