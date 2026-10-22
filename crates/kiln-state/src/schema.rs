@@ -48,6 +48,11 @@ const MIGRATIONS: &[&str] = &[
          sha256       TEXT    NOT NULL,     -- verified digest of that archive
          installed_ms INTEGER NOT NULL
      ) STRICT;",
+    // v4: parked folders; every subfolder is a site (ADR 0015).
+    "CREATE TABLE parked (
+         path       TEXT    PRIMARY KEY,  -- absolute folder
+         created_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.

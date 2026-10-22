@@ -41,6 +41,7 @@ fn site(dir: &Path, name: &str, secure: bool) -> SiteSpec {
         host: HostName::new(&format!("{name}.test"), &Tld::default()).unwrap(),
         root,
         secure,
+        php: false,
     }
 }
 

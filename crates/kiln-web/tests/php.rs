@@ -1,4 +1,4 @@
-//! End-to-end PHP behind Caddy ([ADR 0014]): a real supervisor with real php-cgi workers that
+//! End-to-end PHP behind Caddy ([ADR 0014], [ADR 0015]): a real supervisor with real php-cgi workers that
 //! recycle constantly under load, Caddy's PHP routes, and a live switch to a new pool.
 //!
 //! Needs `KILN_TEST_CADDY` (a Caddy binary) and `KILN_TEST_PHP` (a PHP folder with
@@ -89,6 +89,23 @@ fn serves_php_through_recycling_workers_and_switches_pools_live() {
     )
     .unwrap();
 
+    // A Laravel-shaped project, parked and resolved by its driver (ADR 0015): served from
+    // public/, so nothing above it (like .env) is reachable.
+    let parked = dir.path().join("Sites");
+    let app = parked.join("shop");
+    std::fs::create_dir_all(app.join("public")).unwrap();
+    std::fs::write(app.join("artisan"), "#!/usr/bin/env php").unwrap();
+    std::fs::write(app.join(".env"), "APP_KEY=secret-do-not-serve").unwrap();
+    std::fs::write(
+        app.join("public").join("index.php"),
+        "<?php echo 'laravel ', $_SERVER['REQUEST_URI'];",
+    )
+    .unwrap();
+    std::fs::write(app.join("public").join("robots.txt"), "User-agent: *").unwrap();
+    let resolved = kiln_sites::resolve(&[], std::slice::from_ref(&parked), &Tld::default());
+    let parked_app = &resolved.sites[0];
+    assert_eq!(parked_app.driver, kiln_sites::Driver::Laravel);
+
     // The supervisor, in-process: same loop and launcher as `kiln-supervisor`.
     let run_dir = dir.path().join("supervisor");
     std::fs::create_dir_all(&run_dir).unwrap();
@@ -132,11 +149,20 @@ fn serves_php_through_recycling_workers_and_switches_pools_live() {
         http_port,
         https_port: free_ports(1).unwrap()[0],
         ipv6: false,
-        sites: vec![SiteSpec {
-            host: HostName::new("blog.test", &Tld::default()).unwrap(),
-            root: site_root.clone(),
-            secure: false,
-        }],
+        sites: vec![
+            SiteSpec {
+                host: HostName::new("blog.test", &Tld::default()).unwrap(),
+                root: site_root.clone(),
+                secure: false,
+                php: true,
+            },
+            SiteSpec {
+                host: parked_app.host.clone(),
+                root: parked_app.document_root.clone(),
+                secure: false,
+                php: parked_app.driver.uses_php(),
+            },
+        ],
         ca: None,
         storage_dir: dir.path().join("caddy").join("storage"),
         log_file: server.log_file(),
@@ -159,6 +185,25 @@ fn serves_php_through_recycling_workers_and_switches_pools_live() {
         assert_eq!(get(http_port, "blog.test", "/docs/").1, "docs");
         let (code, body) = get(http_port, "blog.test", "/static.txt");
         assert_eq!((code, body.as_str()), (200, "static file"));
+
+        // The parked Laravel project: public/ is the root; the project's secrets aren't served.
+        let (code, body) = get(http_port, "shop.test", "/products/7");
+        assert_eq!((code, body.as_str()), (200, "laravel /products/7"));
+        assert_eq!(
+            get(http_port, "shop.test", "/robots.txt").1,
+            "User-agent: *"
+        );
+        for probe in ["/.env", "/../.env", "/artisan", "/%2e%2e/.env"] {
+            let (_, body) = get(http_port, "shop.test", probe);
+            assert!(
+                !body.contains("secret-do-not-serve"),
+                "{probe} leaked .env: {body}"
+            );
+            assert!(
+                !body.contains("#!/usr/bin/env php"),
+                "{probe} leaked artisan"
+            );
+        }
 
         // Hundreds of requests while workers recycle every 10–16 requests: none may fail
         // (I-14, I-15).

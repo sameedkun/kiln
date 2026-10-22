@@ -1,0 +1,17 @@
+[package]
+name = "kiln-sites"
+description = "Which sites Kiln serves: links and parked folders, and each project's framework driver and document root (ADR 0015)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

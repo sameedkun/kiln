@@ -80,11 +80,54 @@ impl StateStore {
             .execute("DELETE FROM sites WHERE host = ?1", [host])?
             > 0)
     }
+
+    /// Parked folders, in the order they were parked (ADR 0015 §6–7).
+    pub fn parked(&self) -> Result<Vec<PathBuf>, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM parked ORDER BY created_ms, rowid")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows
+            .map(|r| r.map(PathBuf::from))
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// Returns `false` if `path` was already parked.
+    pub fn park(&mut self, path: &std::path::Path) -> Result<bool, StateError> {
+        let changed = self.conn.execute(
+            "INSERT INTO parked (path, created_ms) VALUES (?1, ?2) ON CONFLICT(path) DO NOTHING",
+            params![root_text(path)?, now_ms()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Returns `false` if `path` wasn't parked.
+    pub fn unpark(&mut self, path: &std::path::Path) -> Result<bool, StateError> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM parked WHERE path = ?1", [root_text(path)?])?
+            > 0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parked_folders_keep_their_order_and_are_unique() {
+        let mut store = StateStore::open_in_memory().unwrap();
+        assert!(store.park(std::path::Path::new("/b")).unwrap());
+        assert!(store.park(std::path::Path::new("/a")).unwrap());
+        assert!(!store.park(std::path::Path::new("/b")).unwrap());
+        assert_eq!(
+            store.parked().unwrap(),
+            [PathBuf::from("/b"), PathBuf::from("/a")]
+        );
+        assert!(store.unpark(std::path::Path::new("/b")).unwrap());
+        assert!(!store.unpark(std::path::Path::new("/b")).unwrap());
+        assert_eq!(store.parked().unwrap(), [PathBuf::from("/a")]);
+    }
 
     fn site(host: &str, secure: bool) -> SiteRecord {
         SiteRecord {

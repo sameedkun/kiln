@@ -22,6 +22,7 @@ kiln-sys.workspace = true
 clap.workspace = true
 kiln-fetch.workspace = true
 kiln-php.workspace = true
+kiln-sites.workspace = true
 kiln-supervisor.workspace = true
 kiln-web.workspace = true
 time.workspace = true

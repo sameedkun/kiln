@@ -634,6 +634,7 @@ dependencies = [
  "kiln-php",
  "kiln-pki",
  "kiln-platform",
+ "kiln-sites",
  "kiln-state",
  "kiln-supervisor",
  "kiln-sys",
@@ -738,6 +739,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln-sites"
+version = "0.0.0"
+dependencies = [
+ "kiln-core",
+ "tempfile",
+]
+
+[[package]]
 name = "kiln-state"
 version = "0.0.0"
 dependencies = [
@@ -775,6 +784,7 @@ version = "0.0.0"
 dependencies = [
  "kiln-core",
  "kiln-pki",
+ "kiln-sites",
  "kiln-supervisor",
  "kiln-sys",
  "rustls",

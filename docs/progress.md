@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (8 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (9 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0014 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0015 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -20,7 +20,7 @@
 | Windows DNS strategy | **done**: hosts block; NRPT rejected ([spike 02](spikes/results/02-windows-dns-part2.md)) |
 | Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/reload/status`, `hosts sync`. Site changes **reload live** over a per-user admin socket (P1-07). Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
-| Serving a PHP site end to end | **works** (Windows): linked sites run PHP through supervised php-cgi workers behind Caddy; framework drivers next (P1-10) |
+| Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -62,8 +62,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
 | P1-08 | PHP runtime provider | **done** 2026-10-21 (Windows) | [ADR 0013](adr/0013-downloads-and-php-runtimes.md); see below. Shared verified downloader; `kiln web install` downloads Caddy |
 | P1-09 | Process supervisor | **done** 2026-10-22 (Windows) | [ADR 0014](adr/0014-php-cgi-supervisor.md); see below. php-cgi pools behind Caddy, staggered recycling |
-| P1-10 | Sites + drivers | **next** | park; Laravel `public/` and other framework drivers |
-| P1-11 | Per-site PHP + shims | later | |
+| P1-10 | Sites + drivers | **done** 2026-10-22 | [ADR 0015](adr/0015-parked-folders-and-drivers.md); see below. `kiln park`, document-root drivers (no Valet code) |
+| P1-11 | Per-site PHP + shims | **next** | `kiln isolate`, `php`/`composer` shims |
 | P1-12 | `kiln doctor` | later | |
 | P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | later | |
 | P1-14 | Coexistence detection | later | [I-11](issues.md#i-11) |
@@ -428,6 +428,59 @@ Get-Process php-cgi -ErrorAction SilentlyContinue | Where-Object Path -like "*\K
 .\target\debug\kiln.exe undo <n>             # the hosts operation number
 ```
 
+<a id="p1-10"></a>
+### P1-10 delivered (2026-10-22)
+
+Design: [ADR 0015](adr/0015-parked-folders-and-drivers.md).
+
+- **New crate `kiln-sites`:**
+  - `driver::detect` picks the document root from a project's documented layout:
+    Laravel/Symfony → `public/`; Drupal/Craft/Bedrock → `web/`; WordPress, plain PHP and
+    static sites → the folder itself. `public/index.php` and `web/index.php` fall back to
+    generic PHP.
+  - `resolve` merges links with parked folders. A link wins; the folder parked first wins.
+    Hidden and invalid names are skipped and reported.
+- **Valet's drivers were considered and not used.** Kiln only needs the document root, and its
+  Caddy route already does the rest. No Valet code is included, and
+  `THIRD_PARTY_NOTICES.md` says so.
+- **`kiln-state`:** migration v4, a `parked` table.
+- **`kiln-web`:** `SiteSpec.php`. Static sites get the plain file server even when a PHP pool
+  runs.
+- **CLI:**
+  - `kiln park [folder]` / `kiln unpark [folder]`.
+  - `kiln sites` shows URL, driver, link/parked and document root, plus skipped folders.
+  - `kiln link` reports the detected driver.
+  - `kiln secure` on a parked site pins it as a link; `unlink` returns it to parked.
+  - `kiln hosts sync` covers parked sites and reloads a running server.
+- **Tests:** 10 new, 177 total.
+  - Every driver rule, including "a folder named `artisan` doesn't count".
+  - Parking precedence, pinning, unreadable folders, and parked rows in the database.
+  - In the real Caddy + PHP test, a parked Laravel-shaped project is served from `public/`
+    with its front controller. `/.env`, `/../.env`, `/%2e%2e/.env` and `/artisan` never reveal
+    the project's secrets.
+- **Smoke run in the agent session:** parking `demo-sites` found `larademo` (laravel → `public`)
+  and `phpdemo` (php). The existing `hello`/`shop` links took precedence over their parked
+  folders. Securing `larademo` pinned it, and unlinking returned it to parked.
+- **CI:** macOS now runs nightly (03:17 UTC) and on manual dispatch. Windows and Linux run on
+  every push (`c37bf8a`).
+
+**Check to run from a normal terminal** (`demo-sites` now also holds `larademo`, a minimal
+Laravel-shaped project):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe park D:\Code\Rea\laravel-herd\demo-sites   # lists each subfolder and its driver
+.\target\debug\kiln.exe sites                # larademo: laravel, serving ...\larademo\public
+.\target\debug\kiln.exe hosts sync           # UAC prompt: Yes; note the operation number
+.\target\debug\kiln.exe web start --http-port 8080 --https-port 8443
+# Browser: http://larademo.test:8080/any/path   ("Laravel-style front controller: /any/path")
+#          http://larademo.test:8080/../artisan (must not show the artisan file)
+#          http://phpdemo.test:8080/            (the P1-09 PHP page)
+.\target\debug\kiln.exe web stop
+.\target\debug\kiln.exe unpark D:\Code\Rea\laravel-herd\demo-sites
+.\target\debug\kiln.exe undo <n>             # the hosts operation number
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -441,6 +494,7 @@ Get-Process php-cgi -ErrorAction SilentlyContinue | Where-Object Path -like "*\K
 | Manual `Root` store trust check | [I-43](issues.md#i-43) | done 2026-10-21, repeated from a normal terminal with the browser check |
 | Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
 | P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-09)) |
+| P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-10)) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -475,6 +529,8 @@ Get-Process php-cgi -ErrorAction SilentlyContinue | Where-Object Path -like "*\K
 | 2026-10-21 | **P1-07 live-reload check passed** (run by the user from a normal PowerShell): `kiln unsecure shop` and `kiln secure shop` each reloaded the running server, the PID was 21656 before and after, `admin.sock` existed, `netstat` showed nothing on :2019, `kiln web stop` stopped it, and hosts (#3) and trust (#4) were undone. |
 | 2026-10-21 | **P1-08 done (Windows):** ADR 0013. New `kiln-fetch` (verified HTTPS downloads: digest first, OS trust store, cache) and `kiln-php` (windows.php.net index, latest-patch-only, safe extraction, php.ini defaults, start-up check); `php_versions` table; `kiln php available/install/list/remove`; `kiln web install` downloads Caddy. 20 new tests, 148 total. Real install of PHP 8.4.27 and download of Caddy 2.11.7 verified; fixed I-48 (body timeout) and I-49 (folder rename) on the way. |
 | 2026-10-22 | **P1-09 done (Windows):** ADR 0014. New `kiln-supervisor` (separate binary; `pools.json` desired state; staggered recycle limits; respawn on the same port; crash = non-zero exit; kill-on-close job), `kiln-sys::background` shared helpers, PHP routes in the Caddy config (`php_fastcgi` expansion, `least_conn`, time-bounded retries, no passive checks). `kiln web start/stop/status` manage the pool; `kiln php default/workers` switch live. 19 new tests, 167 total; real end-to-end: 400 requests across about 30 recycling workers, 0 failures. Found I-50 (Caddy reload vs recycling, one request) and fixed I-51. |
+| 2026-10-22 | **CI:** macOS moved to nightly + manual dispatch; Windows and Linux on every push (`c37bf8a`). The macOS job takes about 30 s but waited many minutes for a runner. |
+| 2026-10-22 | **P1-10 done:** ADR 0015. New `kiln-sites` (document-root drivers for Laravel, Symfony, Drupal, Craft, Bedrock, WordPress, PHP, static; links + parked folders with precedence), `parked` table, `kiln park/unpark`, richer `kiln sites`, hosts sync covering parked sites. Valet considered, not used. 10 new tests, 177 total; the real Caddy+PHP test confirms a parked Laravel project never serves `.env`. |
 
 ## How to update this file
 

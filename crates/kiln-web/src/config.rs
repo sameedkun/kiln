@@ -38,6 +38,8 @@ pub struct SiteSpec {
     pub root: PathBuf,
     /// Serve over HTTPS (and redirect HTTP to it). Off by default (ADR 0011).
     pub secure: bool,
+    /// Route PHP to the worker pool (ADR 0014). `false` for static sites (ADR 0015 §2).
+    pub php: bool,
 }
 
 /// The CA files Caddy gets: the root certificate (no key) and the intermediate pair, from
@@ -171,11 +173,11 @@ impl WebConfig {
     }
 
     /// PHP through the worker pool when there is one, static files otherwise.
-    fn site_handler(&self, root: &Path) -> Result<Handler, ConfigError> {
-        if self.php_upstreams.is_empty() {
-            Handler::files(root)
+    fn site_handler(&self, site: &SiteSpec) -> Result<Handler, ConfigError> {
+        if site.php && !self.php_upstreams.is_empty() {
+            Handler::php(&site.root, &self.php_upstreams)
         } else {
-            Handler::php(root, &self.php_upstreams)
+            Handler::files(&site.root)
         }
     }
 
@@ -189,9 +191,9 @@ impl WebConfig {
             if site.secure {
                 let target = origin("https", host, self.https_port, 443) + "{http.request.uri}";
                 plain_routes.push(Route::for_host(host, Handler::redirect(target)));
-                tls_routes.push(Route::for_host(host, self.site_handler(&site.root)?));
+                tls_routes.push(Route::for_host(host, self.site_handler(site)?));
             } else {
-                plain_routes.push(Route::for_host(host, self.site_handler(&site.root)?));
+                plain_routes.push(Route::for_host(host, self.site_handler(site)?));
             }
         }
         plain_routes.push(Route::not_linked());
@@ -714,6 +716,7 @@ mod tests {
             host: HostName::new(&format!("{name}.test"), &Tld::default()).unwrap(),
             root: PathBuf::from(format!("/srv/{name}")),
             secure,
+            php: true,
         }
     }
 
@@ -939,6 +942,23 @@ mod tests {
             lb["retry_match"][0]["method"],
             serde_json::json!(["GET", "HEAD"])
         );
+    }
+
+    #[test]
+    fn a_static_site_skips_php_even_with_a_pool() {
+        let mut docs = site("docs", false);
+        docs.php = false;
+        let value = json(&with_php(vec![site("blog", false), docs]));
+        let routes = servers(&value)[HTTP_SERVER]["routes"].as_array().unwrap();
+        assert_eq!(
+            routes[0]["handle"][0]["handler"], "subroute",
+            "blog runs PHP"
+        );
+        assert_eq!(
+            routes[1]["handle"][0]["handler"], "file_server",
+            "docs is static"
+        );
+        assert_eq!(routes[1]["handle"][0]["root"], "/srv/docs");
     }
 
     #[test]

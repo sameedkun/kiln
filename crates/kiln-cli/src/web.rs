@@ -101,18 +101,7 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let sites = store
-        .sites()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|s| {
-            Ok(SiteSpec {
-                host: host_name(&s.host)?,
-                root: s.root,
-                secure: s.secure,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let sites: Vec<SiteSpec> = resolved(store)?.sites.iter().map(spec).collect();
     let ca = if sites.iter().any(|s| s.secure) {
         Some(ca_files()?)
     } else {
@@ -129,6 +118,47 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         admin_socket: run.admin_socket(),
         php_upstreams: crate::pool::running_upstreams()?,
     })
+}
+
+/// Every site Kiln serves: links plus parked subfolders, each with its detected driver
+/// ([ADR 0015]).
+///
+/// [ADR 0015]: ../../../docs/adr/0015-parked-folders-and-drivers.md
+fn resolved(store: &StateStore) -> Result<kiln_sites::Resolved, String> {
+    let links: Vec<kiln_sites::Link> = store
+        .sites()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| kiln_sites::Link {
+            host: s.host,
+            project: s.root,
+            secure: s.secure,
+        })
+        .collect();
+    let parked = store.parked().map_err(|e| e.to_string())?;
+    Ok(kiln_sites::resolve(&links, &parked, &Tld::default()))
+}
+
+fn spec(site: &kiln_sites::Site) -> SiteSpec {
+    SiteSpec {
+        host: site.host.clone(),
+        root: site.document_root.clone(),
+        secure: site.secure,
+        php: site.driver.uses_php(),
+    }
+}
+
+/// "Detected laravel: serving …\public" when the driver picked a subfolder.
+fn describe(site: &kiln_sites::Site) -> String {
+    if site.document_root == site.project {
+        format!("{} site", site.driver.name())
+    } else {
+        format!(
+            "{} project, serving {}",
+            site.driver.name(),
+            site.document_root.display()
+        )
+    }
 }
 
 /// After a site change: reload the running server live (ADR 0012), so the change takes
@@ -207,13 +237,88 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
         None => println!("Linked {host} → {}.", root.display()),
     }
     let config = web_config(&store)?;
-    if let Some(site) = config.sites.iter().find(|s| s.host == host) {
-        println!("URL: {}", config.site_url(site));
+    if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
+        println!("Detected: {}.", describe(site));
+        println!("URL: {}", config.site_url(&spec(site)));
     }
     if secure {
         trust_hint()?;
     }
     hosts_hint(host.as_str());
+    apply_site_change(&store)
+}
+
+/// The folder to park or unpark: `path`, or the current folder.
+fn folder_arg(path: Option<PathBuf>) -> Result<PathBuf, String> {
+    let path = match path {
+        Some(path) => path,
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let full =
+        std::fs::canonicalize(&path).map_err(|e| format!("cannot use {}: {e}", path.display()))?;
+    if !full.is_dir() {
+        return Err(format!("{} is not a folder", full.display()));
+    }
+    Ok(strip_verbatim(full))
+}
+
+/// `kiln park [folder]`: every subfolder becomes `<name>.test` ([ADR 0015] §6).
+///
+/// [ADR 0015]: ../../../docs/adr/0015-parked-folders-and-drivers.md
+pub fn park(path: Option<PathBuf>) -> Result<(), String> {
+    let folder = folder_arg(path)?;
+    let mut store = open_store()?;
+    if store.park(&folder).map_err(|e| e.to_string())? {
+        println!(
+            "Parked {}: each subfolder is served as <name>.test.",
+            folder.display()
+        );
+    } else {
+        println!("{} is already parked.", folder.display());
+    }
+    let all = resolved(&store)?;
+    let here: Vec<&kiln_sites::Site> = all
+        .sites
+        .iter()
+        .filter(|s| s.source == kiln_sites::Source::Parked(folder.clone()))
+        .collect();
+    for site in &here {
+        println!("  {:<24} {}", site.host.as_str(), describe(site));
+    }
+    if here.is_empty() {
+        println!("  (no subfolders yet)");
+    }
+    for skipped in all
+        .skipped
+        .iter()
+        .filter(|s| s.folder.parent() == Some(folder.as_path()))
+    {
+        println!("  skipped {}: {}", skipped.folder.display(), skipped.reason);
+    }
+    let missing = here
+        .iter()
+        .filter(|s| !hosts_names().iter().any(|n| n == s.host.as_str()))
+        .count();
+    if missing > 0 {
+        println!("{missing} of them aren't in the hosts file yet; run `kiln hosts sync`.");
+    }
+    apply_site_change(&store)
+}
+
+/// `kiln unpark [folder]`.
+pub fn unpark(path: Option<PathBuf>) -> Result<(), String> {
+    let folder = folder_arg(path)?;
+    let mut store = open_store()?;
+    if !store.unpark(&folder).map_err(|e| e.to_string())? {
+        return Err(format!(
+            "{} isn't parked (see `kiln sites`)",
+            folder.display()
+        ));
+    }
+    println!(
+        "Unparked {}. Its folders are untouched; `kiln hosts sync` removes their names.",
+        folder.display()
+    );
     apply_site_change(&store)
 }
 
@@ -233,10 +338,24 @@ pub fn unlink(name: &str) -> Result<(), String> {
         .remove_site(host.as_str())
         .map_err(|e| e.to_string())?
     {
+        if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host)
+            && let kiln_sites::Source::Parked(dir) = &site.source
+        {
+            return Err(format!(
+                "{host} comes from the parked folder {}; unpark it or rename the subfolder",
+                dir.display()
+            ));
+        }
         return Err(format!("{host} isn't linked"));
     }
     println!("Unlinked {host}. Its files are untouched.");
-    if hosts_names().iter().any(|n| n == host.as_str()) {
+    // A secured parked site was pinned as a link (ADR 0015 §8); it falls back to parked.
+    if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
+        println!(
+            "It's still served from its parked folder, over plain HTTP: {}.",
+            describe(site)
+        );
+    } else if hosts_names().iter().any(|n| n == host.as_str()) {
         println!("It's still in the hosts file; `kiln hosts sync` removes it.");
     }
     apply_site_change(&store)
@@ -252,7 +371,36 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
         .set_site_secure(host.as_str(), secure)
         .map_err(|e| e.to_string())?
     {
-        return Err(format!("{host} isn't linked; run `kiln link` first"));
+        // A parked site has no link row to carry the flag: securing pins it as one
+        // (ADR 0015 §8); parked sites are already plain HTTP.
+        let parked = resolved(&store)?
+            .sites
+            .into_iter()
+            .find(|s| s.host == host && matches!(s.source, kiln_sites::Source::Parked(_)));
+        match parked {
+            Some(site) if secure => {
+                store
+                    .put_site(&SiteRecord {
+                        host: host.to_string(),
+                        root: site.project.clone(),
+                        secure: true,
+                    })
+                    .map_err(|e| e.to_string())?;
+                println!(
+                    "{host} comes from a parked folder; pinned it as a link to {} so it can keep HTTPS.",
+                    site.project.display()
+                );
+            }
+            Some(_) => {
+                println!("{host} is a parked site and already uses plain HTTP.");
+                return Ok(());
+            }
+            None => {
+                return Err(format!(
+                    "{host} isn't a site; run `kiln link` or `kiln park` first"
+                ));
+            }
+        }
     }
     let config = web_config(&store)?;
     let url = config
@@ -291,9 +439,15 @@ fn trust_hint() -> Result<(), String> {
 
 pub fn sites() -> Result<(), String> {
     let store = open_store()?;
-    let records = store.sites().map_err(|e| e.to_string())?;
-    if records.is_empty() {
-        println!("No sites linked yet. Run `kiln link` in a project folder.");
+    let parked = store.parked().map_err(|e| e.to_string())?;
+    for dir in &parked {
+        println!("Parked: {}", dir.display());
+    }
+    let all = resolved(&store)?;
+    if all.sites.is_empty() {
+        println!(
+            "No sites yet. Run `kiln link` in a project folder, or `kiln park` in a folder of projects."
+        );
         return Ok(());
     }
     // Without the CA a secure site can't be configured, but it can still be listed.
@@ -309,23 +463,25 @@ pub fn sites() -> Result<(), String> {
         php_upstreams: Vec::new(),
     });
     let in_hosts = hosts_names();
-    for record in records {
-        let spec = SiteSpec {
-            host: host_name(&record.host)?,
-            root: record.root.clone(),
-            secure: record.secure,
-        };
-        let url = config.site_url(&spec);
-        let dns = if in_hosts.contains(&record.host) {
+    for site in &all.sites {
+        let url = config.site_url(&spec(site));
+        let dns = if in_hosts.iter().any(|n| n == site.host.as_str()) {
             ""
         } else {
             "  (not in hosts file)"
         };
+        let source = match &site.source {
+            kiln_sites::Source::Link => "link",
+            kiln_sites::Source::Parked(_) => "parked",
+        };
         println!(
-            "{:<6} {url:<36} {}{dns}",
-            if record.secure { "https" } else { "http" },
-            record.root.display()
+            "{url:<34} {:<17} {source:<6} {}{dns}",
+            site.driver.name(),
+            site.document_root.display()
         );
+    }
+    for skipped in &all.skipped {
+        println!("skipped {}: {}", skipped.folder.display(), skipped.reason);
     }
     Ok(())
 }
@@ -535,16 +691,21 @@ pub fn print_config() -> Result<(), String> {
 
 pub fn hosts_sync(yes: bool) -> Result<(), String> {
     let store = open_store()?;
-    let names: Vec<String> = store
-        .sites()
-        .map_err(|e| e.to_string())?
+    // Links and parked sites alike: the hosts file has no wildcards (ADR 0015 §9).
+    let names: Vec<String> = resolved(&store)?
+        .sites
         .into_iter()
-        .map(|s| s.host)
+        .map(|s| s.host.to_string())
         .collect();
     drop(store);
     let tld = Tld::default();
     let (tld, entries) = apply::site_entries(&names, tld.as_str())?;
-    apply::hosts_set(tld, entries, yes)
+    apply::hosts_set(tld, entries, yes)?;
+    // New parked folders are served from now on, without a separate reload.
+    if is_running()? {
+        apply_site_change(&open_store()?)?;
+    }
+    Ok(())
 }
 
 /// Reloads the running server with `php_upstreams` instead of the running pool's, for a

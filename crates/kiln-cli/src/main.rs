@@ -60,11 +60,15 @@ enum Command {
     },
     /// Stop serving a site. Its files are untouched.
     Unlink { name: String },
+    /// Serve every subfolder of a folder as <subfolder>.test (default: the current folder).
+    Park { path: Option<PathBuf> },
+    /// Stop serving a parked folder's subfolders. Nothing is deleted.
+    Unpark { path: Option<PathBuf> },
     /// Turn HTTPS on for a site (HTTP then redirects to it). Needs `kiln ca init` once.
     Secure { name: String },
     /// Turn HTTPS off for a site again; it is served over plain HTTP.
     Unsecure { name: String },
-    /// List linked sites with their URLs.
+    /// List sites (linked and parked) with their URLs, framework and document root.
     Sites,
     /// PHP runtimes from windows.php.net (verified downloads, into Kiln's own folder).
     Php {
@@ -163,7 +167,7 @@ enum HostsAction {
         #[arg(long, short)]
         yes: bool,
     },
-    /// Make Kiln's block list exactly the linked sites.
+    /// Make Kiln's block list exactly the linked and parked sites (and reload the server).
     Sync {
         /// Do not ask for confirmation.
         #[arg(long, short)]
@@ -304,6 +308,8 @@ fn main() -> ExitCode {
         } => web::hosts_sync(yes),
         Command::Link { name, path, secure } => web::link(name, path, secure),
         Command::Unlink { name } => web::unlink(&name),
+        Command::Park { path } => web::park(path),
+        Command::Unpark { path } => web::unpark(path),
         Command::Secure { name } => web::set_secure(&name, true),
         Command::Unsecure { name } => web::set_secure(&name, false),
         Command::Sites => web::sites(),
