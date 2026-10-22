@@ -222,14 +222,162 @@ pub fn set_workers(count: usize) -> Result<(), String> {
 /// Applies a changed pool to a running server without downtime, or leaves it for the next
 /// start.
 fn apply_pool_change(store: &StateStore) -> Result<(), String> {
-    if crate::pool::running()?.is_none() || !crate::web::is_running()? {
-        println!("It takes effect when the web server starts (`kiln web start`).");
-        return Ok(());
+    crate::web::apply_site_change(store)
+}
+
+/// The site a command means: `name` if given, else the site whose project folder contains the
+/// current folder.
+fn site_host(store: &StateStore, name: Option<String>) -> Result<String, String> {
+    if let Some(name) = name {
+        return crate::web::host_name(&name).map(|h| h.to_string());
     }
-    let Some(new) = crate::pool::plan(store)? else {
-        return Ok(());
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let sites = kiln_runtime::sites(store).map_err(|e| e.to_string())?;
+    kiln_runtime::site_for_dir(&sites.sites, &cwd)
+        .map(|s| s.host.to_string())
+        .ok_or_else(|| {
+            format!(
+                "{} isn't inside a linked or parked site; name the site, e.g. `kiln isolate 8.3 blog`",
+                cwd.display()
+            )
+        })
+}
+
+/// `kiln isolate <version> [site]` ([ADR 0016] §1).
+///
+/// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+pub fn isolate(version: &str, site: Option<String>) -> Result<(), String> {
+    if !kiln_runtime::is_version_spec(version) {
+        return Err(format!(
+            "{version:?} isn't a PHP version; use e.g. 8.3 or 8.3.36"
+        ));
+    }
+    let mut store = open_store()?;
+    let host = site_host(&store, site)?;
+    let sites = kiln_runtime::sites(&store).map_err(|e| e.to_string())?;
+    if !sites.sites.iter().any(|s| s.host.as_str() == host) {
+        return Err(format!(
+            "{host} isn't a linked or parked site (see `kiln sites`)"
+        ));
+    }
+    let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+    let Some(php) = kiln_runtime::pick(&installed, version) else {
+        return Err(format!(
+            "PHP {version} isn't installed; run `kiln php install {version}` first"
+        ));
     };
-    crate::pool::switch(&new, crate::web::reload_with_php)?;
-    println!("Switched the running server over without downtime.");
+    store
+        .isolate(&host, version.trim())
+        .map_err(|e| e.to_string())?;
+    println!(
+        "{host} now uses PHP {} (pinned to {}).",
+        php.version,
+        version.trim()
+    );
+    if version.trim().split('.').count() == 2 {
+        println!("It follows the newest installed {}.x.", version.trim());
+    }
+    crate::web::apply_site_change(&store)
+}
+
+/// `kiln unisolate [site]`.
+pub fn unisolate(site: Option<String>) -> Result<(), String> {
+    let mut store = open_store()?;
+    let host = site_host(&store, site)?;
+    if !store.unisolate(&host).map_err(|e| e.to_string())? {
+        return Err(format!("{host} isn't pinned to a PHP version"));
+    }
+    let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+    let default = kiln_runtime::default_php(&store, &installed).map_err(|e| e.to_string())?;
+    println!(
+        "{host} uses the default PHP again ({}).",
+        default.map_or_else(|| "none installed".to_owned(), |p| p.version)
+    );
+    crate::web::apply_site_change(&store)
+}
+
+/// `kiln which [folder]`: what `php` and `composer` run there, and why.
+pub fn which(dir: Option<PathBuf>) -> Result<(), String> {
+    let dir = match dir {
+        Some(dir) => dir,
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let store = open_store()?;
+    let here = kiln_runtime::php_for_dir(&store, &dir).map_err(|e| e.to_string())?;
+    let why = match (&here.site, &here.php.pinned, here.php.fell_back) {
+        (Some(site), Some(pin), false) => format!("{site} is pinned to {pin}"),
+        (Some(site), Some(pin), true) => {
+            format!("{site} is pinned to {pin}, which isn't installed, so the default")
+        }
+        (Some(site), None, _) => format!("{site} uses the default"),
+        (None, _, _) => "not inside a site, so the default".to_owned(),
+    };
+    match &here.php.php {
+        Some(php) => {
+            println!("php      → PHP {} ({why})", php.version);
+            println!("           {}", php.dir.join(kiln_php::PHP_EXE).display());
+        }
+        None => println!("php      → none: no PHP installed by Kiln (`kiln php install 8.4`)"),
+    }
+    let phar = local_dir()?.join(kiln_runtime::shim::COMPOSER_PHAR);
+    if phar.is_file() {
+        println!("composer → {} with that PHP", phar.display());
+    } else {
+        println!("composer → not installed (`kiln composer install`)");
+    }
+    let shims = local_dir()?.join(kiln_runtime::shim::SHIMS_DIR);
+    if !shims
+        .join(kiln_runtime::shim::Tool::Php.file_name())
+        .is_file()
+    {
+        println!("The `php` / `composer` commands use this after `kiln shims install`.");
+    }
+    Ok(())
+}
+
+const COMPOSER_VERSIONS_URL: &str = "https://getcomposer.org/versions";
+
+/// `kiln composer install`: the current stable Composer, SHA-256 verified ([ADR 0016] §10).
+///
+/// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+pub fn composer_install() -> Result<(), String> {
+    let fetcher = fetcher()?;
+    let index = fetcher
+        .get_text(COMPOSER_VERSIONS_URL, 64 * 1024)
+        .map_err(|e| e.to_string())?;
+    let json: serde_json::Value =
+        serde_json::from_str(&index).map_err(|e| format!("unexpected Composer index: {e}"))?;
+    let version = json["stable"][0]["version"]
+        .as_str()
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+        .ok_or("unexpected Composer index: no stable version")?;
+    let base = format!("https://getcomposer.org/download/{version}/composer.phar");
+    let sum = fetcher
+        .get_text(&format!("{base}.sha256sum"), 1024)
+        .map_err(|e| e.to_string())?;
+    let expected = kiln_fetch::Expected::sha256(sum.split_whitespace().next().unwrap_or(""))
+        .map_err(|e| format!("unexpected Composer checksum file: {e}"))?;
+    println!("Composer {version}, SHA-256 {}", expected.hex());
+    let label = format!("Downloading composer {version}");
+    let cached = fetcher
+        .fetch(
+            &base,
+            &format!("composer-{version}.phar"),
+            &expected,
+            &mut progress_printer(&label),
+        )
+        .map_err(|e| e.to_string())?;
+    let dest = local_dir()?.join(kiln_runtime::shim::COMPOSER_PHAR);
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(&cached, &dest).map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
+    open_store()?
+        .set_setting("composer.version", version)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "Verified and installed Composer {version} as {}.",
+        dest.display()
+    );
     Ok(())
 }

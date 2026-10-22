@@ -8,6 +8,7 @@ pub mod hosts;
 pub mod hosts_op;
 #[cfg(windows)]
 pub mod trust;
+pub mod user_path;
 
 use std::net::IpAddr;
 

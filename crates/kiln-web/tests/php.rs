@@ -154,20 +154,20 @@ fn serves_php_through_recycling_workers_and_switches_pools_live() {
                 host: HostName::new("blog.test", &Tld::default()).unwrap(),
                 root: site_root.clone(),
                 secure: false,
-                php: true,
+                php_pool: Some("pool".into()),
             },
             SiteSpec {
                 host: parked_app.host.clone(),
                 root: parked_app.document_root.clone(),
                 secure: false,
-                php: parked_app.driver.uses_php(),
+                php_pool: parked_app.driver.uses_php().then(|| "pool".to_owned()),
             },
         ],
         ca: None,
         storage_dir: dir.path().join("caddy").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
-        php_upstreams: upstreams,
+        php_pools: std::collections::BTreeMap::from([("pool".to_owned(), upstreams)]),
     };
     server.start(&config(first.upstreams())).unwrap();
 

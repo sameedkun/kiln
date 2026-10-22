@@ -29,6 +29,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
 };
+use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -38,6 +39,10 @@ use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
+use windows_sys::Win32::System::Registry::{
+    HKEY_CURRENT_USER, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    RegDeleteTreeW, RegGetValueW, RegSetKeyValueW,
+};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
@@ -45,7 +50,9 @@ use windows_sys::Win32::System::Threading::{
     QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    HWND_BROADCAST, SMTO_ABORTIFHUNG, SW_HIDE, SendMessageTimeoutW, WM_SETTINGCHANGE,
+};
 
 fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(Some(0)).collect()
@@ -410,6 +417,160 @@ fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u
 }
 
 // ---------------------------------------------------------------------------------------------
+// Current-user registry strings (user environment variables)
+// ---------------------------------------------------------------------------------------------
+
+/// The current user's environment variables live here (`HKCU\Environment`).
+pub const USER_ENVIRONMENT_KEY: &str = "Environment";
+
+/// A string value: its text, and whether it is `REG_EXPAND_SZ` (holds `%VARS%`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegString {
+    pub value: String,
+    pub expandable: bool,
+}
+
+/// Reads `HKCU\<subkey>\<name>` as stored (`%VARS%` are **not** expanded). `Ok(None)` if the
+/// key or value doesn't exist.
+pub fn read_user_reg_string(subkey: &str, name: &str) -> io::Result<Option<RegString>> {
+    let subkey_w = wide(OsStr::new(subkey));
+    let name_w = wide(OsStr::new(name));
+    let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    let mut kind = 0u32;
+    let mut bytes = 0u32;
+    // SAFETY: valid NUL-terminated strings; a null buffer asks for the size in bytes.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            name_w.as_ptr(),
+            flags,
+            &raw mut kind,
+            std::ptr::null_mut(),
+            &raw mut bytes,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    let mut buffer = vec![0u16; usize::try_from(bytes).unwrap_or(0) / 2 + 1];
+    let mut len = u32::try_from(buffer.len() * 2).unwrap_or(u32::MAX);
+    // SAFETY: `buffer` holds `len` bytes; the other pointers are valid as above.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            name_w.as_ptr(),
+            flags,
+            &raw mut kind,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            &raw mut len,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    let text: Vec<u16> = buffer.into_iter().take_while(|&c| c != 0).collect();
+    Ok(Some(RegString {
+        value: String::from_utf16_lossy(&text),
+        expandable: kind == REG_EXPAND_SZ,
+    }))
+}
+
+/// Writes `HKCU\<subkey>\<name>` (creating the key if needed) as `REG_EXPAND_SZ` or `REG_SZ`.
+pub fn write_user_reg_string(subkey: &str, name: &str, value: &RegString) -> io::Result<()> {
+    let subkey_w = wide(OsStr::new(subkey));
+    let name_w = wide(OsStr::new(name));
+    let data = wide(OsStr::new(&value.value));
+    let kind = if value.expandable {
+        REG_EXPAND_SZ
+    } else {
+        REG_SZ
+    };
+    // SAFETY: valid NUL-terminated strings; `data` is passed with its size in bytes, including
+    // the terminating NUL.
+    let status = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            name_w.as_ptr(),
+            kind,
+            data.as_ptr().cast::<c_void>(),
+            u32::try_from(data.len() * 2).unwrap_or(u32::MAX),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    Ok(())
+}
+
+/// Deletes `HKCU\<subkey>` and everything under it. Only for test keys Kiln created.
+pub fn delete_user_reg_tree(subkey: &str) -> io::Result<()> {
+    let subkey_w = wide(OsStr::new(subkey));
+    // SAFETY: valid NUL-terminated string.
+    let status = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, subkey_w.as_ptr()) };
+    // With a subkey name, the key itself goes too, not only its contents.
+    if status != 0 && status != ERROR_FILE_NOT_FOUND {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    Ok(())
+}
+
+/// Tells running programs (Explorer, new terminals) that environment variables changed.
+pub fn broadcast_environment_change() {
+    let what = wide(OsStr::new(USER_ENVIRONMENT_KEY));
+    let mut result = 0usize;
+    // SAFETY: `what` is a valid NUL-terminated string that outlives the call; the timeout
+    // keeps a hung window from blocking us.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            what.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &raw mut result,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Console control events
+// ---------------------------------------------------------------------------------------------
+
+unsafe extern "system" fn swallow_ctrl_event(_ctrl_type: u32) -> windows_sys::core::BOOL {
+    1 // handled: this process stays alive; the child sharing the console decides for itself
+}
+
+/// Keeps this process alive on Ctrl+C / Ctrl+Break, for a wrapper that waits for a child on
+/// the same console ([ADR 0016] §9).
+///
+/// Unlike `SetConsoleCtrlHandler(NULL, TRUE)`, a registered handler isn't inherited, so the
+/// child still gets (and handles) Ctrl+C normally.
+///
+/// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+pub fn survive_ctrl_c() -> io::Result<()> {
+    // SAFETY: `swallow_ctrl_event` matches PHANDLER_ROUTINE and lives for the whole process.
+    if unsafe { SetConsoleCtrlHandler(Some(swallow_ctrl_event), 1) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // Job objects
 // ---------------------------------------------------------------------------------------------
 
@@ -759,6 +920,36 @@ mod tests {
         let long = PathBuf::from(format!("C:\\{}", "x".repeat(MAX_UNIX_SOCKET_PATH)));
         let err = connect_unix(&long).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+    }
+
+    #[test]
+    fn user_registry_strings_round_trip_in_a_private_key() {
+        // Never the real HKCU\Environment: a throwaway key, deleted afterwards.
+        let key = format!(r"Software\{}", unique("KilnTest"));
+        assert_eq!(read_user_reg_string(&key, "Path").unwrap(), None);
+        let value = RegString {
+            value: r"%USERPROFILE%\bin;C:\Tools".into(),
+            expandable: true,
+        };
+        write_user_reg_string(&key, "Path", &value).unwrap();
+        assert_eq!(
+            read_user_reg_string(&key, "Path").unwrap(),
+            Some(value),
+            "not expanded"
+        );
+        let plain = RegString {
+            value: "C:\\Ünïcode\\bin".into(),
+            expandable: false,
+        };
+        write_user_reg_string(&key, "Other", &plain).unwrap();
+        assert_eq!(read_user_reg_string(&key, "Other").unwrap(), Some(plain));
+        delete_user_reg_tree(&key).unwrap();
+        assert_eq!(
+            read_user_reg_string(&key, "Path").unwrap(),
+            None,
+            "key removed"
+        );
+        delete_user_reg_tree(&key).unwrap(); // already gone: fine
     }
 
     #[test]

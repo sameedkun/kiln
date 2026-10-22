@@ -41,7 +41,7 @@ fn site(dir: &Path, name: &str, secure: bool) -> SiteSpec {
         host: HostName::new(&format!("{name}.test"), &Tld::default()).unwrap(),
         root,
         secure,
-        php: false,
+        php_pool: None,
     }
 }
 
@@ -162,7 +162,7 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
         storage_dir: dir.path().join("run").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
-        php_upstreams: Vec::new(),
+        php_pools: std::collections::BTreeMap::new(),
     };
 
     // HTTP by default: no secure site, so no HTTPS listener at all.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper", "crates/kiln-pki", "crates/kiln-web", "crates/kiln-fetch", "crates/kiln-php", "crates/kiln-supervisor", "crates/kiln-sites"]
+members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper", "crates/kiln-pki", "crates/kiln-web", "crates/kiln-fetch", "crates/kiln-php", "crates/kiln-supervisor", "crates/kiln-sites", "crates/kiln-runtime"]
 exclude = ["spikes"]
 
 [workspace.package]
@@ -24,6 +24,7 @@ kiln-fetch = { path = "crates/kiln-fetch" }
 kiln-php = { path = "crates/kiln-php" }
 kiln-supervisor = { path = "crates/kiln-supervisor" }
 kiln-sites = { path = "crates/kiln-sites" }
+kiln-runtime = { path = "crates/kiln-runtime" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

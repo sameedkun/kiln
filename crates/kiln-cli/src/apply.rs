@@ -51,6 +51,7 @@ mod windows {
     use kiln_platform::DnsEntry;
     use kiln_platform::hosts_op::{HostsBlockOp, PrivilegedHosts, register_hosts_block};
     use kiln_platform::trust::{TrustCaOp, register_trust_ca};
+    use kiln_platform::user_path::{RegistryPath, UserPathOp, register_user_path};
     use kiln_state::StateStore;
 
     use super::{ca_store, confirm, print_preview};
@@ -87,6 +88,7 @@ mod windows {
         let mut registry = Registry::default();
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
         register_trust_ca(&mut registry);
+        register_user_path(&mut registry, Rc::new(RegistryPath));
         let mut engine = Engine::new(store, registry);
         let recovery = engine.recover().map_err(|e| e.to_string())?;
         if !recovery.rolled_back.is_empty() {
@@ -157,6 +159,70 @@ mod windows {
         ctx.session.finish().map_err(|e| e.to_string())?;
         println!("Undone.");
         report_elevation(&ctx.session);
+        Ok(())
+    }
+
+    /// `kiln shims install` ([ADR 0016] §8, §11): copies `kiln-shim` in as `php.exe` and
+    /// `composer.exe`, then puts their folder first on the user PATH as a journaled, undoable
+    /// operation, after showing which `php` new terminals get now and after.
+    ///
+    /// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+    pub fn shims_install(yes: bool) -> Result<(), String> {
+        use kiln_runtime::shim::{SHIMS_DIR, Tool};
+        let local = kiln_state::default_local_dir()
+            .ok_or("cannot determine Kiln's local data directory")?;
+        let shims = local.join(SHIMS_DIR);
+        let source = std::env::current_exe()
+            .map_err(|e| e.to_string())?
+            .with_file_name(format!("kiln-shim{}", std::env::consts::EXE_SUFFIX));
+        if !source.is_file() {
+            return Err(format!(
+                "{} not found; build or install kiln-shim next to kiln",
+                source.display()
+            ));
+        }
+        std::fs::create_dir_all(&shims).map_err(|e| e.to_string())?;
+        for tool in [Tool::Php, Tool::Composer] {
+            let target = shims.join(tool.file_name());
+            std::fs::copy(&source, &target).map_err(|e| {
+                format!(
+                    "cannot write {} (is a `{}` command still running?): {e}",
+                    target.display(),
+                    tool.name()
+                )
+            })?;
+        }
+        println!("Shims written to {}.", shims.display());
+
+        let path_now = std::env::var("PATH").unwrap_or_default();
+        for tool in [Tool::Php, Tool::Composer] {
+            match super::which_on(&path_now, tool.name()) {
+                Some(found) if found.starts_with(&shims) => {}
+                Some(found) => println!(
+                    "`{}` in new terminals: now {}; after this, Kiln's shim (it follows each site's PHP).",
+                    tool.name(),
+                    found.display()
+                ),
+                None => println!(
+                    "`{}` in new terminals: now not found; after this, Kiln's shim.",
+                    tool.name()
+                ),
+            }
+        }
+
+        let mut ctx = open()?;
+        let op: Box<dyn Operation> = Box::new(UserPathOp::new(&shims, Rc::new(RegistryPath)));
+        print_preview(&op.preview().map_err(|e| e.to_string())?, "(empty)");
+        if !yes && !confirm("Change your user PATH? (`kiln undo` puts it back)") {
+            println!("Nothing was changed on PATH. The shims are in place but not on PATH.");
+            return Ok(());
+        }
+        let report = ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
+        println!(
+            "Done. Recorded as operation #{} (undo with `kiln undo {}`).",
+            report.entry_ids[0], report.entry_ids[0]
+        );
+        println!("Open a new terminal to use it; terminals already open keep their old PATH.");
         Ok(())
     }
 
@@ -280,7 +346,7 @@ pub fn ca_info() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub use windows::{ca_trust, hosts_set, undo};
+pub use windows::{ca_trust, hosts_set, shims_install, undo};
 
 #[cfg(not(windows))]
 pub fn ca_trust(_yes: bool) -> Result<(), String> {
@@ -295,4 +361,23 @@ pub fn hosts_set(_tld: Tld, _entries: Vec<DnsEntry>, _yes: bool) -> Result<(), S
 #[cfg(not(windows))]
 pub fn undo(_id: u64, _force: bool, _yes: bool) -> Result<(), String> {
     Err("undo is not available on this platform yet (Linux: P1-04)".into())
+}
+
+#[cfg(not(windows))]
+pub fn shims_install(_yes: bool) -> Result<(), String> {
+    Err("the php/composer shims are only available on Windows so far (Linux: P1-04)".into())
+}
+
+/// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    path.split(';')
+        .filter(|d| !d.trim().is_empty())
+        .flat_map(|dir| {
+            exts.split(';').map(move |ext| {
+                std::path::Path::new(dir.trim()).join(format!("{name}{}", ext.to_ascii_lowercase()))
+            })
+        })
+        .find(|candidate| candidate.is_file())
 }

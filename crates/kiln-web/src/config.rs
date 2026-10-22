@@ -38,8 +38,9 @@ pub struct SiteSpec {
     pub root: PathBuf,
     /// Serve over HTTPS (and redirect HTTP to it). Off by default (ADR 0011).
     pub secure: bool,
-    /// Route PHP to the worker pool (ADR 0014). `false` for static sites (ADR 0015 §2).
-    pub php: bool,
+    /// The PHP pool (a version, e.g. `8.3.36`) serving this site (ADR 0016 §6). `None` for
+    /// static sites (ADR 0015 §2).
+    pub php_pool: Option<String>,
 }
 
 /// The CA files Caddy gets: the root certificate (no key) and the intermediate pair, from
@@ -67,8 +68,9 @@ pub struct WebConfig {
     pub log_file: PathBuf,
     /// The admin endpoint's Unix socket (ADR 0012). Protected by its folder's permissions.
     pub admin_socket: PathBuf,
-    /// php-cgi workers (ADR 0014). Empty: sites are served as static files only.
-    pub php_upstreams: Vec<SocketAddr>,
+    /// php-cgi pools by id, i.e. version (ADR 0014, 0016). A site whose pool is missing here is
+    /// served as static files.
+    pub php_pools: BTreeMap<String, Vec<SocketAddr>>,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -174,10 +176,14 @@ impl WebConfig {
 
     /// PHP through the worker pool when there is one, static files otherwise.
     fn site_handler(&self, site: &SiteSpec) -> Result<Handler, ConfigError> {
-        if site.php && !self.php_upstreams.is_empty() {
-            Handler::php(&site.root, &self.php_upstreams)
-        } else {
-            Handler::files(&site.root)
+        let upstreams = site
+            .php_pool
+            .as_ref()
+            .and_then(|id| self.php_pools.get(id))
+            .filter(|upstreams| !upstreams.is_empty());
+        match upstreams {
+            Some(upstreams) => Handler::php(&site.root, upstreams),
+            None => Handler::files(&site.root),
         }
     }
 
@@ -716,7 +722,7 @@ mod tests {
             host: HostName::new(&format!("{name}.test"), &Tld::default()).unwrap(),
             root: PathBuf::from(format!("/srv/{name}")),
             secure,
-            php: true,
+            php_pool: Some("8.4.27".into()),
         }
     }
 
@@ -734,7 +740,7 @@ mod tests {
             storage_dir: "/kiln/caddy/storage".into(),
             log_file: "/kiln/caddy/caddy.log".into(),
             admin_socket: "/kiln/caddy/admin.sock".into(),
-            php_upstreams: Vec::new(),
+            php_pools: BTreeMap::new(),
         }
     }
 
@@ -852,10 +858,13 @@ mod tests {
 
     fn with_php(sites: Vec<SiteSpec>) -> WebConfig {
         let mut cfg = config(sites);
-        cfg.php_upstreams = vec![
-            "127.0.0.1:9101".parse().unwrap(),
-            "127.0.0.1:9102".parse().unwrap(),
-        ];
+        cfg.php_pools = BTreeMap::from([(
+            "8.4.27".to_owned(),
+            vec![
+                "127.0.0.1:9101".parse().unwrap(),
+                "127.0.0.1:9102".parse().unwrap(),
+            ],
+        )]);
         cfg
     }
 
@@ -945,9 +954,29 @@ mod tests {
     }
 
     #[test]
+    fn each_site_reaches_the_pool_of_its_own_version() {
+        let mut legacy = site("legacy", false);
+        legacy.php_pool = Some("8.1.34".into());
+        let mut gone = site("gone", false);
+        gone.php_pool = Some("7.4.33".into()); // no such pool running: static
+        let mut cfg = with_php(vec![site("blog", false), legacy, gone]);
+        cfg.php_pools
+            .insert("8.1.34".into(), vec!["127.0.0.1:9201".parse().unwrap()]);
+        let value = json(&cfg);
+        let routes = servers(&value)[HTTP_SERVER]["routes"].as_array().unwrap();
+        let dial = |i: usize| php_steps(&routes[i])[3]["handle"][0]["upstreams"][0]["dial"].clone();
+        assert_eq!(routes[0]["match"][0]["host"][0], "blog.test");
+        assert_eq!(dial(0), "127.0.0.1:9101");
+        assert_eq!(routes[1]["match"][0]["host"][0], "legacy.test");
+        assert_eq!(dial(1), "127.0.0.1:9201");
+        assert_eq!(routes[2]["match"][0]["host"][0], "gone.test");
+        assert_eq!(routes[2]["handle"][0]["handler"], "file_server");
+    }
+
+    #[test]
     fn a_static_site_skips_php_even_with_a_pool() {
         let mut docs = site("docs", false);
-        docs.php = false;
+        docs.php_pool = None;
         let value = json(&with_php(vec![site("blog", false), docs]));
         let routes = servers(&value)[HTTP_SERVER]["routes"].as_array().unwrap();
         assert_eq!(

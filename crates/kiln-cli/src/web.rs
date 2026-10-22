@@ -6,6 +6,7 @@
 //! [ADR 0011]: ../../../docs/adr/0011-caddy-integration.md
 //! [ADR 0012]: ../../../docs/adr/0012-caddy-admin-channel.md
 
+use std::collections::BTreeMap;
 use std::net::{Ipv6Addr, TcpListener};
 use std::path::{Path, PathBuf};
 
@@ -43,7 +44,7 @@ fn server() -> Result<WebServer, String> {
 }
 
 /// `blog` or `blog.test` → `blog.test`, validated.
-fn host_name(name: &str) -> Result<HostName, String> {
+pub(crate) fn host_name(name: &str) -> Result<HostName, String> {
     let tld = Tld::default();
     let fqdn = if name.ends_with(&format!(".{tld}")) {
         name.to_ascii_lowercase()
@@ -101,7 +102,12 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let sites: Vec<SiteSpec> = resolved(store)?.sites.iter().map(spec).collect();
+    let site_pools = crate::pool::needs(store)?.site_pools;
+    let sites: Vec<SiteSpec> = resolved(store)?
+        .sites
+        .iter()
+        .map(|site| spec(site, &site_pools))
+        .collect();
     let ca = if sites.iter().any(|s| s.secure) {
         Some(ca_files()?)
     } else {
@@ -116,7 +122,7 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         storage_dir: run_dir.join("storage"),
         log_file: run.log_file(),
         admin_socket: run.admin_socket(),
-        php_upstreams: crate::pool::running_upstreams()?,
+        php_pools: crate::pool::running_upstreams()?,
     })
 }
 
@@ -125,26 +131,16 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
 ///
 /// [ADR 0015]: ../../../docs/adr/0015-parked-folders-and-drivers.md
 fn resolved(store: &StateStore) -> Result<kiln_sites::Resolved, String> {
-    let links: Vec<kiln_sites::Link> = store
-        .sites()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|s| kiln_sites::Link {
-            host: s.host,
-            project: s.root,
-            secure: s.secure,
-        })
-        .collect();
-    let parked = store.parked().map_err(|e| e.to_string())?;
-    Ok(kiln_sites::resolve(&links, &parked, &Tld::default()))
+    kiln_runtime::sites(store).map_err(|e| e.to_string())
 }
 
-fn spec(site: &kiln_sites::Site) -> SiteSpec {
+/// The web server's view of a site; `site_pools` maps PHP sites to their pool (ADR 0016 §6).
+fn spec(site: &kiln_sites::Site, site_pools: &BTreeMap<String, String>) -> SiteSpec {
     SiteSpec {
         host: site.host.clone(),
         root: site.document_root.clone(),
         secure: site.secure,
-        php: site.driver.uses_php(),
+        php_pool: site_pools.get(site.host.as_str()).cloned(),
     }
 }
 
@@ -161,22 +157,41 @@ fn describe(site: &kiln_sites::Site) -> String {
     }
 }
 
-/// After a site change: reload the running server live (ADR 0012), so the change takes
-/// effect without dropping it.
-fn apply_site_change(store: &StateStore) -> Result<(), String> {
-    let server = server()?;
-    if matches!(
-        server.status().map_err(|e| e.to_string())?,
-        Status::Running { .. }
-    ) {
-        let config = web_config(store)?;
-        server.reload(&config).map_err(|e| {
-            format!("the change is saved, but the running web server didn't take it: {e}")
-        })?;
-        println!("Web server reloaded with the change.");
-    } else {
-        println!("The web server isn't running; start it with `kiln web start`.");
+/// After a change to sites, pins or PHP settings: bring a running server in line without
+/// restarting it. PHP pools that are still needed keep running untouched; new ones start
+/// beside them and old ones retire after Caddy has moved (ADR 0012, ADR 0016 §7).
+pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
+    if !is_running()? {
+        println!("The web server isn't running; it takes effect at `kiln web start`.");
+        return Ok(());
     }
+    let saved =
+        |e: String| format!("the change is saved, but the running server didn't take it: {e}");
+    let running = crate::pool::running()?;
+    let planned = crate::pool::plan(store, running.as_ref())?;
+    match (&running, &planned) {
+        (Some(old), Some(new)) if old != new => {
+            crate::pool::switch(new, reload_with_pools).map_err(saved)?;
+            println!("Web server and PHP pools updated without a restart.");
+            print_php(Some(new));
+            return Ok(());
+        }
+        (None, Some(new)) => {
+            crate::pool::supervisor()?
+                .start(new)
+                .map_err(|e| saved(e.to_string()))?;
+            print_php(Some(new));
+        }
+        _ => {}
+    }
+    reload_with_pools(&crate::pool::running_upstreams()?).map_err(saved)?;
+    if let (Some(_), None) = (&running, &planned) {
+        // No PHP is needed any more.
+        crate::pool::supervisor()?
+            .stop()
+            .map_err(|e| saved(e.to_string()))?;
+    }
+    println!("Web server reloaded with the change.");
     Ok(())
 }
 
@@ -239,7 +254,7 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
     let config = web_config(&store)?;
     if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
         println!("Detected: {}.", describe(site));
-        println!("URL: {}", config.site_url(&spec(site)));
+        println!("URL: {}", config.site_url(&spec(site, &BTreeMap::new())));
     }
     if secure {
         trust_hint()?;
@@ -460,11 +475,27 @@ pub fn sites() -> Result<(), String> {
         storage_dir: PathBuf::new(),
         log_file: PathBuf::new(),
         admin_socket: PathBuf::new(),
-        php_upstreams: Vec::new(),
+        php_pools: BTreeMap::new(),
     });
     let in_hosts = hosts_names();
+    let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+    let versions =
+        kiln_runtime::site_versions(&store, &all.sites, &installed).map_err(|e| e.to_string())?;
     for site in &all.sites {
-        let url = config.site_url(&spec(site));
+        let url = config.site_url(&spec(site, &BTreeMap::new()));
+        // "8.4.27", "8.1.34 (pinned)", "8.4.27 (pin 8.2 missing)", or "-" for static sites.
+        let php = match versions.get(site.host.as_str()) {
+            _ if !site.driver.uses_php() => "-".to_owned(),
+            Some(v) => {
+                let version = v.php.as_ref().map_or("none", |p| p.version.as_str());
+                match (&v.pinned, v.fell_back) {
+                    (Some(pin), true) => format!("{version} (pin {pin} missing)"),
+                    (Some(_), false) => format!("{version} (pinned)"),
+                    (None, _) => version.to_owned(),
+                }
+            }
+            None => "none".to_owned(),
+        };
         let dns = if in_hosts.iter().any(|n| n == site.host.as_str()) {
             ""
         } else {
@@ -475,7 +506,7 @@ pub fn sites() -> Result<(), String> {
             kiln_sites::Source::Parked(_) => "parked",
         };
         println!(
-            "{url:<34} {:<17} {source:<6} {}{dns}",
+            "{url:<34} {:<17} {php:<17} {source:<6} {}{dns}",
             site.driver.name(),
             site.document_root.display()
         );
@@ -550,7 +581,7 @@ pub fn start(http_port: Option<u16>, https_port: Option<u16>) -> Result<(), Stri
     }
     // PHP workers first, so Caddy never points at ports nobody listens on.
     let supervisor = crate::pool::supervisor()?;
-    let pools = crate::pool::plan(&store)?;
+    let pools = crate::pool::plan(&store, None)?;
     if let Some(pools) = &pools {
         supervisor.start(pools).map_err(|e| e.to_string())?;
     }
@@ -581,15 +612,17 @@ pub fn start(http_port: Option<u16>, https_port: Option<u16>) -> Result<(), Stri
 }
 
 fn print_php(pools: Option<&Pools>) {
-    match pools.and_then(|p| p.pools.first()) {
-        Some(pool) => {
-            let ports: Vec<String> = pool.workers.iter().map(|w| w.port.to_string()).collect();
-            println!(
-                "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
-                pool.id,
-                pool.workers.len(),
-                ports.join(", ")
-            );
+    match pools.filter(|p| !p.pools.is_empty()) {
+        Some(pools) => {
+            for pool in &pools.pools {
+                let ports: Vec<String> = pool.workers.iter().map(|w| w.port.to_string()).collect();
+                println!(
+                    "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
+                    pool.id,
+                    pool.workers.len(),
+                    ports.join(", ")
+                );
+            }
         }
         None if cfg!(windows) => println!(
             "No PHP installed, so sites are served as static files. Add PHP with `kiln php install 8.4`."
@@ -708,14 +741,17 @@ pub fn hosts_sync(yes: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Reloads the running server with `php_upstreams` instead of the running pool's, for a
-/// pool switch ([ADR 0014] §11).
+/// Reloads the running server with these PHP pools instead of the running ones, for a pool
+/// switch ([ADR 0014] §11, [ADR 0016] §7).
 ///
 /// [ADR 0014]: ../../../docs/adr/0014-php-cgi-supervisor.md
-pub fn reload_with_php(php_upstreams: &[std::net::SocketAddr]) -> Result<(), String> {
+/// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+pub fn reload_with_pools(
+    pools: &BTreeMap<String, Vec<std::net::SocketAddr>>,
+) -> Result<(), String> {
     let store = open_store()?;
     let mut config = web_config(&store)?;
-    config.php_upstreams = php_upstreams.to_vec();
+    config.php_pools = pools.clone();
     server()?.reload(&config).map_err(|e| e.to_string())
 }
 

@@ -70,6 +70,27 @@ enum Command {
     Unsecure { name: String },
     /// List sites (linked and parked) with their URLs, framework and document root.
     Sites,
+    /// Pin a site to a PHP version, e.g. `kiln isolate 8.3` in its folder, or `kiln isolate 8.3 blog`.
+    Isolate {
+        /// A minor version (newest installed patch) or an exact one, e.g. 8.3 or 8.3.36.
+        version: String,
+        /// The site (default: the one whose folder contains the current folder).
+        site: Option<String>,
+    },
+    /// Let a site use the default PHP version again.
+    Unisolate { site: Option<String> },
+    /// Show what `php` and `composer` run in a folder (default: the current one), and why.
+    Which { path: Option<PathBuf> },
+    /// Composer (verified download from getcomposer.org, run through the `composer` shim).
+    Composer {
+        #[command(subcommand)]
+        action: ComposerAction,
+    },
+    /// The `php` and `composer` commands on your PATH that follow each site's PHP version.
+    Shims {
+        #[command(subcommand)]
+        action: ShimsAction,
+    },
     /// PHP runtimes from windows.php.net (verified downloads, into Kiln's own folder).
     Php {
         #[command(subcommand)]
@@ -86,6 +107,22 @@ enum Command {
         /// Undo even if the target was edited by hand since (overwrites those edits).
         #[arg(long)]
         force: bool,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ComposerAction {
+    /// Download and verify the current stable Composer.
+    Install,
+}
+
+#[derive(Debug, Subcommand)]
+enum ShimsAction {
+    /// Install `php` and `composer` shims and put them first on your user PATH (asks first; undoable).
+    Install {
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
@@ -313,6 +350,15 @@ fn main() -> ExitCode {
         Command::Secure { name } => web::set_secure(&name, true),
         Command::Unsecure { name } => web::set_secure(&name, false),
         Command::Sites => web::sites(),
+        Command::Isolate { version, site } => php::isolate(&version, site),
+        Command::Unisolate { site } => php::unisolate(site),
+        Command::Which { path } => php::which(path),
+        Command::Composer {
+            action: ComposerAction::Install,
+        } => php::composer_install(),
+        Command::Shims {
+            action: ShimsAction::Install { yes },
+        } => apply::shims_install(yes),
         Command::Php { action } => match action {
             PhpAction::Available => php::available(),
             PhpAction::Install { version } => php::install(&version),

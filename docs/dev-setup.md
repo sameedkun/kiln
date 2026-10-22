@@ -29,17 +29,18 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 |---|---|---|
 | `kiln-core` | Domain types (TLD, host names) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
-| `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows) | forbidden |
-| `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions; JSONL import | forbidden |
+| `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp` | forbidden |
+| `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
 | `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/stop/status of `kiln-caddy`, admin client over its Unix socket | forbidden |
 | `kiln-fetch` | Verified HTTPS downloads: expected digest first, streaming hash, OS trust store, cache | forbidden |
 | `kiln-php` | PHP runtimes: windows.php.net index, safe extraction, php.ini defaults, start-up check | forbidden |
 | `kiln-supervisor` | php-cgi supervisor library and `kiln-supervisor` binary: pools, staggered recycling, respawn, CLI handle | forbidden |
 | `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root) | forbidden |
-| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
+| `kiln-runtime` | Which PHP runs what (default, pins, folder → site); the `kiln-shim` binary (`php`/`composer`) | forbidden |
+| `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect, user registry strings, console Ctrl+C, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `undo`) | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `isolate`, `unisolate`, `which`, `composer install`, `shims install`, `undo`) | forbidden |
 
 ## Everyday commands
 
@@ -63,6 +64,7 @@ temporary folders and free loopback ports):
 ```sh
 KILN_TEST_CADDY=/path/to/caddy.exe cargo test -p kiln-web --test caddy
 KILN_TEST_CADDY=/path/to/caddy.exe KILN_TEST_PHP="$LOCALAPPDATA/Kiln/php/8.4.27" cargo test -p kiln-web --test php
+KILN_TEST_CADDY=… KILN_TEST_PHP="$LOCALAPPDATA/Kiln/php/8.4.27" KILN_TEST_PHP2="$LOCALAPPDATA/Kiln/php/8.3.36" KILN_TEST_COMPOSER="$LOCALAPPDATA/Kiln/bin/composer.phar" cargo test -p kiln-web --test multi_php -p kiln-runtime --test shim
 ```
 
 Run manual checks that touch `%APPDATA%` / `%LOCALAPPDATA%` from a normal terminal, not from a

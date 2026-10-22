@@ -102,3 +102,48 @@ mod tests {
         assert_eq!(store.php_versions().unwrap(), vec![record("8.10.1")]);
     }
 }
+
+impl StateStore {
+    /// Per-site PHP version pins: host → version spec (ADR 0016 §1–2).
+    pub fn isolations(&self) -> Result<std::collections::BTreeMap<String, String>, StateError> {
+        let mut stmt = self.conn.prepare("SELECT host, version FROM isolations")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn isolate(&mut self, host: &str, version: &str) -> Result<(), StateError> {
+        self.conn.execute(
+            "INSERT INTO isolations (host, version, created_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(host) DO UPDATE SET version = excluded.version",
+            params![host, version, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Returns `false` if the site wasn't pinned.
+    pub fn unisolate(&mut self, host: &str) -> Result<bool, StateError> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM isolations WHERE host = ?1", [host])?
+            > 0)
+    }
+}
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::*;
+
+    #[test]
+    fn pins_round_trip() {
+        let mut store = StateStore::open_in_memory().unwrap();
+        store.isolate("legacy.test", "8.1").unwrap();
+        store.isolate("legacy.test", "8.3").unwrap();
+        store.isolate("api.test", "8.4.27").unwrap();
+        let pins = store.isolations().unwrap();
+        assert_eq!(pins.get("legacy.test").map(String::as_str), Some("8.3"));
+        assert_eq!(pins.len(), 2);
+        assert!(store.unisolate("legacy.test").unwrap());
+        assert!(!store.unisolate("legacy.test").unwrap());
+        assert_eq!(store.isolations().unwrap().len(), 1);
+    }
+}

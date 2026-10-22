@@ -634,11 +634,13 @@ dependencies = [
  "kiln-php",
  "kiln-pki",
  "kiln-platform",
+ "kiln-runtime",
  "kiln-sites",
  "kiln-state",
  "kiln-supervisor",
  "kiln-sys",
  "kiln-web",
+ "serde_json",
  "time",
 ]
 
@@ -736,6 +738,18 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+]
+
+[[package]]
+name = "kiln-runtime"
+version = "0.0.0"
+dependencies = [
+ "kiln-core",
+ "kiln-php",
+ "kiln-sites",
+ "kiln-state",
+ "kiln-sys",
+ "tempfile",
 ]
 
 [[package]]

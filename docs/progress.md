@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (9 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (10 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0015 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0016 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -63,8 +63,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-08 | PHP runtime provider | **done** 2026-10-21 (Windows) | [ADR 0013](adr/0013-downloads-and-php-runtimes.md); see below. Shared verified downloader; `kiln web install` downloads Caddy |
 | P1-09 | Process supervisor | **done** 2026-10-22 (Windows) | [ADR 0014](adr/0014-php-cgi-supervisor.md); see below. php-cgi pools behind Caddy, staggered recycling |
 | P1-10 | Sites + drivers | **done** 2026-10-22 | [ADR 0015](adr/0015-parked-folders-and-drivers.md); see below. `kiln park`, document-root drivers (no Valet code) |
-| P1-11 | Per-site PHP + shims | **next** | `kiln isolate`, `php`/`composer` shims |
-| P1-12 | `kiln doctor` | later | |
+| P1-11 | Per-site PHP + shims | **done** 2026-10-22 (Windows) | [ADR 0016](adr/0016-per-site-php-and-shims.md); see below. `kiln isolate`, a pool per version, `php`/`composer` shims, reversible user PATH |
+| P1-12 | `kiln doctor` | **next** | ports, DNS, trust, runtimes, journal, I-12 hint, container detection (I-45) |
 | P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | later | |
 | P1-14 | Coexistence detection | later | [I-11](issues.md#i-11) |
 | P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
@@ -481,6 +481,73 @@ cd D:\Code\Rea\laravel-herd\kiln
 .\target\debug\kiln.exe undo <n>             # the hosts operation number
 ```
 
+<a id="p1-11"></a>
+### P1-11 delivered (2026-10-22)
+
+Design: [ADR 0016](adr/0016-per-site-php-and-shims.md).
+
+- **Per-site PHP:** `kiln isolate <version> [site]` / `kiln unisolate [site]`. The site defaults
+  to the one containing the current folder.
+  - Pins are stored per host (`isolations`, migration v5), so they work for links and parked
+    sites alike.
+  - A minor pin (`8.3`) follows the newest installed 8.3.x.
+  - A removed version falls back to the default, with a warning.
+- **One pool per version in use.** `WebConfig.php_pools` (id → upstreams) and
+  `SiteSpec.php_pool` route each site to its own version's workers.
+  - Changing pins, the default version or the worker count on a running server reuses pools
+    that are still needed (same ports, untouched sites). Only new pools start, and unused ones
+    retire after the grace period.
+  - `kiln sites` shows each site's PHP, marking pins and fallbacks.
+- **New crate `kiln-runtime`:** the single "which PHP" logic (default, pins, folder → site),
+  shared by the CLI, the pool planner and the shim.
+- **Shims:** the `kiln-shim` binary, installed as `php.exe` and `composer.exe`.
+  - It runs the folder's PHP with the same arguments and console, and passes the exit code
+    back.
+  - It survives Ctrl+C itself without stopping PHP from handling it.
+  - `kiln which [folder]` explains the choice.
+- **Composer:** `kiln composer install` downloads the current stable `composer.phar`
+  (version from getcomposer.org, SHA-256 from its checksum file).
+- **PATH:** `kiln shims install` copies the shims and puts their folder first on the **user**
+  `PATH` as a journaled operation (`env.user_path.prepend`).
+  - The preview shows which `php`/`composer` new terminals get now and after.
+  - `kiln undo` removes only Kiln's entry, keeping later edits.
+  - The registry type is kept, and Windows is notified.
+- **`kiln-sys`:** current-user registry strings (`REG_SZ`/`REG_EXPAND_SZ`, unexpanded),
+  `WM_SETTINGCHANGE` broadcast, and `survive_ctrl_c`.
+- **Tests:** 15 new, 192 total. Real checks with PHP 8.4.27 + 8.3.36 + Composer 2.10.3:
+  - The real `kiln-shim` as `php.exe` in a throwaway Kiln state reports 8.3.36 inside the
+    pinned site and 8.4.27 elsewhere. Exit codes and `a b "c" ^%PATH%! & | < >` pass through
+    unchanged. `composer --version` runs on the site's 8.3.36.
+  - One Caddy serves `modern.test` from PHP 8.4.27 and `legacy.test` from 8.3.36.
+  - The PATH operation is tested in memory: undo keeps later edits, an existing entry isn't
+    duplicated, an empty PATH works. Registry access is tested in a private throwaway key,
+    never your real `PATH`.
+- Installed in the agent session for testing: PHP 8.3.36 and Composer 2.10.3, both verified.
+
+**Check to run from a normal terminal** (changes your user PATH, with your confirmation and
+undoable):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe php install 8.3
+.\target\debug\kiln.exe composer install
+.\target\debug\kiln.exe park D:\Code\Rea\laravel-herd\demo-sites
+.\target\debug\kiln.exe isolate 8.3 larademo
+.\target\debug\kiln.exe sites                 # larademo: 8.3.36 (pinned); phpdemo: 8.4.27
+.\target\debug\kiln.exe hosts sync            # UAC: Yes; note the number
+.\target\debug\kiln.exe web start --http-port 8080 --https-port 8443   # two PHP pools listed
+# Browser: http://phpdemo.test:8080/ → PHP 8.4.27 ; http://larademo.test:8080/x → "(PHP 8.3.36)"
+.\target\debug\kiln.exe shims install         # shows today's `php` (e.g. Herd's) vs Kiln's; y to apply; note the number
+# NEW terminal:
+#   cd D:\Code\Rea\laravel-herd\demo-sites\larademo ; php -v      → 8.3.36
+#   cd ..\phpdemo ; php -v                                       → 8.4.27
+#   composer --version                                           → Composer 2.10.3 … PHP 8.4.27
+.\target\debug\kiln.exe web stop
+.\target\debug\kiln.exe undo <shims number>   # PATH back as it was (your own later edits kept)
+.\target\debug\kiln.exe unisolate larademo ; .\target\debug\kiln.exe unpark D:\Code\Rea\laravel-herd\demo-sites
+.\target\debug\kiln.exe undo <hosts number>
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -495,6 +562,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | Browser check of an HTTPS site from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-21 (Chrome, user) |
 | P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
+| P1-11 check from a normal terminal (shims + PATH) | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-11)) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -532,6 +600,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **CI:** macOS moved to nightly + manual dispatch; Windows and Linux on every push (`c37bf8a`). The macOS job takes about 30 s but waited many minutes for a runner. |
 | 2026-10-22 | **P1-10 done:** ADR 0015. New `kiln-sites` (document-root drivers for Laravel, Symfony, Drupal, Craft, Bedrock, WordPress, PHP, static; links + parked folders with precedence), `parked` table, `kiln park/unpark`, richer `kiln sites`, hosts sync covering parked sites. Valet considered, not used. 10 new tests, 177 total; the real Caddy+PHP test confirms a parked Laravel project never serves `.env`. |
 | 2026-10-22 | **P1-08/09/10 checked by the user from a normal PowerShell:** `kiln php install 8.4` (33.7 MB, SHA-256 verified, `php -v` 8.4.27); `kiln park demo-sites` found `larademo` (laravel → `public`) and `phpdemo`; `hosts sync` (#5); `web start` brought up 4 php-cgi workers, all under `%LOCALAPPDATA%Kilnphp8.4.27`; in Chrome `phpdemo.test` served PHP 8.4.27 from different worker PIDs (16624, 2564), `/any/path` and `larademo.test/hello` went through the front controller, and `/artisan` wasn't served; `web stop` left no Kiln php-cgi running; unpark and `undo 5` cleaned up. |
+| 2026-10-22 | **P1-11 done (Windows):** ADR 0016. `kiln isolate/unisolate` (pins per host, minor pins follow patches, fallback with warning), one php-cgi pool per version in use with untouched pools reused on change, new `kiln-runtime` (shared "which PHP" logic + `kiln-shim` binary as `php.exe`/`composer.exe`), `kiln which`, `kiln composer install` (SHA-256 verified), `kiln shims install` (journaled user-PATH prepend; undo keeps later edits). 15 new tests, 192 total; real checks with PHP 8.4.27 + 8.3.36 + Composer 2.10.3. |
 
 ## How to update this file
 

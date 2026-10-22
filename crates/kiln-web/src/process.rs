@@ -388,7 +388,7 @@ mod tests {
             storage_dir: dir.path().join("storage"),
             log_file: dir.path().join(LOG_FILE),
             admin_socket: dir.path().join(ADMIN_SOCKET_FILE),
-            php_upstreams: Vec::new(),
+            php_pools: std::collections::BTreeMap::new(),
         };
         let err = server.start(&config).unwrap_err();
         assert!(matches!(err, WebError::MissingBinary(_)), "{err}");

@@ -1,0 +1,25 @@
+[package]
+name = "kiln-runtime"
+description = "Which PHP runs what: the default version, per-site pins, the version for a folder; and the `kiln-shim` binary behind `php` and `composer` (ADR 0016)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kiln-shim"
+path = "src/main.rs"
+
+[dependencies]
+kiln-core.workspace = true
+kiln-php.workspace = true
+kiln-sites.workspace = true
+kiln-state.workspace = true
+kiln-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -31,6 +31,7 @@ working name). Start here.
 | [0013](adr/0013-downloads-and-php-runtimes.md) | Verified HTTPS downloads (digest known first, OS trust store, cache); PHP NTS runtimes from windows.php.net, latest patch per version only; php.ini defaults; no system-wide installs | accepted, implemented (P1-08) |
 | [0014](adr/0014-php-cgi-supervisor.md) | php-cgi pools: separate `kiln-supervisor`, `pools.json` desired state, staggered recycling, kill-on-close job; Caddy `php_fastcgi` routes with time-bounded retries and no passive checks; live pool switch | accepted, implemented (P1-09) |
 | [0015](adr/0015-parked-folders-and-drivers.md) | Parked folders (every subfolder a site; links win) and framework drivers that only detect the document root; hosts sync covers parked sites; no Valet code | accepted, implemented (P1-10) |
+| [0016](adr/0016-per-site-php-and-shims.md) | Per-site PHP pins (`kiln isolate`), one pool per version in use, `kiln-shim` as `php`/`composer`, verified Composer, reversible user-PATH prepend | accepted, implemented (P1-11) |
 
 ## Conventions
 

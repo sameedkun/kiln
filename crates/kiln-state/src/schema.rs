@@ -53,6 +53,12 @@ const MIGRATIONS: &[&str] = &[
          path       TEXT    PRIMARY KEY,  -- absolute folder
          created_ms INTEGER NOT NULL
      ) STRICT;",
+    // v5: per-site PHP versions (ADR 0016).
+    "CREATE TABLE isolations (
+         host       TEXT    PRIMARY KEY,  -- e.g. legacy.test
+         version    TEXT    NOT NULL,     -- 8.3 (newest installed 8.3.x) or 8.3.36
+         created_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.
