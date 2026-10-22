@@ -83,6 +83,28 @@ cargo run -p kiln-cli -- plan hosts blog shop
 - Use `MSYS_NO_PATHCONV=1` for tools taking `/CN=…`-style arguments ([I-07](issues.md#i-07)).
 - Use `/c/...` paths in `PATH`, and `%windir%\System32\whoami.exe` for Windows groups ([I-08](issues.md#i-08)).
 
+## Linux test VM (Ubuntu 24.04 Desktop)
+
+The reference Linux system for P1-04 and P1-15: a real desktop with NetworkManager,
+systemd-resolved, polkit and Firefox, from Canonical's Hyper-V image.
+
+1. `tests/vm/ubuntu/new-vm.ps1` (Hyper-V Administrators; about 25 GB free on E:). It
+   downloads the image (4.6 GB, resumable), checks Canonical's SHA-256, creates the Gen2 VM
+   `kiln-ubuntu` (4 CPUs, 1–4 GB dynamic memory, 64 GB disk) and opens its console.
+2. In the console: Ubuntu's first-boot setup, then a Terminal. Paste the SSH setup command
+   (it installs `openssh-server`, authorizes the key in `E:\VMs\kiln-ubuntu\ssh`, and gives
+   the test user password-less `sudo` for unattended builds; polkit still asks). Then grow
+   the disk once: `sudo growpart /dev/sda 1 && sudo resize2fs /dev/sda1`.
+3. From Windows (Git Bash): `git archive HEAD | ssh -i /e/VMs/kiln-ubuntu/ssh/id_ed25519
+   <user>@<vm-ip> 'mkdir -p ~/kiln && tar -x -C ~/kiln'`, then build and test there with
+   rustup (`build-essential`, `curl`, `git`, `pkg-config` from apt).
+
+Over SSH nobody can answer polkit's password prompt: Kiln's privileged commands fail safely
+there ("approval was declined; nothing was changed"). Check them in the VM's own Terminal.
+The console uses Hyper-V's enhanced session (clipboard works); `tests/vm/type.ps1` types
+into a VM in a basic session. Closing the console window doesn't stop the VM:
+`vmconnect.exe localhost kiln-ubuntu` reopens it.
+
 ## Running the spikes
 
 Spikes live in `spikes/` (outside the Cargo workspace). Downloads go to each spike's

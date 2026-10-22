@@ -64,8 +64,8 @@ Fedora and Debian work the same way here):
    - The session key is sent as the first line on stdin, **never in arguments**: on Linux any
      user can read any process's command line from `/proc`.
 5. **Fixed targets, no inherited input.** `pkexec` clears the environment. The helper takes no
-   paths from `kiln`: the hosts file is always `/etc/hosts`. The requesting user comes from
-   `PKEXEC_UID` (or `SUDO_UID`) and is only logged.
+   paths from `kiln`: the hosts file is always `/etc/hosts`. It needs no notion of the
+   requesting user, since nothing it does is per user.
 6. **Session limits** as on Windows: one session, the fixed operation list, exit on
    `Shutdown`, end of input, any authentication failure, or after 120 s.
 7. The helper runs from wherever `kiln` is, as root. That is the same trust as
@@ -91,6 +91,16 @@ Fedora and Debian work the same way here):
 
 10. `kiln undo`, `kiln history` and `kiln uninstall` use the same journal and engine as on
     Windows. Reverting a hosts change goes through the same helper.
+
+### Also in part a: the web server and port owners on Linux
+
+11. Caddy's Linux releases (`.tar.gz`, x86-64 and AArch64) are pinned by SHA-512 like the
+    Windows ones ([ADR 0011](0011-caddy-integration.md)). Their checksums come from the same
+    `caddy_2.11.7_checksums.txt` whose Windows lines match the existing pins.
+12. Port owners for `kiln doctor` and automatic ports ([ADR 0019](0019-coexistence.md)) come
+    from `/proc/net/tcp{,6}`, `/proc/<pid>/fd` and `/proc/<pid>/exe`. A port below
+    `ip_unprivileged_port_start` (1024) that nobody holds is explained as root-only, which is
+    why Kiln uses 8080/8443 on Linux.
 
 ## Consequences
 

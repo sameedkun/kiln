@@ -35,6 +35,7 @@ working name). Start here.
 | [0017](adr/0017-kiln-doctor.md) | `kiln doctor`: read-only health checks as pure rules over gathered facts, fixes as commands, `--json`; port owners, container detection, Schannel note | accepted, implemented (P1-12) |
 | [0018](adr/0018-history-undo-uninstall.md) | `kiln history`, `kiln undo` (newest by default), `kiln uninstall` with full plan/dry run: stop → undo newest first → delete Kiln folders (state last); safety checks | accepted, implemented (P1-13) |
 | [0019](adr/0019-coexistence.md) | Coexisting with Herd, XAMPP, Laragon, WampServer: read-only detection, port owners named, shared `.test` names warned, free ports picked automatically (80→8080…, 443→8443…), chosen ports never moved | accepted, implemented (P1-14) |
+| [0020](adr/0020-linux-dns-and-privilege.md) | Linux: `.test` names in `/etc/hosts` (nsswitch `files` first; systemd-resolved reads it too); `pkexec kiln-helper --stdio` per batch (sudo fallback), key on stdin; keeps mode/owner/SELinux xattrs; Caddy `.tar.gz` pins; port owners from `/proc`; P1-04 split into parts a–d | accepted, part a implemented |
 
 ## Conventions
 

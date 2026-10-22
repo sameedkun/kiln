@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done; P1-04 part a of 4 done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0019 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0020 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -22,6 +22,7 @@
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
+| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. Not yet: CA trust (b), PHP (c), shims (d) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -57,7 +58,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
-| P1-04 | Linux DNS providers | later | `HostsBlockOp` is platform-neutral; Linux needs a polkit `PrivilegedHosts` |
+| P1-04 | Linux (parts a–d) | **a done** 2026-10-22 | [ADR 0020](adr/0020-linux-dns-and-privilege.md); see below. a: hosts DNS via pkexec, undo, Caddy, port owners. Next: b CA, c PHP-FPM, d shims |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
@@ -704,6 +705,46 @@ cd D:\Code\Rea\laravel-herd\kiln
 .\target\debug\kiln.exe unlink herd-studio
 ```
 
+<a id="p1-04a"></a>
+### P1-04 part a delivered (2026-10-22)
+
+Design: [ADR 0020](adr/0020-linux-dns-and-privilege.md). P1-04 is split into parts a–d;
+this is part a. Reference system: the new **Ubuntu 24.04 Desktop** Hyper-V VM
+(`tests/vm/ubuntu/new-vm.ps1`, see [dev-setup](dev-setup.md)).
+
+- **DNS:** `.test` names go in Kiln's block in `/etc/hosts`, as on Windows. Ubuntu's
+  nsswitch puts `files` first, and systemd-resolved answers from `/etc/hosts` too.
+- **Privilege:** `pkexec kiln-helper --stdio`, once per action, with `sudo` if `pkexec` is
+  missing.
+  - The same authenticated protocol as on Windows, over the helper's stdin/stdout.
+  - The session key is the first stdin line, never an argument (`/proc` is readable).
+  - A dismissed dialog, or no way to ask (SSH), is "approval was declined; nothing was
+    changed".
+- **`/etc/hosts` writes** keep mode, owner and extended attributes (the SELinux label; new
+  `kiln-sys::xattr`). A symlinked hosts file is refused. A mount point (containers, WSL) is
+  written in place. An immutable file is explained, never unlocked.
+- **`kiln hosts sync`, `kiln undo`, `kiln uninstall`** work on Linux.
+- **Web server:** Caddy 2.11.7's Linux `.tar.gz` releases are pinned (SHA-512), and installs
+  read `.tar.gz` (`tar` + `flate2`). A normal user can't bind ports below 1024, so automatic
+  ports use 8080/8443 and say why.
+- **`kiln doctor` on Linux:** the nsswitch order, who manages `resolv.conf`, and port owners
+  from `/proc` ([I-55](issues.md#i-55)). `which` follows Unix `PATH` rules.
+- **Tests:** 7 new, 230 total on Windows; 198 run in the VM (the rest are Windows-only),
+  all passing. New: stdio sessions on real OS pipes (wrong key, malformed key line, a public
+  TLD refused inside the helper), xattrs kept on ext4, symlink refusal, `.tar.gz` install,
+  the `/proc/net/tcp{,6}` parser, nsswitch order.
+
+**Checked over SSH in the VM:**
+- the build and every test;
+- the web server serving a site on 8080;
+- a site added live (same Caddy PID, owner-only admin socket, nothing on :2019);
+- the doctor's DNS lines;
+- `hosts sync` over SSH failing safely, with `/etc/hosts` byte-identical (SHA-256) and the
+  operation rolled back;
+- with Python on 8080, `web start` naming it and moving to 8000.
+
+**Checked by the user in the VM's own Terminal:** see the log entry for 2026-10-22.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -722,6 +763,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
 | P1-14 coexistence check from a normal terminal (Herd running) | [I-45](issues.md#i-45) | done 2026-10-22 (user); found I-54, fixed |
+| P1-04 parts b (CA: libsecret, system store, NSS), c (PHP runtimes, PHP-FPM pools), d (shims) | [ADR 0020](adr/0020-linux-dns-and-privilege.md) | next |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -767,6 +809,8 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-13 checked by the user from a normal PowerShell:** `hosts sync` (#8); `history` showed #8 in effect and `--all` all 8 operations (CA trust ×2, hosts ×5, PATH) with plain descriptions; `uninstall --dry-run` planned undo #8 and the deletion of `LocalKiln` (308.7 MB) and `RoamingKiln`; `undo` without a number undid #8 (1 UAC prompt), and a second `undo` reported nothing in effect; a **real `kiln uninstall`** deleted both Kiln folders and left the programs; `demo-sites` (projects) untouched. The user's machine now has no Kiln state; later manual checks start with `kiln php install` / `kiln web install`. |
 | 2026-10-22 | **P1-14 done** (`2d1d787`, `0b7966e`): ADR 0019. New `kiln-coexist` crate (installed tools, port holders by program path, names other tools claim in the hosts file, free-port picking). `kiln web start` moves off ports held by others (80→8080, 443→8443) and says why, keeps chosen ports (`--auto-ports` to undo the choice); `kiln link`/`park` flag names shared with Herd; `kiln doctor` gains "Other tools". Found and fixed I-53 before release; the first Linux CI run failed on Windows path literals in one test (fixed with `Path::join`). 10 new tests, 222 total; CI green. Herd and everything of it left untouched. |
 | 2026-10-22 | **P1-14 checked by the user from a normal PowerShell, with Herd running:** before any Kiln state, `doctor` showed only the missing database as a problem, plus "Other tools": Herd installed, its nginx (12 processes) on 127.0.0.1:80/:443, and `php` being Herd's `php.bat`. `web install` re-downloaded Caddy 2.11.7 (SHA-512 verified). `link herd-studio` printed the "also in the hosts file for Laravel Herd" note. `web start` said why and used 8080/8443. `doctor` then showed Kiln's server on 8080 and one warning for `herd-studio.test` with `http://herd-studio.test:8080/`. `web start --http-port 80` was refused, naming Herd and suggesting 8080 or `--auto-ports`. The next plain `web start` still used 8080. Herd was untouched. Found [I-54](issues.md#i-54): URLs printed by `link` before the first start said port 80. Fixed with `planned_port`; 223 tests. |
+| 2026-10-22 | **P1-04 part a done** (`a80098e`, `16046fe`, `6eb9ebd`, and the `/proc` fix): ADR 0020. P1-04 split into parts a–d. Built the Ubuntu 24.04 Desktop test VM from Canonical's Hyper-V image (SHA-256 verified). Linux: `pkexec kiln-helper --stdio` with the shared protocol, `/etc/hosts` writes keeping xattrs, `hosts sync`/`undo`/`uninstall`, pinned Caddy `.tar.gz` releases, doctor resolver checks, port owners from `/proc`. Found I-55 (from the user's check) and I-56. 230 tests on Windows, 198 in the VM, CI green. |
+| 2026-10-22 | **P1-04a checked by the user in the VM's own Terminal:** `kiln hosts sync` showed the plan, **one polkit password dialog**, recorded #2, and reloaded the server. `getent hosts hello.test` gave 127.0.0.1, and **Firefox in the VM loaded `http://hello.test:8080/`**. `kiln undo` used one more dialog, and the name was gone afterwards. `kiln doctor` showed nsswitch OK and systemd-resolved. Cancelling the dialog on a second `hosts sync` gave "approval was declined; nothing was changed". The doctor called Kiln's own port 8080 free: [I-55](issues.md#i-55), fixed and rechecked in the VM. |
 
 ## How to update this file
 

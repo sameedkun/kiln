@@ -64,6 +64,8 @@ commits and PRs.
 | [I-52](#i-52) | uninstall | A project inside Kiln's folder was deleted when LOCALAPPDATA used 8.3 short names (spelling compared, not paths) | ✅ (canonical paths; caught by a test before release) |
 | [I-53](#i-53) | coexistence | An automatically picked port was saved like a chosen one, so it would never move again | ✅ (caught by a test before release) |
 | [I-54](#i-54) | coexistence | Before the first `kiln web start`, `kiln link` printed URLs on port 80 although Kiln would pick 8080 | ✅ (found in the user's check) |
+| [I-55](#i-55) | doctor | On Linux, `kiln doctor` called Kiln's own busy port 8080 free | ✅ (found in the user's VM check) |
+| [I-56](#i-56) | process | Shell-quoted substitutions turned `\e` in a Windows path into an escape byte | ✅ (caught before commit) |
 
 ---
 
@@ -624,3 +626,30 @@ commits and PRs.
 - **Fix:** `planned_port`: the saved port, or else the one `kiln web start` would pick now.
   Printed URLs (`link`, `park`, `sites`) and `kiln doctor`'s port checks use it.
 - **Rule:** anything shown before an action must come from the same decision the action makes.
+
+## P1-04a: Linux
+
+<a id="i-55"></a>
+### I-55: `kiln doctor` on Linux called Kiln's own busy port free ✅
+- **Found:** the user's check in the Ubuntu 24.04 VM. With Kiln's server running on 8080
+  (PID 15289), `kiln doctor` reported `HTTP 127.0.0.1:8080 is free`.
+- **Cause:** the list of listening sockets and their processes was only read on Windows
+  (`GetExtendedTcpTable`). On Linux it was empty, so every port looked free, and automatic
+  ports couldn't name who held one either.
+- **Fix:** read `/proc/net/tcp{,6}` (listening sockets and their inodes), map inodes to PIDs
+  through `/proc/<pid>/fd`, and name the program from `/proc/<pid>/exe`. Checked in the VM:
+  the doctor reports Kiln's server, and with Python on 8080, `kiln web start` says
+  `port 8080 is used by /usr/bin/python3.12; Kiln uses 8000`.
+- **Rule:** a fact the doctor can't gather on a platform must be reported as unknown, never
+  as the healthy answer.
+
+<a id="i-56"></a>
+### I-56: Shell-quoted substitutions turned `\e` into an escape byte ✅
+- **Found:** while making `apply.rs` portable. A perl substitution run through Git Bash
+  rewrote `r"drivers\etc\hosts"` as `r"drivers<ESC>tchosts"`. It still compiled and passed
+  clippy; reading the result back caught it. Two more attempts with `sed` and `perl` lost the
+  backslashes again. An earlier session lost `\|` the same way in `pool.rs` and `process.rs`.
+- **Fix:** the line was corrected with the editor tool, and the tree was scanned for escape
+  bytes (`grep -P '\x1b'`): none left.
+- **Rule:** never pass text containing backslashes through shell-quoted `sed`/`perl`
+  replacements; edit such lines with the editor tool.
