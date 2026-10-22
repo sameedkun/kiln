@@ -54,7 +54,7 @@ commits and PRs.
 | [I-42](#i-42) | helper | UAC launch path can only be tested manually | ✅ (manual run passed 2026-10-21) |
 | [I-43](#i-43) | CA | Trusting/untrusting in the real `CurrentUser\Root` store (Windows dialog) is manual-only | ✅ (manual run and browser check passed 2026-10-21) |
 | [I-44](#i-44) | platform | Renames inside the user profile fail with os error 17 on the dev machine; `ReplaceFileW` gets Access denied there (cause: MSIX virtualization, I-45) | ✅ (workaround: `rename_replace`) |
-| [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; checks run from a normal terminal) |
+| [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; `kiln doctor` detects it) |
 | [I-46](#i-46) | Caddy | On Windows, the first admin request after each config load gets an EOF (admin listener swap) | ✅ (retry in the admin client) |
 | [I-47](#i-47) | Caddy | A live reload can close a brand-new connection without a response (about 1 per 3–7 reloads under saturating load, Windows) | 🔶 (accepted; recheck on Linux and newer Caddy) |
 | [I-48](#i-48) | downloads | A 60 s body timeout failed a real 34 MB PHP download on a slow line (ureq's body timeout is total, not idle) | ✅ (1 h total; no stall detection yet) |
@@ -561,3 +561,17 @@ commits and PRs.
   New unit tests cover a busy worker recycling within 200 ms and a late failure.
 - **Result:** 400 requests across 25–34 different php-cgi processes (about 24–31 recycles)
   with 0 failures, in every one of 12 runs.
+
+## P1-12: kiln doctor
+
+- **I-45 detection (2026-10-22):** `kiln doctor` now flags the packaged-app container by walking
+  the process's ancestors.
+  - Windows reports a packaged app's **real** image path. On the dev machine apps are
+    installed to drive E:, so the path is `E:\WindowsApps\Claude_…\app\claude.exe`, not the
+    `C:\Program Files\WindowsApps\…` that WMI shows.
+  - The Claude Code process itself runs from the redirected AppData,
+    `…\AppData\Local\Packages\Claude_<id>\LocalCache\Roaming\…`.
+  - The rule therefore matches a `WindowsApps` folder on any drive, or a
+    `Packages\…\LocalCache` path.
+  - Ancestors are opened for query only. Asking for terminate rights as well was refused by
+    the packaged app's process, which first hid the match.

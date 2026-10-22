@@ -628,6 +628,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "kiln-core",
+ "kiln-doctor",
  "kiln-fetch",
  "kiln-helper",
  "kiln-ops",
@@ -651,6 +652,14 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "kiln-doctor"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

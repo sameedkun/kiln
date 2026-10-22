@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (10 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (11 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0016 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0017 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -64,8 +64,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-09 | Process supervisor | **done** 2026-10-22 (Windows) | [ADR 0014](adr/0014-php-cgi-supervisor.md); see below. php-cgi pools behind Caddy, staggered recycling |
 | P1-10 | Sites + drivers | **done** 2026-10-22 | [ADR 0015](adr/0015-parked-folders-and-drivers.md); see below. `kiln park`, document-root drivers (no Valet code) |
 | P1-11 | Per-site PHP + shims | **done** 2026-10-22 (Windows) | [ADR 0016](adr/0016-per-site-php-and-shims.md); see below. `kiln isolate`, a pool per version, `php`/`composer` shims, reversible user PATH |
-| P1-12 | `kiln doctor` | **next** | ports, DNS, trust, runtimes, journal, I-12 hint, container detection (I-45) |
-| P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | later | |
+| P1-12 | `kiln doctor` | **done** 2026-10-22 | [ADR 0017](adr/0017-kiln-doctor.md); see below. Read-only checks with fixes; `--json` |
+| P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | **next** | |
 | P1-14 | Coexistence detection | later | [I-11](issues.md#i-11) |
 | P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
 
@@ -548,6 +548,55 @@ cd D:\Code\Rea\laravel-herd\kiln
 .\target\debug\kiln.exe undo <hosts number>
 ```
 
+<a id="p1-12"></a>
+### P1-12 delivered (2026-10-22)
+
+Design: [ADR 0017](adr/0017-kiln-doctor.md).
+
+- **`kiln doctor`** checks state, environment, ports, web server, PHP, sites, DNS,
+  certificates and shims. It **changes nothing**: each finding says what to run.
+  - It opens the database without migrating it.
+  - `--json` prints the same findings for scripts and the later GUI.
+  - The exit code is 1 if anything failed.
+- **New crate `kiln-doctor`:** the rules are pure functions from observed facts to findings,
+  unit-tested with made-up facts. The CLI gathers the facts.
+- **`kiln-sys`:**
+  - `tcp_listeners()` (IPv4/IPv6 listener table with owning PIDs), so a taken port names its
+    program and path, e.g. Herd's nginx;
+  - `process_parents()` (ToolHelp snapshot);
+  - `Process::open_for_query` (works on packaged apps that refuse terminate rights).
+- **What it catches:**
+  - operations left half-done (→ `kiln undo <n>`);
+  - **running inside a packaged app's container (I-45)**;
+  - ports held by other programs;
+  - Caddy not installed or not running, or its admin socket silent;
+  - incomplete PHP builds, pins without their version, the supervisor down or workers not
+    listening, recent `php-errors.log` lines;
+  - skipped folders;
+  - sites missing from the hosts file, not resolving, or resolving elsewhere, and stale hosts
+    entries;
+  - an untrusted CA, the intermediate expiring, the **Schannel revocation note (I-12)**, and
+    Firefox;
+  - shims installed but not first on `PATH`.
+- **Found while building it:** Windows reports a packaged app's real path (`E:\WindowsApps\…`
+  on this machine, where apps are installed to E:), not `C:\Program Files\WindowsApps\…`. The
+  first version missed the container for that reason. The fix and a test with the real paths
+  are in.
+- **Tests:** 11 new, 203 total. Run in the agent session, it flags the container, lists the
+  ports as free, PHP 8.3.36 and 8.4.27, sites missing from the hosts file and the untrusted
+  CA, and says shims aren't first on `PATH`.
+
+**Check from a normal terminal:**
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe doctor            # Environment: "normal terminal"; your real sites, PHP, shims state
+.\target\debug\kiln.exe web start
+.\target\debug\kiln.exe doctor            # Ports: "Kiln's web server (PID …)"; PHP pools listening
+.\target\debug\kiln.exe doctor --json     # the same, as JSON
+.\target\debug\kiln.exe web stop
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -563,6 +612,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | P1-09 PHP site check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-11 check from a normal terminal (shims + PATH) | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
+| P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-12)) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -602,6 +652,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-08/09/10 checked by the user from a normal PowerShell:** `kiln php install 8.4` (33.7 MB, SHA-256 verified, `php -v` 8.4.27); `kiln park demo-sites` found `larademo` (laravel → `public`) and `phpdemo`; `hosts sync` (#5); `web start` brought up 4 php-cgi workers, all under `%LOCALAPPDATA%Kilnphp8.4.27`; in Chrome `phpdemo.test` served PHP 8.4.27 from different worker PIDs (16624, 2564), `/any/path` and `larademo.test/hello` went through the front controller, and `/artisan` wasn't served; `web stop` left no Kiln php-cgi running; unpark and `undo 5` cleaned up. |
 | 2026-10-22 | **P1-11 done (Windows):** ADR 0016. `kiln isolate/unisolate` (pins per host, minor pins follow patches, fallback with warning), one php-cgi pool per version in use with untouched pools reused on change, new `kiln-runtime` (shared "which PHP" logic + `kiln-shim` binary as `php.exe`/`composer.exe`), `kiln which`, `kiln composer install` (SHA-256 verified), `kiln shims install` (journaled user-PATH prepend; undo keeps later edits). 15 new tests, 192 total; real checks with PHP 8.4.27 + 8.3.36 + Composer 2.10.3. |
 | 2026-10-22 | **P1-11 checked by the user from a normal PowerShell:** installed PHP 8.3.36 + Composer 2.10.3 (verified); `larademo` pinned to 8.3 → browser and `php -v` showed 8.3.36, `phpdemo` 8.4.27; `web start` ran two pools; `unisolate`/`isolate` on the running server switched `larademo` without a restart while the 8.4 pool kept its ports (61726–61729); `shims install` (#7) showed Herd's `php.bat`/`composer.bat` being displaced, and in a new terminal `php`/`composer` followed each folder (`exit(7)` → 7); `undo 7` restored PATH (`where.exe php` → Herd's `php.bat` again); hosts `undo 6`. |
+| 2026-10-22 | **P1-12 done:** ADR 0017. `kiln doctor` (read-only, fixes as commands, `--json`, exit 1 on failure); new `kiln-doctor` crate (pure rules); `kiln-sys` TCP listener owners, process parents, query-only process open. Detects the packaged-app container (I-45: the real path is `E:WindowsApps…` on this machine), ports held by other programs, PHP/pool/DNS/CA/shim problems, and explains Schannel revocation (I-12). 11 new tests, 203 total. |
 
 ## How to update this file
 

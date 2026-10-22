@@ -1,0 +1,15 @@
+[package]
+name = "kiln-doctor"
+description = "kiln doctor: read-only health checks, as pure rules from observed facts to findings (ADR 0017)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

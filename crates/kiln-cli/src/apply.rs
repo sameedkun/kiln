@@ -370,7 +370,7 @@ pub fn shims_install(_yes: bool) -> Result<(), String> {
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
     path.split(';')
         .filter(|d| !d.trim().is_empty())

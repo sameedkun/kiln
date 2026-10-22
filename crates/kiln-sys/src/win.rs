@@ -12,12 +12,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_PIPE_BUSY,
-    ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER,
+    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
+};
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
 use windows_sys::Win32::Networking::WinSock::{
-    AF_UNIX, INVALID_SOCKET, SOCK_STREAM, SOCKADDR, SOCKADDR_UN, SOCKET, WSADATA, WSAGetLastError,
-    WSAStartup, closesocket, connect, socket,
+    AF_INET, AF_INET6, AF_UNIX, INVALID_SOCKET, SOCK_STREAM, SOCKADDR, SOCKADDR_UN, SOCKET,
+    WSADATA, WSAGetLastError, WSAStartup, closesocket, connect, socket,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -30,6 +34,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
 };
 use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -358,6 +365,24 @@ impl Process {
         }))
     }
 
+    /// Opens process `pid` for inspection only (image path, running state); no terminate or wait
+    /// rights, so it also works on processes that refuse those, such as packaged apps. `Ok(None)`
+    /// if no such process exists.
+    pub fn open_for_query(pid: u32) -> io::Result<Option<Self>> {
+        // SAFETY: plain call; a null return is handled below.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        Ok(Some(Self {
+            handle: owned(handle),
+        }))
+    }
+
     /// Full path of the process's executable (`QueryFullProcessImageNameW`, Win32 form).
     pub fn image_path(&self) -> io::Result<PathBuf> {
         let mut buffer = vec![0u16; 32_768];
@@ -414,6 +439,104 @@ fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u
         WAIT_TIMEOUT => Ok(None),
         _ => Err(io::Error::last_os_error()),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// TCP listeners and process parents (for `kiln doctor`, ADR 0017)
+// ---------------------------------------------------------------------------------------------
+
+/// Every listening TCP socket on the machine (IPv4 and IPv6) with its owning process ID.
+pub fn tcp_listeners() -> io::Result<Vec<(std::net::SocketAddr, u32)>> {
+    let mut found = Vec::new();
+    for family in [AF_INET, AF_INET6] {
+        let table = extended_tcp_table(u32::from(family))?;
+        if table.len() < 4 {
+            continue;
+        }
+        let count = u32::from_ne_bytes([table[0], table[1], table[2], table[3]]) as usize;
+        // Rows start after the u32 count, padded to the row's alignment (4 for both kinds).
+        let rows = &table[4..];
+        if family == AF_INET {
+            let size = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
+            for row in rows.chunks_exact(size).take(count) {
+                // SAFETY: `row` is exactly one MIB_TCPROW_OWNER_PID as filled in by the API;
+                // read_unaligned copes with the byte buffer's alignment.
+                let row: MIB_TCPROW_OWNER_PID =
+                    unsafe { std::ptr::read_unaligned(row.as_ptr().cast()) };
+                let ip = std::net::Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes());
+                let port = u16::from_be(u16::try_from(row.dwLocalPort & 0xFFFF).unwrap_or(0));
+                found.push((std::net::SocketAddr::from((ip, port)), row.dwOwningPid));
+            }
+        } else {
+            let size = std::mem::size_of::<MIB_TCP6ROW_OWNER_PID>();
+            for row in rows.chunks_exact(size).take(count) {
+                // SAFETY: as above, one MIB_TCP6ROW_OWNER_PID.
+                let row: MIB_TCP6ROW_OWNER_PID =
+                    unsafe { std::ptr::read_unaligned(row.as_ptr().cast()) };
+                let ip = std::net::Ipv6Addr::from(row.ucLocalAddr);
+                let port = u16::from_be(u16::try_from(row.dwLocalPort & 0xFFFF).unwrap_or(0));
+                found.push((std::net::SocketAddr::from((ip, port)), row.dwOwningPid));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The raw listener table for one address family.
+fn extended_tcp_table(family: u32) -> io::Result<Vec<u8>> {
+    let mut size = 0u32;
+    // The table can grow between calls; retry a few times with the size the API asks for.
+    for _ in 0..5 {
+        let mut buffer = vec![0u8; size as usize];
+        let pointer = if buffer.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            buffer.as_mut_ptr().cast::<c_void>()
+        };
+        // SAFETY: `pointer` is null (size query) or points to `size` writable bytes.
+        let status = unsafe {
+            GetExtendedTcpTable(
+                pointer,
+                &raw mut size,
+                0,
+                family,
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        match status {
+            0 => return Ok(buffer),
+            ERROR_INSUFFICIENT_BUFFER => {}
+            other => {
+                return Err(io::Error::from_raw_os_error(
+                    i32::try_from(other).unwrap_or(-1),
+                ));
+            }
+        }
+    }
+    Err(io::Error::other("the TCP table kept changing size"))
+}
+
+/// Each running process's parent, by process ID (a snapshot; PIDs may be reused).
+pub fn process_parents() -> io::Result<std::collections::HashMap<u32, u32>> {
+    // SAFETY: plain call; INVALID_HANDLE_VALUE is handled below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let snapshot = owned(snapshot);
+    let mut parents = std::collections::HashMap::new();
+    // SAFETY: all-zero is a valid PROCESSENTRY32W apart from dwSize, set next.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(0);
+    // SAFETY: valid snapshot handle and entry with dwSize set.
+    let mut ok = unsafe { Process32FirstW(raw(&snapshot), &raw mut entry) };
+    while ok != 0 {
+        parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+        // SAFETY: as above.
+        ok = unsafe { Process32NextW(raw(&snapshot), &raw mut entry) };
+    }
+    Ok(parents)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -920,6 +1043,36 @@ mod tests {
         let long = PathBuf::from(format!("C:\\{}", "x".repeat(MAX_UNIX_SOCKET_PATH)));
         let err = connect_unix(&long).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+    }
+
+    #[test]
+    fn listeners_include_our_own_socket_with_our_pid() {
+        let v4 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let v6 = std::net::TcpListener::bind("[::1]:0").ok();
+        let listeners = tcp_listeners().unwrap();
+        let me = std::process::id();
+        assert!(
+            listeners.contains(&(v4.local_addr().unwrap(), me)),
+            "{:?} not in {} listeners",
+            v4.local_addr(),
+            listeners.len()
+        );
+        if let Some(v6) = v6 {
+            assert!(listeners.contains(&(v6.local_addr().unwrap(), me)));
+        }
+    }
+
+    #[test]
+    fn our_parent_is_in_the_process_snapshot() {
+        let child = std::process::Command::new(system_directory().unwrap().join("PING.EXE"))
+            .args(["-n", "5", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn();
+        let mut child = child.unwrap();
+        let parents = process_parents().unwrap();
+        assert_eq!(parents.get(&child.id()), Some(&std::process::id()));
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]

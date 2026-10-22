@@ -10,6 +10,7 @@ use kiln_core::Tld;
 use kiln_platform::hosts;
 
 mod apply;
+mod doctor;
 mod php;
 mod pool;
 mod web;
@@ -79,6 +80,13 @@ enum Command {
     },
     /// Let a site use the default PHP version again.
     Unisolate { site: Option<String> },
+    /// Check Kiln's health: state, ports, web server, PHP, sites, DNS, certificates, shims.
+    /// Changes nothing; exits with 1 if something failed.
+    Doctor {
+        /// Print the findings as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show what `php` and `composer` run in a folder (default: the current one), and why.
     Which { path: Option<PathBuf> },
     /// Composer (verified download from getcomposer.org, run through the `composer` shim).
@@ -315,7 +323,15 @@ fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), 
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Doctor { json } = cli.command {
+        return if doctor::run(json) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
     let result = match cli.command {
+        Command::Doctor { .. } => unreachable!("handled above"),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, &tld, file),

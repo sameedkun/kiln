@@ -17,13 +17,13 @@ use kiln_web::{CaFiles, SiteSpec, Status, WebConfig, WebServer};
 
 use crate::apply;
 
-const HTTP_PORT_KEY: &str = "web.http_port";
-const HTTPS_PORT_KEY: &str = "web.https_port";
-const CADDY_VERSION_KEY: &str = "web.caddy_version";
+pub(crate) const HTTP_PORT_KEY: &str = "web.http_port";
+pub(crate) const HTTPS_PORT_KEY: &str = "web.https_port";
+pub(crate) const CADDY_VERSION_KEY: &str = "web.caddy_version";
 /// Re-issue the intermediate when it has fewer days left than this (ADR 0011 §7).
 const INTERMEDIATE_MIN_DAYS: i64 = 10;
 
-fn open_store() -> Result<StateStore, String> {
+pub(crate) fn open_store() -> Result<StateStore, String> {
     let dir = kiln_state::default_state_dir().ok_or("cannot determine the state directory")?;
     StateStore::open_dir(&dir)
         .map(|(store, _)| store)
@@ -35,7 +35,7 @@ fn local_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "cannot determine Kiln's local data directory".to_owned())
 }
 
-fn server() -> Result<WebServer, String> {
+pub(crate) fn server() -> Result<WebServer, String> {
     let local = local_dir()?;
     Ok(WebServer::new(
         local.join("bin").join(kiln_web::EXE_NAME),
@@ -54,7 +54,7 @@ pub(crate) fn host_name(name: &str) -> Result<HostName, String> {
     HostName::new(&fqdn, &tld).map_err(|e| e.to_string())
 }
 
-fn port_setting(store: &StateStore, key: &str, default: u16) -> Result<u16, String> {
+pub(crate) fn port_setting(store: &StateStore, key: &str, default: u16) -> Result<u16, String> {
     match store.setting(key).map_err(|e| e.to_string())? {
         None => Ok(default),
         Some(value) => value
@@ -130,7 +130,7 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
 /// ([ADR 0015]).
 ///
 /// [ADR 0015]: ../../../docs/adr/0015-parked-folders-and-drivers.md
-fn resolved(store: &StateStore) -> Result<kiln_sites::Resolved, String> {
+pub(crate) fn resolved(store: &StateStore) -> Result<kiln_sites::Resolved, String> {
     kiln_runtime::sites(store).map_err(|e| e.to_string())
 }
 
@@ -202,7 +202,7 @@ fn hosts_hint(host: &str) {
 }
 
 /// Names currently in Kiln's hosts-file block (empty if it can't be read).
-fn hosts_names() -> Vec<String> {
+pub(crate) fn hosts_names() -> Vec<String> {
     std::fs::read(crate::system_hosts_path())
         .ok()
         .and_then(|bytes| kiln_platform::hosts::read_block(&bytes).ok())

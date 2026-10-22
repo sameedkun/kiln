@@ -1,0 +1,938 @@
+//! `kiln doctor` ([ADR 0017]): read-only health checks.
+//!
+//! The CLI gathers [`Facts`] (database, sockets, processes, files); [`diagnose`] turns them
+//! into [`Finding`]s with pure rules, so every rule is tested with made-up facts.
+//!
+//! [ADR 0017]: ../../../docs/adr/0017-kiln-doctor.md
+
+use std::fmt::Write as _;
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+/// How bad a finding is, mildest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Ok,
+    Info,
+    Warn,
+    Fail,
+}
+
+/// What a finding is about, in report order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Area {
+    State,
+    Environment,
+    Ports,
+    Web,
+    Php,
+    Sites,
+    Dns,
+    Certificates,
+    Shims,
+}
+
+impl Area {
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::State => "State",
+            Self::Environment => "Environment",
+            Self::Ports => "Ports",
+            Self::Web => "Web server",
+            Self::Php => "PHP",
+            Self::Sites => "Sites",
+            Self::Dns => "DNS",
+            Self::Certificates => "Certificates",
+            Self::Shims => "Shims",
+        }
+    }
+}
+
+/// One observation, and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Finding {
+    pub area: Area,
+    pub status: Status,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+fn finding(area: Area, status: Status, message: impl Into<String>) -> Finding {
+    Finding {
+        area,
+        status,
+        message: message.into(),
+        fix: None,
+    }
+}
+
+fn with_fix(mut finding: Finding, fix: impl Into<String>) -> Finding {
+    finding.fix = Some(fix.into());
+    finding
+}
+
+// ---------------------------------------------------------------------------------------------
+// Facts
+// ---------------------------------------------------------------------------------------------
+
+/// Everything the rules look at, gathered by the caller.
+#[derive(Debug, Clone, Default)]
+pub struct Facts {
+    pub state: StateFacts,
+    /// Executables of this process's ancestors, nearest first.
+    pub ancestors: Vec<PathBuf>,
+    pub ports: Vec<PortFacts>,
+    pub web: WebFacts,
+    pub php: PhpFacts,
+    pub sites: SiteFacts,
+    /// Only gathered when a site uses HTTPS.
+    pub certificates: Option<CertFacts>,
+    pub shims: ShimFacts,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StateFacts {
+    /// Why the database can't be opened, if it can't.
+    pub open_error: Option<String>,
+    pub schema: i64,
+    pub supported: i64,
+    /// Operations left half-done: (id, kind, state).
+    pub unfinished: Vec<(u64, String, String)>,
+}
+
+/// A port Kiln wants and who holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortFacts {
+    pub addr: SocketAddr,
+    /// "HTTP" or "HTTPS".
+    pub purpose: &'static str,
+    pub owner: Option<Owner>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owner {
+    pub pid: u32,
+    /// `None` if the process can't be opened (another user's, or protected).
+    pub image: Option<PathBuf>,
+    /// The owner is Kiln's own Caddy.
+    pub is_kiln: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WebFacts {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub running_pid: Option<u32>,
+    /// `Some(false)`: running, but the admin socket didn't answer.
+    pub admin_answers: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PhpFacts {
+    /// (version, complete on disk)
+    pub installed: Vec<(String, bool)>,
+    pub default: Option<String>,
+    /// (site, pin, version used instead)
+    pub fallbacks: Vec<(String, String, Option<String>)>,
+    pub supervisor_pid: Option<u32>,
+    /// (pool id, [(port, listening)])
+    pub pools: Vec<(String, Vec<(u16, bool)>)>,
+    pub recent_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SiteFacts {
+    pub sites: Vec<SiteDns>,
+    /// (folder, reason)
+    pub skipped: Vec<(PathBuf, String)>,
+    /// Names in Kiln's hosts block that are no longer sites.
+    pub stale_hosts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteDns {
+    pub host: String,
+    pub in_hosts_block: bool,
+    /// What the name resolves to; empty if it doesn't resolve.
+    pub resolves_to: Vec<IpAddr>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CertFacts {
+    pub root_present: bool,
+    /// `None` where trust can't be checked (not Windows).
+    pub trusted: Option<bool>,
+    pub intermediate_days_left: Option<i64>,
+    /// Firefox profiles found (Firefox may keep its own trust store).
+    pub firefox_profiles: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ShimFacts {
+    pub installed: bool,
+    pub shims_dir: PathBuf,
+    /// Where `php` resolves on this terminal's PATH.
+    pub php_on_path: Option<PathBuf>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rules
+// ---------------------------------------------------------------------------------------------
+
+/// All findings for `facts`, in report order.
+#[must_use]
+pub fn diagnose(facts: &Facts) -> Report {
+    let mut findings = Vec::new();
+    findings.extend(state(&facts.state));
+    findings.extend(environment(&facts.ancestors));
+    findings.extend(ports(&facts.ports));
+    findings.extend(web(&facts.web));
+    findings.extend(php(&facts.php));
+    findings.extend(sites(&facts.sites));
+    findings.extend(dns(&facts.sites));
+    if let Some(certs) = &facts.certificates {
+        findings.extend(certificates(certs));
+    }
+    findings.extend(shims(&facts.shims));
+    findings.sort_by_key(|f| f.area);
+    Report { findings }
+}
+
+fn state(facts: &StateFacts) -> Vec<Finding> {
+    let area = Area::State;
+    if let Some(e) = &facts.open_error {
+        return vec![finding(
+            area,
+            Status::Fail,
+            format!("the state database can't be opened: {e}"),
+        )];
+    }
+    let mut out = vec![finding(
+        area,
+        Status::Ok,
+        format!(
+            "database schema v{} (this Kiln supports v{})",
+            facts.schema, facts.supported
+        ),
+    )];
+    for (id, kind, state) in &facts.unfinished {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!("operation #{id} ({kind}) was left {state}"),
+            ),
+            format!("kiln undo {id}"),
+        ));
+    }
+    out
+}
+
+/// Programs installed from the Microsoft Store / MSIX live here; processes they start may see
+/// a redirected `AppData` ([I-45]).
+///
+/// [I-45]: ../../../docs/issues.md#i-45
+fn environment(ancestors: &[PathBuf]) -> Vec<Finding> {
+    // Packaged apps live in a `WindowsApps` folder, on whichever drive apps are installed to
+    // (Windows reports the real path, e.g. `E:\WindowsApps\…`, not `C:\Program Files\…`).
+    // A program running from a package's redirected AppData (`…\Packages\<id>\LocalCache\…`)
+    // is inside that container too.
+    let packaged = ancestors.iter().find(|image| {
+        let path = image.to_string_lossy().to_ascii_lowercase();
+        path.contains(r"\windowsapps\")
+            || (path.contains(r"\appdata\local\packages\") && path.contains(r"\localcache\"))
+    });
+    match packaged {
+        Some(image) => vec![with_fix(
+            finding(
+                Area::Environment,
+                Status::Warn,
+                format!(
+                    "kiln runs under a packaged app ({}); Windows may redirect its AppData, so Kiln's state here can differ from a normal terminal's",
+                    image.display()
+                ),
+            ),
+            "run kiln from a normal terminal (Windows Terminal or PowerShell from the Start menu)",
+        )],
+        None => vec![finding(
+            Area::Environment,
+            Status::Ok,
+            "normal terminal (no packaged-app container)",
+        )],
+    }
+}
+
+fn ports(facts: &[PortFacts]) -> Vec<Finding> {
+    let area = Area::Ports;
+    facts
+        .iter()
+        .map(|port| match &port.owner {
+            None => finding(
+                area,
+                Status::Ok,
+                format!("{} {} is free", port.purpose, port.addr),
+            ),
+            Some(owner) if owner.is_kiln => finding(
+                area,
+                Status::Ok,
+                format!(
+                    "{} {} is Kiln's web server (PID {})",
+                    port.purpose, port.addr, owner.pid
+                ),
+            ),
+            Some(owner) => {
+                let who = owner.image.as_ref().map_or_else(
+                    || format!("PID {} (not inspectable)", owner.pid),
+                    |image| format!("{} (PID {})", image.display(), owner.pid),
+                );
+                let flag = if port.purpose == "HTTP" {
+                    "--http-port"
+                } else {
+                    "--https-port"
+                };
+                with_fix(
+                    finding(
+                        area,
+                        Status::Warn,
+                        format!("{} {} is held by {who}", port.purpose, port.addr),
+                    ),
+                    format!("use another port: kiln web start {flag} <port>"),
+                )
+            }
+        })
+        .collect()
+}
+
+fn web(facts: &WebFacts) -> Vec<Finding> {
+    let area = Area::Web;
+    if !facts.installed {
+        return vec![with_fix(
+            finding(area, Status::Warn, "Caddy isn't installed"),
+            "kiln web install",
+        )];
+    }
+    let version = facts.version.as_deref().unwrap_or("?");
+    let mut out = vec![finding(
+        area,
+        Status::Ok,
+        format!("Caddy {version} installed"),
+    )];
+    match (facts.running_pid, facts.admin_answers) {
+        (None, _) => out.push(with_fix(
+            finding(area, Status::Info, "the web server isn't running"),
+            "kiln web start",
+        )),
+        (Some(pid), Some(false)) => out.push(with_fix(
+            finding(
+                area,
+                Status::Fail,
+                format!("running (PID {pid}), but its admin socket doesn't answer, so changes can't be applied"),
+            ),
+            "kiln web restart",
+        )),
+        (Some(pid), _) => out.push(finding(area, Status::Ok, format!("running (PID {pid})"))),
+    }
+    out
+}
+
+fn php(facts: &PhpFacts) -> Vec<Finding> {
+    let area = Area::Php;
+    let mut out = Vec::new();
+    if facts.installed.is_empty() {
+        return vec![with_fix(
+            finding(
+                area,
+                Status::Info,
+                "no PHP installed; sites are served as static files",
+            ),
+            "kiln php install 8.4",
+        )];
+    }
+    for (version, complete) in &facts.installed {
+        out.push(if *complete {
+            finding(area, Status::Ok, format!("PHP {version} installed"))
+        } else {
+            with_fix(
+                finding(
+                    area,
+                    Status::Fail,
+                    format!("PHP {version} is incomplete on disk"),
+                ),
+                format!("kiln php install {version}"),
+            )
+        });
+    }
+    if let Some(default) = &facts.default {
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("default for sites: PHP {default}"),
+        ));
+    }
+    for (site, pin, used) in &facts.fallbacks {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!(
+                    "{site} is pinned to PHP {pin}, which isn't installed; it uses {} instead",
+                    used.as_deref().unwrap_or("nothing")
+                ),
+            ),
+            format!("kiln php install {pin}  (or: kiln unisolate {site})"),
+        ));
+    }
+    match facts.supervisor_pid {
+        None if !facts.pools.is_empty() => out.push(with_fix(
+            finding(
+                area,
+                Status::Fail,
+                "PHP pools are configured but the supervisor isn't running",
+            ),
+            "kiln web restart",
+        )),
+        None => {}
+        Some(pid) => {
+            for (pool, workers) in &facts.pools {
+                let down: Vec<String> = workers
+                    .iter()
+                    .filter(|(_, listening)| !listening)
+                    .map(|(port, _)| port.to_string())
+                    .collect();
+                out.push(if down.is_empty() {
+                    finding(
+                        area,
+                        Status::Ok,
+                        format!(
+                            "pool {pool}: {} workers listening (supervisor PID {pid})",
+                            workers.len()
+                        ),
+                    )
+                } else {
+                    with_fix(
+                        finding(
+                            area,
+                            Status::Warn,
+                            format!(
+                                "pool {pool}: workers on port(s) {} aren't listening",
+                                down.join(", ")
+                            ),
+                        ),
+                        "see supervisor.log and php-errors.log in %LOCALAPPDATA%\\Kiln\\supervisor",
+                    )
+                });
+            }
+        }
+    }
+    if !facts.recent_errors.is_empty() {
+        out.push(finding(
+            area,
+            Status::Info,
+            format!(
+                "recent php-errors.log lines:\n{}",
+                facts.recent_errors.join("\n")
+            ),
+        ));
+    }
+    out
+}
+
+fn sites(facts: &SiteFacts) -> Vec<Finding> {
+    let area = Area::Sites;
+    let mut out = vec![if facts.sites.is_empty() {
+        with_fix(
+            finding(area, Status::Info, "no sites yet"),
+            "kiln link (in a project) or kiln park (in a folder of projects)",
+        )
+    } else {
+        finding(area, Status::Ok, format!("{} site(s)", facts.sites.len()))
+    }];
+    for (folder, reason) in &facts.skipped {
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("skipped {}: {reason}", folder.display()),
+        ));
+    }
+    out
+}
+
+fn dns(facts: &SiteFacts) -> Vec<Finding> {
+    let area = Area::Dns;
+    let mut out = Vec::new();
+    let missing: Vec<&str> = facts
+        .sites
+        .iter()
+        .filter(|s| !s.in_hosts_block)
+        .map(|s| s.host.as_str())
+        .collect();
+    if !missing.is_empty() {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!("not in the hosts file: {}", missing.join(", ")),
+            ),
+            "kiln hosts sync",
+        ));
+    }
+    for site in facts.sites.iter().filter(|s| s.in_hosts_block) {
+        if site.resolves_to.is_empty() {
+            out.push(finding(
+                area,
+                Status::Warn,
+                format!("{} is in the hosts file but doesn't resolve (DNS client cache, or a VPN/DNS-over-HTTPS setting)", site.host),
+            ));
+        } else if site.resolves_to.iter().any(|ip| !ip.is_loopback()) {
+            let ips: Vec<String> = site.resolves_to.iter().map(ToString::to_string).collect();
+            out.push(finding(
+                area,
+                Status::Fail,
+                format!(
+                    "{} resolves to {}, not this computer",
+                    site.host,
+                    ips.join(", ")
+                ),
+            ));
+        }
+    }
+    if !facts.stale_hosts.is_empty() {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Info,
+                format!(
+                    "in the hosts file but no longer sites: {}",
+                    facts.stale_hosts.join(", ")
+                ),
+            ),
+            "kiln hosts sync",
+        ));
+    }
+    if out.is_empty() && !facts.sites.is_empty() {
+        out.push(finding(
+            area,
+            Status::Ok,
+            "every site resolves to this computer",
+        ));
+    }
+    out
+}
+
+fn certificates(facts: &CertFacts) -> Vec<Finding> {
+    let area = Area::Certificates;
+    if !facts.root_present {
+        return vec![with_fix(
+            finding(
+                area,
+                Status::Fail,
+                "a site uses HTTPS but Kiln's CA doesn't exist",
+            ),
+            "kiln ca init && kiln ca trust",
+        )];
+    }
+    let mut out = vec![match facts.trusted {
+        Some(true) => finding(
+            area,
+            Status::Ok,
+            "Kiln's root CA is trusted for your account",
+        ),
+        Some(false) => with_fix(
+            finding(
+                area,
+                Status::Warn,
+                "Kiln's root CA isn't trusted; browsers will warn on HTTPS sites",
+            ),
+            "kiln ca trust",
+        ),
+        None => finding(
+            area,
+            Status::Info,
+            "trust can't be checked on this platform yet",
+        ),
+    }];
+    match facts.intermediate_days_left {
+        Some(days) if days < 10 => out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!("the web server's intermediate certificate expires in {days} day(s)"),
+            ),
+            "kiln web restart  (renews it)",
+        )),
+        Some(days) => out.push(finding(
+            area,
+            Status::Ok,
+            format!("intermediate certificate valid for {days} more days"),
+        )),
+        None => out.push(with_fix(
+            finding(area, Status::Warn, "no intermediate certificate yet"),
+            "kiln web start  (issues it)",
+        )),
+    }
+    out.push(finding(
+        area,
+        Status::Info,
+        "curl.exe and Git on Windows (Schannel) refuse local CAs with \"revocation status unknown\"; add --ssl-revoke-best-effort (curl) or http.schannelCheckRevoke=false (git) for .test URLs",
+    ));
+    if facts.firefox_profiles > 0 {
+        out.push(finding(
+            area,
+            Status::Info,
+            format!(
+                "Firefox found ({} profile(s)); if it warns on .test HTTPS sites, set security.enterprise_roots.enabled = true in about:config so it uses the Windows trust store",
+                facts.firefox_profiles
+            ),
+        ));
+    }
+    out
+}
+
+fn shims(facts: &ShimFacts) -> Vec<Finding> {
+    let area = Area::Shims;
+    if !facts.installed {
+        return vec![with_fix(
+            finding(area, Status::Info, "php/composer shims aren't installed"),
+            "kiln shims install",
+        )];
+    }
+    match &facts.php_on_path {
+        Some(php) if php.starts_with(&facts.shims_dir) => {
+            vec![finding(
+                area,
+                Status::Ok,
+                "`php` on this terminal's PATH is Kiln's shim",
+            )]
+        }
+        Some(php) => vec![with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!(
+                    "`php` on this terminal's PATH is {}, not Kiln's shim",
+                    php.display()
+                ),
+            ),
+            "open a new terminal; if it persists: kiln shims install",
+        )],
+        None => vec![with_fix(
+            finding(
+                area,
+                Status::Warn,
+                "the shims are installed but `php` isn't on this terminal's PATH",
+            ),
+            "open a new terminal; if it persists: kiln shims install",
+        )],
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Report {
+    pub findings: Vec<Finding>,
+}
+
+impl Report {
+    #[must_use]
+    pub fn worst(&self) -> Status {
+        self.findings
+            .iter()
+            .map(|f| f.status)
+            .max()
+            .unwrap_or(Status::Ok)
+    }
+
+    /// Plain text, grouped by area.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut text = String::new();
+        let mut area = None;
+        for f in &self.findings {
+            if area != Some(f.area) {
+                area = Some(f.area);
+                let _ = writeln!(text, "{}", f.area.title());
+            }
+            let mark = match f.status {
+                Status::Ok => "  ok  ",
+                Status::Info => "  --  ",
+                Status::Warn => "  !!  ",
+                Status::Fail => "  XX  ",
+            };
+            let mut lines = f.message.lines();
+            let _ = writeln!(text, "{mark}{}", lines.next().unwrap_or(""));
+            for line in lines {
+                let _ = writeln!(text, "        {line}");
+            }
+            if let Some(fix) = &f.fix {
+                let _ = writeln!(text, "        → {fix}");
+            }
+        }
+        let (warns, fails) = self
+            .findings
+            .iter()
+            .fold((0, 0), |(w, x), f| match f.status {
+                Status::Warn => (w + 1, x),
+                Status::Fail => (w, x + 1),
+                _ => (w, x),
+            });
+        let _ = writeln!(
+            text,
+            "\n{fails} problem(s), {warns} warning(s). kiln doctor changes nothing."
+        );
+        text
+    }
+
+    /// The findings as pretty JSON, for scripts and the GUI.
+    ///
+    /// # Panics
+    ///
+    /// Never: findings hold only strings and enums.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("findings always serialize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    fn of(report: &Report, area: Area) -> Vec<&Finding> {
+        report.findings.iter().filter(|f| f.area == area).collect()
+    }
+
+    fn base() -> Facts {
+        Facts {
+            state: StateFacts {
+                open_error: None,
+                schema: 5,
+                supported: 5,
+                unfinished: Vec::new(),
+            },
+            web: WebFacts {
+                installed: true,
+                version: Some("2.11.7".into()),
+                ..WebFacts::default()
+            },
+            ..Facts::default()
+        }
+    }
+
+    #[test]
+    fn a_healthy_idle_setup_has_no_warnings() {
+        let report = diagnose(&base());
+        assert!(report.worst() <= Status::Info, "{}", report.render());
+        assert!(report.render().contains("kiln doctor changes nothing"));
+    }
+
+    #[test]
+    fn half_done_operations_point_at_undo() {
+        let mut facts = base();
+        facts.state.unfinished = vec![(4, "dns.hosts.block".into(), "applying".into())];
+        let report = diagnose(&facts);
+        let f = of(&report, Area::State)[1];
+        assert_eq!(f.status, Status::Warn);
+        assert_eq!(f.fix.as_deref(), Some("kiln undo 4"));
+    }
+
+    #[test]
+    fn a_packaged_app_ancestor_is_flagged() {
+        let mut facts = base();
+        facts.ancestors = vec![
+            PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+            PathBuf::from(
+                r"C:\Program Files\WindowsApps\Claude_3.1623.0.0_x64__pzs8sxrjxfjjc\app\Claude.exe",
+            ),
+        ];
+        let report = diagnose(&facts);
+        let env = of(&report, Area::Environment);
+        assert_eq!(env[0].status, Status::Warn);
+        assert!(env[0].message.contains("Claude.exe"));
+
+        // What Windows actually reports when apps are installed on another drive, and a
+        // program running from a package's redirected AppData (both seen on the dev machine).
+        for image in [
+            r"E:\WindowsApps\Claude_3.1623.1.0_x64__pzs8sxrjxfjjc\app\claude.exe",
+            r"E:\WpSystem\S-1-5-21-1\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\claude.exe",
+        ] {
+            facts.ancestors = vec![PathBuf::from(image)];
+            let report = diagnose(&facts);
+            assert_eq!(
+                of(&report, Area::Environment)[0].status,
+                Status::Warn,
+                "{image}"
+            );
+        }
+        facts.ancestors = vec![PathBuf::from(r"C:\Windows\explorer.exe")];
+        let report = diagnose(&facts);
+        assert_eq!(of(&report, Area::Environment)[0].status, Status::Ok);
+    }
+
+    #[test]
+    fn a_port_held_by_another_program_names_it_and_suggests_another_port() {
+        let mut facts = base();
+        facts.ports = vec![
+            PortFacts {
+                addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 80)),
+                purpose: "HTTP",
+                owner: Some(Owner {
+                    pid: 4321,
+                    image: Some(PathBuf::from(
+                        r"C:\Users\dev\.config\herd\bin\nginx\nginx.exe",
+                    )),
+                    is_kiln: false,
+                }),
+            },
+            PortFacts {
+                addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8080)),
+                purpose: "HTTP",
+                owner: Some(Owner {
+                    pid: 99,
+                    image: None,
+                    is_kiln: true,
+                }),
+            },
+        ];
+        let report = diagnose(&facts);
+        let ports = of(&report, Area::Ports);
+        assert_eq!(ports[0].status, Status::Warn);
+        assert!(ports[0].message.contains("nginx.exe (PID 4321)"));
+        assert!(ports[0].fix.as_deref().unwrap().contains("--http-port"));
+        assert_eq!(ports[1].status, Status::Ok);
+    }
+
+    #[test]
+    fn php_problems_are_reported_with_fixes() {
+        let mut facts = base();
+        facts.php = PhpFacts {
+            installed: vec![("8.3.36".into(), true), ("8.4.27".into(), false)],
+            default: Some("8.3.36".into()),
+            fallbacks: vec![("legacy.test".into(), "8.1".into(), Some("8.3.36".into()))],
+            supervisor_pid: Some(7),
+            pools: vec![("8.3.36".into(), vec![(9101, true), (9102, false)])],
+            recent_errors: vec!["PHP Warning: x".into()],
+        };
+        let report = diagnose(&facts);
+        let php = of(&report, Area::Php);
+        let worst = php.iter().map(|f| f.status).max().unwrap();
+        assert_eq!(worst, Status::Fail, "incomplete 8.4.27");
+        assert!(php.iter().any(|f| f.message.contains("pinned to PHP 8.1")));
+        assert!(php.iter().any(|f| f.message.contains("port(s) 9102")));
+
+        facts.php.supervisor_pid = None;
+        let report = diagnose(&facts);
+        assert!(
+            of(&report, Area::Php)
+                .iter()
+                .any(|f| f.message.contains("supervisor isn't running"))
+        );
+    }
+
+    #[test]
+    fn dns_problems_are_told_apart() {
+        let mut facts = base();
+        let lo = IpAddr::from(Ipv4Addr::LOCALHOST);
+        facts.sites.sites = vec![
+            SiteDns {
+                host: "ok.test".into(),
+                in_hosts_block: true,
+                resolves_to: vec![lo],
+            },
+            SiteDns {
+                host: "new.test".into(),
+                in_hosts_block: false,
+                resolves_to: vec![],
+            },
+            SiteDns {
+                host: "vpn.test".into(),
+                in_hosts_block: true,
+                resolves_to: vec![],
+            },
+            SiteDns {
+                host: "hijack.test".into(),
+                in_hosts_block: true,
+                resolves_to: vec![IpAddr::from([10, 0, 0, 5])],
+            },
+        ];
+        facts.sites.stale_hosts = vec!["old.test".into()];
+        let report = diagnose(&facts);
+        let dns = of(&report, Area::Dns);
+        assert!(
+            dns.iter()
+                .any(|f| f.message.contains("new.test")
+                    && f.fix.as_deref() == Some("kiln hosts sync"))
+        );
+        assert!(
+            dns.iter()
+                .any(|f| f.message.contains("vpn.test") && f.status == Status::Warn)
+        );
+        assert!(
+            dns.iter()
+                .any(|f| f.message.contains("10.0.0.5") && f.status == Status::Fail)
+        );
+        assert!(dns.iter().any(|f| f.message.contains("old.test")));
+        assert!(!dns.iter().any(|f| f.message.contains("ok.test")));
+    }
+
+    #[test]
+    fn https_sites_get_trust_expiry_and_the_schannel_note() {
+        let mut facts = base();
+        facts.certificates = Some(CertFacts {
+            root_present: true,
+            trusted: Some(false),
+            intermediate_days_left: Some(3),
+            firefox_profiles: 1,
+        });
+        let report = diagnose(&facts);
+        let certs = of(&report, Area::Certificates);
+        assert!(
+            certs
+                .iter()
+                .any(|f| f.fix.as_deref() == Some("kiln ca trust"))
+        );
+        assert!(certs.iter().any(|f| f.message.contains("expires in 3 day")));
+        assert!(
+            certs
+                .iter()
+                .any(|f| f.message.contains("--ssl-revoke-best-effort"))
+        );
+        assert!(certs.iter().any(|f| f.message.contains("enterprise_roots")));
+    }
+
+    #[test]
+    fn shims_report_what_php_resolves_to() {
+        let mut facts = base();
+        facts.shims = ShimFacts {
+            installed: true,
+            shims_dir: PathBuf::from(r"C:\kiln\bin\shims"),
+            php_on_path: Some(PathBuf::from(r"C:\Users\dev\.config\herd\bin\php.bat")),
+        };
+        let report = diagnose(&facts);
+        assert_eq!(of(&report, Area::Shims)[0].status, Status::Warn);
+        facts.shims.php_on_path = Some(PathBuf::from(r"C:\kiln\bin\shims\php.exe"));
+        assert_eq!(of(&diagnose(&facts), Area::Shims)[0].status, Status::Ok);
+    }
+
+    #[test]
+    fn report_renders_grouped_text_and_json() {
+        let mut facts = base();
+        facts.state.open_error = Some("locked".into());
+        let report = diagnose(&facts);
+        assert_eq!(report.worst(), Status::Fail);
+        let text = report.render();
+        assert!(text.starts_with("State\n  XX  the state database can't be opened: locked"));
+        let json: serde_json::Value = serde_json::from_str(&report.to_json()).unwrap();
+        assert_eq!(json["findings"][0]["status"], "fail");
+        assert_eq!(json["findings"][0]["area"], "state");
+    }
+}
