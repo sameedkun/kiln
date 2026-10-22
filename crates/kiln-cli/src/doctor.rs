@@ -432,6 +432,7 @@ fn shims(php_on_path: Option<PathBuf>) -> ShimFacts {
 ///
 /// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
 #[cfg(target_os = "linux")]
+#[allow(clippy::unnecessary_wraps)] // same signature as elsewhere, where it is `None`
 fn resolver() -> Option<ResolverFacts> {
     let nsswitch_hosts = std::fs::read_to_string("/etc/nsswitch.conf")
         .ok()
