@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 kiln-core.workspace = true
+kiln-coexist.workspace = true
 kiln-doctor.workspace = true
 kiln-platform.workspace = true
 kiln-state.workspace = true

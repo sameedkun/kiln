@@ -260,6 +260,7 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
         trust_hint()?;
     }
     hosts_hint(host.as_str());
+    crate::coexist::note_shared_names(&store, &[host.to_string()]);
     apply_site_change(&store)
 }
 
@@ -317,6 +318,8 @@ pub fn park(path: Option<PathBuf>) -> Result<(), String> {
     if missing > 0 {
         println!("{missing} of them aren't in the hosts file yet; run `kiln hosts sync`.");
     }
+    let names: Vec<String> = here.iter().map(|s| s.host.to_string()).collect();
+    crate::coexist::note_shared_names(&store, &names);
     apply_site_change(&store)
 }
 
@@ -452,6 +455,40 @@ fn trust_hint() -> Result<(), String> {
     Ok(())
 }
 
+/// Enough of the config to print site URLs: only the ports matter. Reads settings only (never
+/// the CA, which `web_config` may renew), so `kiln doctor` can use it.
+fn url_config(store: &StateStore) -> WebConfig {
+    WebConfig {
+        http_port: port_setting(store, HTTP_PORT_KEY, 80).unwrap_or(80),
+        https_port: port_setting(store, HTTPS_PORT_KEY, 443).unwrap_or(443),
+        ipv6: false,
+        sites: Vec::new(),
+        ca: None,
+        storage_dir: PathBuf::new(),
+        log_file: PathBuf::new(),
+        admin_socket: PathBuf::new(),
+        php_pools: BTreeMap::new(),
+    }
+}
+
+/// Every site's URL, by host name.
+pub(crate) fn site_urls(store: &StateStore) -> BTreeMap<String, String> {
+    let config = url_config(store);
+    resolved(store)
+        .map(|all| {
+            all.sites
+                .iter()
+                .map(|site| {
+                    (
+                        site.host.to_string(),
+                        config.site_url(&spec(site, &BTreeMap::new())),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn sites() -> Result<(), String> {
     let store = open_store()?;
     let parked = store.parked().map_err(|e| e.to_string())?;
@@ -465,18 +502,7 @@ pub fn sites() -> Result<(), String> {
         );
         return Ok(());
     }
-    // Without the CA a secure site can't be configured, but it can still be listed.
-    let config = web_config(&store).unwrap_or_else(|_| WebConfig {
-        http_port: port_setting(&store, HTTP_PORT_KEY, 80).unwrap_or(80),
-        https_port: port_setting(&store, HTTPS_PORT_KEY, 443).unwrap_or(443),
-        ipv6: false,
-        sites: Vec::new(),
-        ca: None,
-        storage_dir: PathBuf::new(),
-        log_file: PathBuf::new(),
-        admin_socket: PathBuf::new(),
-        php_pools: BTreeMap::new(),
-    });
+    let config = url_config(&store);
     let in_hosts = hosts_names();
     let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
     let versions =
@@ -562,22 +588,28 @@ pub fn install(archive: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// `kiln web start`: ports the user chose (`--http-port`, `--https-port`) are kept; the others
+/// are picked automatically ([ADR 0019] §3).
+///
+/// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
 #[allow(clippy::similar_names)] // HTTP and HTTPS ports are the clearest names
-pub fn start(http_port: Option<u16>, https_port: Option<u16>) -> Result<(), String> {
+pub fn start(
+    http_port: Option<u16>,
+    https_port: Option<u16>,
+    auto_ports: bool,
+) -> Result<(), String> {
     let mut store = open_store()?;
-    if let Some(port) = http_port {
-        store
-            .set_setting(HTTP_PORT_KEY, &port.to_string())
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(port) = https_port {
-        store
-            .set_setting(HTTPS_PORT_KEY, &port.to_string())
-            .map_err(|e| e.to_string())?;
-    }
     let server = server()?;
     if let Status::Running { pid } = server.status().map_err(|e| e.to_string())? {
         return Err(format!("Kiln's web server is already running (PID {pid})"));
+    }
+    let secure = resolved(&store)?.sites.iter().any(|s| s.secure);
+    let ports = crate::coexist::Listeners::now();
+    for (kind, chosen, needed) in [
+        (&crate::coexist::HTTP, http_port, true),
+        (&crate::coexist::HTTPS, https_port, secure),
+    ] {
+        crate::coexist::choose_port(&mut store, kind, chosen, auto_ports, needed, &ports)?;
     }
     // PHP workers first, so Caddy never points at ports nobody listens on.
     let supervisor = crate::pool::supervisor()?;
@@ -657,7 +689,7 @@ pub fn stop() -> Result<(), String> {
 
 pub fn restart() -> Result<(), String> {
     stop()?;
-    start(None, None)
+    start(None, None, false)
 }
 
 /// Re-applies the current sites and settings to the running server without restarting it.

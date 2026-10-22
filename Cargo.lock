@@ -627,6 +627,7 @@ name = "kiln-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "kiln-coexist",
  "kiln-core",
  "kiln-doctor",
  "kiln-fetch",
@@ -644,6 +645,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
+]
+
+[[package]]
+name = "kiln-coexist"
+version = "0.0.0"
+dependencies = [
+ "kiln-platform",
+ "tempfile",
 ]
 
 [[package]]

@@ -3,19 +3,20 @@
 //!
 //! [ADR 0017]: ../../../docs/adr/0017-kiln-doctor.md
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kiln_doctor::{
-    CertFacts, Facts, Owner, PhpFacts, PortFacts, ShimFacts, SiteDns, SiteFacts, StateFacts,
-    Status, WebFacts,
+    CertFacts, Facts, OtherToolsFacts, Owner, PhpFacts, PortFacts, SharedName, ShimFacts, SiteDns,
+    SiteFacts, StateFacts, Status, WebFacts,
 };
 use kiln_ops::{Journal, OpState};
 use kiln_state::StateStore;
 use kiln_sys::background::ProcStatus;
 
+use crate::coexist::{self, Listeners};
 use crate::web;
 
 /// Prints the report; returns whether nothing failed.
@@ -35,10 +36,14 @@ fn gather() -> Facts {
         ancestors: ancestors(),
         ..Facts::default()
     };
+    let listeners = Listeners::now();
+    let php_on_path = crate::apply::which_on(&std::env::var("PATH").unwrap_or_default(), "php");
     let store = match open_read_only() {
         Ok(store) => store,
         Err(e) => {
             facts.state.open_error = Some(e);
+            // Other tools are worth knowing about before Kiln is first used.
+            facts.others = others(None, &listeners, php_on_path.as_ref());
             return facts;
         }
     };
@@ -46,13 +51,14 @@ fn gather() -> Facts {
     let resolved = web::resolved(&store).unwrap_or_default();
     facts.sites = sites(&resolved);
     let secure = resolved.sites.iter().any(|s| s.secure);
-    facts.ports = ports(&store, secure);
+    facts.ports = ports(&store, secure, &listeners);
     facts.web = web_facts(&store);
     facts.php = php(&store, &resolved);
     if secure {
         facts.certificates = Some(certificates());
     }
-    facts.shims = shims();
+    facts.shims = shims(php_on_path.clone());
+    facts.others = others(Some((&store, &resolved)), &listeners, php_on_path.as_ref());
     facts
 }
 
@@ -120,18 +126,18 @@ fn ancestors() -> Vec<PathBuf> {
     Vec::new()
 }
 
-fn ports(store: &StateStore, secure: bool) -> Vec<PortFacts> {
-    let http = web::port_setting(store, web::HTTP_PORT_KEY, 80).unwrap_or(80);
-    let https = web::port_setting(store, web::HTTPS_PORT_KEY, 443).unwrap_or(443);
+fn ports(store: &StateStore, secure: bool, listeners: &Listeners) -> Vec<PortFacts> {
     let caddy = web::server().ok().map(|s| s.exe().to_path_buf());
-    let listeners = listeners();
-    let mut wanted = vec![("HTTP", http)];
+    let mut wanted = vec![&coexist::HTTP];
     if secure {
-        wanted.push(("HTTPS", https));
+        wanted.push(&coexist::HTTPS);
     }
     let ipv6 = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_ok();
     let mut out = Vec::new();
-    for (purpose, port) in wanted {
+    for kind in wanted {
+        let port =
+            web::port_setting(store, kind.key, kind.preferred[0]).unwrap_or(kind.preferred[0]);
+        let auto = coexist::is_auto(store, kind).unwrap_or(false);
         let mut ips: Vec<IpAddr> = vec![Ipv4Addr::LOCALHOST.into()];
         if ipv6 {
             ips.push(Ipv6Addr::LOCALHOST.into());
@@ -139,52 +145,108 @@ fn ports(store: &StateStore, secure: bool) -> Vec<PortFacts> {
         for ip in ips {
             let addr = SocketAddr::new(ip, port);
             // A listener on the wildcard address of the same family holds the port too.
-            let holder = listeners.iter().find(|(l, _)| {
+            let holder = listeners.all().iter().find(|(l, _)| {
                 l.port() == port
                     && l.is_ipv4() == ip.is_ipv4()
                     && (l.ip() == ip || l.ip().is_unspecified())
             });
             out.push(PortFacts {
                 addr,
-                purpose,
+                purpose: kind.purpose,
                 owner: holder.map(|(_, pid)| owner(*pid, caddy.as_deref())),
+                auto,
             });
         }
     }
     out
 }
 
-#[cfg(windows)]
-fn listeners() -> Vec<(SocketAddr, u32)> {
-    kiln_sys::win::tcp_listeners().unwrap_or_default()
-}
-
-#[cfg(not(windows))]
-fn listeners() -> Vec<(SocketAddr, u32)> {
-    Vec::new()
-}
-
-#[cfg(windows)]
 fn owner(pid: u32, caddy: Option<&Path>) -> Owner {
-    let image = kiln_sys::win::Process::open_for_query(pid)
-        .ok()
-        .flatten()
-        .and_then(|p| p.image_path().ok());
-    let is_kiln = caddy.is_some_and(|exe| kiln_sys::background::is_ours(pid, exe));
     Owner {
         pid,
-        image,
-        is_kiln,
+        who: coexist::holder(pid).describe(),
+        is_kiln: caddy.is_some_and(|exe| kiln_sys::background::is_ours(pid, exe)),
     }
 }
 
-#[cfg(not(windows))]
-fn owner(pid: u32, caddy: Option<&Path>) -> Owner {
-    let is_kiln = caddy.is_some_and(|exe| kiln_sys::background::is_ours(pid, exe));
-    Owner {
-        pid,
-        image: None,
-        is_kiln,
+/// Other local PHP tools ([ADR 0019] §5); `kiln` is `None` before Kiln has been used.
+///
+/// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
+fn others(
+    kiln: Option<(&StateStore, &kiln_sites::Resolved)>,
+    listeners: &Listeners,
+    php_on_path: Option<&PathBuf>,
+) -> OtherToolsFacts {
+    let installed = kiln_coexist::installed_here();
+    let herd_installed = installed
+        .iter()
+        .any(|(tool, _)| *tool == kiln_coexist::Tool::Herd);
+
+    // Other programs on the web ports Kiln may use, one line per program: nginx's workers
+    // share their master's sockets, so one server can show up as many processes.
+    let caddy = web::server().ok().map(|s| s.exe().to_path_buf());
+    let web_ports: BTreeSet<u16> = kiln_coexist::HTTP_PORTS
+        .iter()
+        .chain(&kiln_coexist::HTTPS_PORTS)
+        .copied()
+        .collect();
+    let mut by_pid: BTreeMap<u32, Vec<SocketAddr>> = BTreeMap::new();
+    for (addr, pid) in listeners.all() {
+        let local = addr.ip().is_loopback() || addr.ip().is_unspecified();
+        if local && web_ports.contains(&addr.port()) {
+            by_pid.entry(*pid).or_default().push(*addr);
+        }
+    }
+    let mut by_program: BTreeMap<String, (Vec<u32>, BTreeSet<SocketAddr>)> = BTreeMap::new();
+    for (pid, addrs) in by_pid {
+        if caddy
+            .as_deref()
+            .is_some_and(|exe| kiln_sys::background::is_ours(pid, exe))
+        {
+            continue;
+        }
+        let entry = by_program
+            .entry(coexist::holder(pid).describe())
+            .or_default();
+        entry.0.push(pid);
+        entry.1.extend(addrs);
+    }
+    let listeners = by_program
+        .into_iter()
+        .map(|(who, (pids, addrs))| {
+            let pids = match pids.as_slice() {
+                [pid] => format!("PID {pid}"),
+                many => format!("{} processes", many.len()),
+            };
+            (format!("{who}, {pids}"), addrs.into_iter().collect())
+        })
+        .collect();
+
+    let shared_names = kiln
+        .map(|(store, resolved)| {
+            let names: Vec<String> = resolved.sites.iter().map(|s| s.host.to_string()).collect();
+            let urls = web::site_urls(store);
+            coexist::shared_names(&names, &coexist::hosts_claims())
+                .into_iter()
+                .map(|(host, claim)| SharedName {
+                    kiln_url: urls.get(&host).cloned().unwrap_or_default(),
+                    owner: claim.owner().to_owned(),
+                    host,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    OtherToolsFacts {
+        installed: installed
+            .into_iter()
+            .map(|(tool, dir)| (tool.name().to_owned(), dir))
+            .collect(),
+        listeners,
+        shared_names,
+        php_on_path: coexist::php_from_tool(php_on_path)
+            .map(|(tool, php)| (tool.name().to_owned(), php)),
+        herd_installed,
     }
 }
 
@@ -352,7 +414,7 @@ fn firefox_profiles() -> usize {
     )
 }
 
-fn shims() -> ShimFacts {
+fn shims(php_on_path: Option<PathBuf>) -> ShimFacts {
     let Some(local) = kiln_state::default_local_dir() else {
         return ShimFacts::default();
     };
@@ -361,7 +423,7 @@ fn shims() -> ShimFacts {
         installed: shims_dir
             .join(kiln_runtime::shim::Tool::Php.file_name())
             .is_file(),
-        php_on_path: crate::apply::which_on(&std::env::var("PATH").unwrap_or_default(), "php"),
+        php_on_path,
         shims_dir,
     }
 }

@@ -34,6 +34,7 @@ pub enum Area {
     Dns,
     Certificates,
     Shims,
+    OtherTools,
 }
 
 impl Area {
@@ -49,6 +50,7 @@ impl Area {
             Self::Dns => "DNS",
             Self::Certificates => "Certificates",
             Self::Shims => "Shims",
+            Self::OtherTools => "Other tools",
         }
     }
 }
@@ -94,6 +96,7 @@ pub struct Facts {
     /// Only gathered when a site uses HTTPS.
     pub certificates: Option<CertFacts>,
     pub shims: ShimFacts,
+    pub others: OtherToolsFacts,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,15 +116,44 @@ pub struct PortFacts {
     /// "HTTP" or "HTTPS".
     pub purpose: &'static str,
     pub owner: Option<Owner>,
+    /// Kiln picks this port itself, so `kiln web start` moves to a free one ([ADR 0019] §3).
+    ///
+    /// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
+    pub auto: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Owner {
     pub pid: u32,
-    /// `None` if the process can't be opened (another user's, or protected).
-    pub image: Option<PathBuf>,
+    /// Who it is, for people: `Laravel Herd (nginx.exe)`, a program path, or
+    /// `a program Kiln can't inspect`.
+    pub who: String,
     /// The owner is Kiln's own Caddy.
     pub is_kiln: bool,
+}
+
+/// Other local PHP tools ([ADR 0019]).
+///
+/// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
+#[derive(Debug, Clone, Default)]
+pub struct OtherToolsFacts {
+    /// (tool, folder)
+    pub installed: Vec<(String, PathBuf)>,
+    /// (who, addresses): other programs listening on the web ports Kiln may use.
+    pub listeners: Vec<(String, Vec<SocketAddr>)>,
+    pub shared_names: Vec<SharedName>,
+    /// (tool, path) when `php` on this terminal's PATH is another tool's.
+    pub php_on_path: Option<(String, PathBuf)>,
+    pub herd_installed: bool,
+}
+
+/// A Kiln site name another program also puts in the hosts file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedName {
+    pub host: String,
+    /// "Laravel Herd", or "another program".
+    pub owner: String,
+    pub kiln_url: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -200,6 +232,7 @@ pub fn diagnose(facts: &Facts) -> Report {
         findings.extend(certificates(certs));
     }
     findings.extend(shims(&facts.shims));
+    findings.extend(other_tools(&facts.others));
     findings.sort_by_key(|f| f.area);
     Report { findings }
 }
@@ -286,11 +319,15 @@ fn ports(facts: &[PortFacts]) -> Vec<Finding> {
                     port.purpose, port.addr, owner.pid
                 ),
             ),
+            Some(owner) if port.auto => finding(
+                area,
+                Status::Info,
+                format!(
+                    "{} {} is held by {}, PID {}; kiln web start picks a free port instead",
+                    port.purpose, port.addr, owner.who, owner.pid
+                ),
+            ),
             Some(owner) => {
-                let who = owner.image.as_ref().map_or_else(
-                    || format!("PID {} (not inspectable)", owner.pid),
-                    |image| format!("{} (PID {})", image.display(), owner.pid),
-                );
                 let flag = if port.purpose == "HTTP" {
                     "--http-port"
                 } else {
@@ -300,9 +337,12 @@ fn ports(facts: &[PortFacts]) -> Vec<Finding> {
                     finding(
                         area,
                         Status::Warn,
-                        format!("{} {} is held by {who}", port.purpose, port.addr),
+                        format!(
+                            "{} {} (your choice) is held by {}, PID {}",
+                            port.purpose, port.addr, owner.who, owner.pid
+                        ),
                     ),
-                    format!("use another port: kiln web start {flag} <port>"),
+                    format!("kiln web start --auto-ports  (or {flag} <port>)"),
                 )
             }
         })
@@ -632,6 +672,74 @@ fn shims(facts: &ShimFacts) -> Vec<Finding> {
     }
 }
 
+/// Never a failure: other tools are fine to have. Only a shared site name is a warning, since
+/// it can open the wrong site ([ADR 0019] §4–5).
+///
+/// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
+fn other_tools(facts: &OtherToolsFacts) -> Vec<Finding> {
+    let area = Area::OtherTools;
+    let mut out = Vec::new();
+    for (tool, folder) in &facts.installed {
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("{tool} is installed ({})", folder.display()),
+        ));
+    }
+    for (who, addrs) in &facts.listeners {
+        let addrs: Vec<String> = addrs.iter().map(ToString::to_string).collect();
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("in use by {who}: {}", addrs.join(", ")),
+        ));
+    }
+    for shared in &facts.shared_names {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!(
+                    "{} is also in the hosts file for {}; both point to this computer, so the port decides which server answers",
+                    shared.host, shared.owner
+                ),
+            ),
+            format!(
+                "open Kiln's site at {}, or link the project under another name (kiln link <name>)",
+                shared.kiln_url
+            ),
+        ));
+    }
+    if let Some((tool, php)) = &facts.php_on_path {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Info,
+                format!(
+                    "`php` on this terminal's PATH is {tool}'s ({})",
+                    php.display()
+                ),
+            ),
+            "kiln shims install  (puts Kiln's php first; kiln undo reverses it)",
+        ));
+    }
+    if facts.herd_installed {
+        out.push(finding(
+            area,
+            Status::Info,
+            "Laravel Herd stops every nginx.exe when it starts; Kiln's server is kiln-caddy.exe, so it isn't affected",
+        ));
+    }
+    if out.is_empty() {
+        out.push(finding(
+            area,
+            Status::Ok,
+            "no other local PHP tools found (Herd, XAMPP, Laragon, WampServer)",
+        ));
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------------------------
@@ -787,28 +895,81 @@ mod tests {
                 purpose: "HTTP",
                 owner: Some(Owner {
                     pid: 4321,
-                    image: Some(PathBuf::from(
-                        r"C:\Users\dev\.config\herd\bin\nginx\nginx.exe",
-                    )),
+                    who: "Laravel Herd (nginx.exe)".into(),
                     is_kiln: false,
                 }),
+                auto: false,
             },
             PortFacts {
                 addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8080)),
                 purpose: "HTTP",
                 owner: Some(Owner {
                     pid: 99,
-                    image: None,
+                    who: "kiln-caddy.exe".into(),
                     is_kiln: true,
                 }),
+                auto: false,
             },
         ];
         let report = diagnose(&facts);
         let ports = of(&report, Area::Ports);
         assert_eq!(ports[0].status, Status::Warn);
-        assert!(ports[0].message.contains("nginx.exe (PID 4321)"));
+        assert!(
+            ports[0]
+                .message
+                .contains("Laravel Herd (nginx.exe), PID 4321")
+        );
+        assert!(ports[0].fix.as_deref().unwrap().contains("--auto-ports"));
         assert!(ports[0].fix.as_deref().unwrap().contains("--http-port"));
         assert_eq!(ports[1].status, Status::Ok);
+
+        // A port Kiln picks itself just moves at the next start.
+        facts.ports[0].auto = true;
+        let report = diagnose(&facts);
+        let ports = of(&report, Area::Ports);
+        assert_eq!(ports[0].status, Status::Info);
+        assert!(ports[0].message.contains("picks a free port"));
+    }
+
+    #[test]
+    fn other_tools_are_reported_and_only_shared_names_warn() {
+        let report = diagnose(&base());
+        let others = of(&report, Area::OtherTools);
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].status, Status::Ok);
+
+        let mut facts = base();
+        facts.others = OtherToolsFacts {
+            installed: vec![("Laravel Herd".into(), PathBuf::from("Herd"))],
+            listeners: vec![(
+                "Laravel Herd (nginx.exe), PID 812".into(),
+                vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 80))],
+            )],
+            shared_names: vec![SharedName {
+                host: "blog.test".into(),
+                owner: "Laravel Herd".into(),
+                kiln_url: "http://blog.test:8080/".into(),
+            }],
+            php_on_path: Some(("Laravel Herd".into(), PathBuf::from("php.bat"))),
+            herd_installed: true,
+        };
+        let report = diagnose(&facts);
+        let others = of(&report, Area::OtherTools);
+        assert_eq!(report.worst(), Status::Warn, "{}", report.render());
+        let warns: Vec<_> = others.iter().filter(|f| f.status == Status::Warn).collect();
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].message.contains("blog.test"));
+        assert!(
+            warns[0]
+                .fix
+                .as_deref()
+                .unwrap()
+                .contains("http://blog.test:8080/")
+        );
+        assert!(others.iter().any(|f| f.message.contains("127.0.0.1:80")));
+        assert!(others.iter().any(|f| f.message.contains("kiln-caddy.exe")));
+        assert!(others.iter().any(|f| f.message.contains("php.bat")));
+        assert!(report.render().contains("Other tools\n"));
     }
 
     #[test]

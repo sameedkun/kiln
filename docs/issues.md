@@ -20,7 +20,7 @@ commits and PRs.
 | [I-08](#i-08) | tooling | Git Bash quirks: `C:` in PATH, MSYS `whoami` shadowing Windows `whoami` | ✅ |
 | [I-09](#i-09) | tooling | rustup warns that auto-installing the pinned toolchain is deprecated | 🔶 minor |
 | [I-10](#i-10) | process | CI Node 20 deprecation; push rejected after a Dependabot merge | ✅ |
-| [I-11](#i-11) | coexistence | Herd kills every `nginx.exe` on the machine when it starts | 📌 |
+| [I-11](#i-11) | coexistence | Herd kills every `nginx.exe` on the machine when it starts | ✅ (Kiln runs `kiln-caddy.exe`; restart test in P1-15) |
 | [I-12](#i-12) | TLS | Windows Schannel clients hard-fail revocation checks against a local CA | 📌 |
 | [I-13](#i-13) | benchmark | Laravel file sessions under synthetic load distorted throughput about 10× | ✅ |
 | [I-14](#i-14) | runtime | Synchronized php-cgi recycling plus passive health checks caused a 10 s outage | 📌 (staggered limits + no passive checks in P1-09) |
@@ -62,6 +62,7 @@ commits and PRs.
 | [I-50](#i-50) | Caddy | A request in flight during a Caddy reload can't be retried if its worker is recycling at that moment (502) | 🔶 (rare at real limits; accepted) |
 | [I-51](#i-51) | supervisor | "Exited within 1 s" wrongly treated busy, healthy workers as crashed | ✅ (crash = non-zero exit) |
 | [I-52](#i-52) | uninstall | A project inside Kiln's folder was deleted when LOCALAPPDATA used 8.3 short names (spelling compared, not paths) | ✅ (canonical paths; caught by a test before release) |
+| [I-53](#i-53) | coexistence | An automatically picked port was saved like a chosen one, so it would never move again | ✅ (caught by a test before release) |
 
 ---
 
@@ -143,12 +144,15 @@ commits and PRs.
 ## Spike 01: web server
 
 <a id="i-11"></a>
-### I-11: Herd kills every `nginx.exe` when it starts 📌
+### I-11: Herd kills every `nginx.exe` when it starts ✅
 - **Found:** 2026-10-20. The spike's nginx died twice while idle. Herd's log showed
   `[nginx] killed leftover nginx.exe processes` at each startup (Herd auto-updated
   2.0.0 → 2.0.2 during the spike). The kill is by image name, not path; our `php-cgi.exe` survived.
 - **Rule:** Kiln ships server binaries under Kiln-specific names (e.g. `kiln-caddy.exe`).
   Coexistence tests must include "Herd restarts while Kiln runs". (Task P1-06, P1-14.)
+- **Status (P1-14):** Kiln's server has been `kiln-caddy.exe` since P1-06; `kiln doctor` explains
+  this when Herd is installed ([ADR 0019](adr/0019-coexistence.md)). The "Herd restarts while
+  Kiln runs" test is part of P1-15.
 
 <a id="i-12"></a>
 ### I-12: Schannel hard-fails revocation for local CAs 📌
@@ -593,3 +597,17 @@ commits and PRs.
   with `raw_arg`, because `arg` escapes quotes in a way `cmd` doesn't understand). Without the
   fix it reproduces locally (the project is deleted); with it, the project survives.
 - **Rule:** any destructive path check compares canonical paths, never spellings.
+
+## P1-14: coexistence
+
+<a id="i-53"></a>
+### I-53: An automatically picked port was saved like a chosen one ✅
+- **Found:** a unit test for P1-14, before the first commit. With Herd on port 80, the first
+  `kiln web start` picked 8080 and saved it, but without the marker saying Kiln picked it.
+  - A saved port with no marker means "chosen by the user before automatic ports existed".
+  - So the next start treated 8080 as the user's choice: if 8080 became busy, it would fail
+    instead of moving to the next free port.
+- **Fix:** whenever a port is Kiln's to pick, the marker (`web.http_port_auto` /
+  `web.https_port_auto` = `1`) is written along with it.
+- **Rule:** a setting that is inferred when missing must be written explicitly the first time
+  Kiln acts on the inference.

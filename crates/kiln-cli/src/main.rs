@@ -10,6 +10,7 @@ use kiln_core::Tld;
 use kiln_platform::hosts;
 
 mod apply;
+mod coexist;
 mod doctor;
 mod history;
 mod php;
@@ -185,12 +186,17 @@ enum WebAction {
     },
     /// Start the web server in the background.
     Start {
-        /// HTTP port (default 80; remembered). Use e.g. 8080 if another server has 80.
+        /// HTTP port, kept even if busy (remembered). Without it Kiln picks a free one:
+        /// 80, else 8080, 8000, 8081, 8888.
         #[arg(long)]
         http_port: Option<u16>,
-        /// HTTPS port (default 443; remembered). Only used when a site is secure.
+        /// HTTPS port, kept even if busy (remembered). Without it Kiln picks a free one:
+        /// 443, else 8443, 4443, 9443. Only used when a site is secure.
         #[arg(long)]
         https_port: Option<u16>,
+        /// Forget ports chosen with --http-port/--https-port and pick free ones again.
+        #[arg(long, conflicts_with_all = ["http_port", "https_port"])]
+        auto_ports: bool,
     },
     /// Stop the web server.
     Stop,
@@ -421,7 +427,8 @@ fn main() -> ExitCode {
             WebAction::Start {
                 http_port,
                 https_port,
-            } => web::start(http_port, https_port),
+                auto_ports,
+            } => web::start(http_port, https_port, auto_ports),
             WebAction::Stop => web::stop(),
             WebAction::Reload => web::reload(),
             WebAction::Restart => web::restart(),

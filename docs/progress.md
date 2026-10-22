@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (12 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0018 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0019 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -21,6 +21,7 @@
 | Web server (`kiln-web`, Caddy) | **done** (Windows): `kiln link`, `secure` / `unsecure`, `sites`, `web install/start/stop/reload/status`, `hosts sync`. Site changes **reload live** over a per-user admin socket (P1-07). Sites are **HTTP by default; HTTPS per site**. Verified against real Caddy 2.11.7 and **in Chrome**: HTTP page, HTTPS padlock with no warning, HTTP→HTTPS redirect |
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
+| Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -66,7 +67,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-11 | Per-site PHP + shims | **done** 2026-10-22 (Windows) | [ADR 0016](adr/0016-per-site-php-and-shims.md); see below. `kiln isolate`, a pool per version, `php`/`composer` shims, reversible user PATH |
 | P1-12 | `kiln doctor` | **done** 2026-10-22 | [ADR 0017](adr/0017-kiln-doctor.md); see below. Read-only checks with fixes; `--json` |
 | P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | **done** 2026-10-22 | [ADR 0018](adr/0018-history-undo-uninstall.md); see below. `kiln history`, `kiln undo` (newest), `kiln uninstall` with full plan |
-| P1-14 | Coexistence detection | **next** | Herd, XAMPP, Laragon; ports; [I-11](issues.md#i-11) |
+| P1-14 | Coexistence detection | **done** 2026-10-22 | [ADR 0019](adr/0019-coexistence.md); see below. Herd/XAMPP/Laragon/WampServer detected, free ports picked, shared names warned |
 | P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
 
 ### P1-01 delivered (2026-10-21)
@@ -650,6 +651,59 @@ cd D:\Code\Rea\laravel-herd\kiln
 # .\target\debug\kiln.exe uninstall
 ```
 
+<a id="p1-14"></a>
+### P1-14 delivered (2026-10-22)
+
+Design: [ADR 0019](adr/0019-coexistence.md). Surveyed first, read-only, on the dev machine:
+Herd's `nginx.exe` holds 127.0.0.1:80 and :443 (as 12 processes sharing the sockets), Herd's
+block in the hosts file lists 44 `.test` names, and `php` on PATH is Herd's `php.bat`.
+
+- **New crate `kiln-coexist`** (read-only):
+  - installed tools from their well-known folders: Herd, XAMPP, Laragon, WampServer;
+  - which tool a program belongs to, from the folders in its path;
+  - a port holder described for people: `Laravel Herd (nginx.exe)`,
+    `Apache httpd (C:\Apache24\bin\httpd.exe)`, `the Windows HTTP service (IIS / http.sys)`;
+  - names other programs claim in the hosts file, outside Kiln's block, credited to Herd
+    when inside Herd's marked block;
+  - the port lists and first-free picking.
+- **`kiln web start` picks free ports.** Without `--http-port` / `--https-port` it uses 80,
+  else 8080, 8000, 8081, 8888 (HTTPS: 443, else 8443, 4443, 9443), and says why:
+  `HTTP port 80 is used by Laravel Herd (nginx.exe); Kiln uses 8080.`
+  - The pick is saved with a marker, so URLs stay the same and the next start keeps it while
+    it is free ([I-53](issues.md#i-53): a real bug a unit test caught).
+  - A port the user chose is never moved. If it's busy, the start is refused with the owner,
+    a free suggestion and `--auto-ports`; nothing is saved. Ports saved before this task
+    count as chosen.
+  - `kiln web start --auto-ports` hands both ports back to Kiln.
+- **`kiln link` / `kiln park`** print a note when a site name is also another tool's, with
+  the Kiln URL that opens Kiln's site.
+- **`kiln doctor`** has an **Other tools** area: installed tools, who listens on the web ports
+  (one line per program), shared site names (the only warning), `php` on PATH when it is
+  another tool's, and Herd's `nginx.exe` killing ([I-11](issues.md#i-11)) explained. It is
+  shown even before Kiln has been used. The **Ports** area names the tool too, and a port
+  Kiln picks itself is only info, since the next start moves it.
+- **Tests:** 10 new, 222 total. Unit tests use a real held port for the picking rules.
+  Checked here against the running Herd: `kiln doctor` and a sandboxed `kiln web start`
+  reported Herd on 80/443 and chose 8080/8443.
+
+**Check from a normal terminal** (Herd running; Kiln has no state yet after the P1-13
+uninstall):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe doctor                    # "Other tools": Herd installed, its nginx on :80/:443, php is Herd's
+.\target\debug\kiln.exe web install               # downloads Caddy again (SHA-512 verified)
+.\target\debug\kiln.exe link phpdemo --path D:\Code\Rea\laravel-herd\demo-sites\phpdemo
+.\target\debug\kiln.exe link herd-studio --path D:\Code\Rea\laravel-herd\demo-sites\phpdemo   # Note: also Herd's name
+.\target\debug\kiln.exe web start                 # "HTTP port 80 is used by Laravel Herd (nginx.exe); Kiln uses 8080."
+.\target\debug\kiln.exe doctor                    # Ports: Kiln's server; Other tools: herd-studio.test warning
+.\target\debug\kiln.exe web stop
+.\target\debug\kiln.exe web start --http-port 80  # refused: names Herd, suggests 8080 or --auto-ports
+.\target\debug\kiln.exe web start                 # still 8080 (nothing was saved)
+.\target\debug\kiln.exe web stop
+.\target\debug\kiln.exe unlink herd-studio
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -667,6 +721,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | P1-11 check from a normal terminal (shims + PATH) | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
+| P1-14 coexistence check from a normal terminal (Herd running) | [I-45](issues.md#i-45) | waiting for the user |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -710,6 +765,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-12 checked by the user from a normal PowerShell:** idle: "normal terminal", ports 8080/8443 free, Caddy and PHP 8.3.36/8.4.27 found, and three accurate warnings (old demo links not in hosts, CA trust undone, `php` is Herd's). After `web start`: all four listeners reported as Kiln's web server (PID 15852), pool 8.4.27 with 4 workers listening. `--json` worked; exit code 0. |
 | 2026-10-22 | **P1-13 done:** ADR 0018. `kiln history [--all]` (plain descriptions, times), `kiln undo` without a number (newest change in effect; clear refusal otherwise), `kiln uninstall [--dry-run|--keep-files|--yes]` and `kiln plan uninstall` (full plan: stop, undo newest first, delete Kiln's two folders with sizes, never-touched list; stops and deletes nothing if an undo fails; never deletes a folder holding a project; doesn't follow junctions). 9 new tests, 212 total, including a sandboxed real-binary uninstall. |
 | 2026-10-22 | **P1-13 checked by the user from a normal PowerShell:** `hosts sync` (#8); `history` showed #8 in effect and `--all` all 8 operations (CA trust ×2, hosts ×5, PATH) with plain descriptions; `uninstall --dry-run` planned undo #8 and the deletion of `LocalKiln` (308.7 MB) and `RoamingKiln`; `undo` without a number undid #8 (1 UAC prompt), and a second `undo` reported nothing in effect; a **real `kiln uninstall`** deleted both Kiln folders and left the programs; `demo-sites` (projects) untouched. The user's machine now has no Kiln state; later manual checks start with `kiln php install` / `kiln web install`. |
+| 2026-10-22 | **P1-14 done:** ADR 0019. New `kiln-coexist` crate (installed tools, port holders by program path, names other tools claim in the hosts file, free-port picking). `kiln web start` moves off ports held by others (80→8080, 443→8443) and says why, keeps chosen ports (`--auto-ports` to undo the choice); `kiln link`/`park` flag names shared with Herd; `kiln doctor` gains "Other tools". Found and fixed I-53 before release. 10 new tests, 222 total. Herd and everything of it left untouched. |
 
 ## How to update this file
 

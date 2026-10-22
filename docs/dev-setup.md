@@ -39,6 +39,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root) | forbidden |
 | `kiln-runtime` | Which PHP runs what (default, pins, folder → site); the `kiln-shim` binary (`php`/`composer`) | forbidden |
 | `kiln-doctor` | `kiln doctor` rules: facts → findings (ok/info/warn/fail with fixes), text and JSON reports | forbidden |
+| `kiln-coexist` | Other local PHP tools: installed tools, port owners by program path, names other tools claim in the hosts file, free-port picking (read-only) | forbidden |
 | `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect, user registry strings, console Ctrl+C, TCP listener owners, process parents, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
 | `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `isolate`, `unisolate`, `which`, `composer install`, `shims install`, `doctor`, `history`, `undo`, `uninstall`, `plan uninstall`) | forbidden |
