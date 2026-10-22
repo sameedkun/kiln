@@ -135,8 +135,7 @@ fn ports(store: &StateStore, secure: bool, listeners: &Listeners) -> Vec<PortFac
     let ipv6 = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_ok();
     let mut out = Vec::new();
     for kind in wanted {
-        let port =
-            web::port_setting(store, kind.key, kind.preferred[0]).unwrap_or(kind.preferred[0]);
+        let port = coexist::planned_port(store, kind).unwrap_or(kind.preferred[0]);
         let auto = coexist::is_auto(store, kind).unwrap_or(false);
         let mut ips: Vec<IpAddr> = vec![Ipv4Addr::LOCALHOST.into()];
         if ipv6 {

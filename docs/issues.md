@@ -63,6 +63,7 @@ commits and PRs.
 | [I-51](#i-51) | supervisor | "Exited within 1 s" wrongly treated busy, healthy workers as crashed | ✅ (crash = non-zero exit) |
 | [I-52](#i-52) | uninstall | A project inside Kiln's folder was deleted when LOCALAPPDATA used 8.3 short names (spelling compared, not paths) | ✅ (canonical paths; caught by a test before release) |
 | [I-53](#i-53) | coexistence | An automatically picked port was saved like a chosen one, so it would never move again | ✅ (caught by a test before release) |
+| [I-54](#i-54) | coexistence | Before the first `kiln web start`, `kiln link` printed URLs on port 80 although Kiln would pick 8080 | ✅ (found in the user's check) |
 
 ---
 
@@ -611,3 +612,15 @@ commits and PRs.
   `web.https_port_auto` = `1`) is written along with it.
 - **Rule:** a setting that is inferred when missing must be written explicitly the first time
   Kiln acts on the inference.
+
+<a id="i-54"></a>
+### I-54: URLs printed before the first start assumed port 80 ✅
+- **Found:** the user's P1-14 check from a normal terminal, with Herd on port 80. Before the
+  first `kiln web start`, `kiln link phpdemo` printed `http://phpdemo.test/`, and the note for
+  `herd-studio.test` said Kiln's site was `http://herd-studio.test/`. That URL opens **Herd's**
+  site. The start then picked 8080.
+- **Cause:** with no saved port, URLs used the plain default (80) instead of the port the
+  start would pick.
+- **Fix:** `planned_port`: the saved port, or else the one `kiln web start` would pick now.
+  Printed URLs (`link`, `park`, `sites`) and `kiln doctor`'s port checks use it.
+- **Rule:** anything shown before an action must come from the same decision the action makes.

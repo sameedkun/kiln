@@ -114,8 +114,8 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         None
     };
     Ok(WebConfig {
-        http_port: port_setting(store, HTTP_PORT_KEY, 80)?,
-        https_port: port_setting(store, HTTPS_PORT_KEY, 443)?,
+        http_port: crate::coexist::planned_port(store, &crate::coexist::HTTP)?,
+        https_port: crate::coexist::planned_port(store, &crate::coexist::HTTPS)?,
         ipv6: TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_ok(),
         sites,
         ca,
@@ -459,8 +459,8 @@ fn trust_hint() -> Result<(), String> {
 /// the CA, which `web_config` may renew), so `kiln doctor` can use it.
 fn url_config(store: &StateStore) -> WebConfig {
     WebConfig {
-        http_port: port_setting(store, HTTP_PORT_KEY, 80).unwrap_or(80),
-        https_port: port_setting(store, HTTPS_PORT_KEY, 443).unwrap_or(443),
+        http_port: crate::coexist::planned_port(store, &crate::coexist::HTTP).unwrap_or(80),
+        https_port: crate::coexist::planned_port(store, &crate::coexist::HTTPS).unwrap_or(443),
         ipv6: false,
         sites: Vec::new(),
         ca: None,

@@ -223,6 +223,19 @@ pub(crate) fn php_from_tool(
     kiln_coexist::tool_of(php).map(|tool| (tool, php.clone()))
 }
 
+/// The port `kind` uses: the saved one or, before the first `kiln web start`, the one it would
+/// pick now, so URLs printed before that start are the ones it will serve.
+pub(crate) fn planned_port(store: &StateStore, kind: &PortKind) -> Result<u16, String> {
+    if store
+        .setting(kind.key)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return web::port_setting(store, kind.key, kind.preferred[0]);
+    }
+    Ok(kiln_coexist::pick(kind.preferred, is_free).unwrap_or(kind.preferred[0]))
+}
+
 /// Whether Kiln picks `kind`'s port itself (see [`PortKind`]'s `auto_key`).
 pub(crate) fn is_auto(store: &StateStore, kind: &PortKind) -> Result<bool, String> {
     Ok(
@@ -313,6 +326,18 @@ mod tests {
         store.set_setting(kind.key, &busy.to_string()).unwrap();
         assert!(!is_auto(&store, &kind).unwrap());
         assert!(choose_port(&mut store, &kind, None, false, true, &Listeners::default()).is_err());
+    }
+
+    #[test]
+    fn urls_before_the_first_start_use_the_port_it_will_pick() {
+        let (_dir, mut store, _held, kind, busy, free) = setup();
+        assert_eq!(
+            planned_port(&store, &kind),
+            Ok(free),
+            "nothing saved: the pick"
+        );
+        store.set_setting(kind.key, &busy.to_string()).unwrap();
+        assert_eq!(planned_port(&store, &kind), Ok(busy), "saved: that one");
     }
 
     #[test]
