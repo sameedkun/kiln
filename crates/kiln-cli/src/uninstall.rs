@@ -68,6 +68,21 @@ pub fn check_folders(candidates: &[(PathBuf, u64)], projects: &[PathBuf]) -> Vec
         .collect()
 }
 
+/// The real path of `path` (long names, resolved case, no `\\?\` prefix); `path` itself if it
+/// doesn't exist.
+fn canonical(path: &Path) -> PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(real) => {
+            let text = real.to_string_lossy();
+            match text.strip_prefix(r"\\?\") {
+                Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+                _ => real,
+            }
+        }
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 /// Total size of the files under `dir`, not following links or junctions.
 fn dir_size(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -139,7 +154,15 @@ fn build_plan() -> Result<Plan, String> {
             candidates.push((dir, size));
         }
     }
-    plan.folders = check_folders(&candidates, &projects);
+    // Compare real, canonical paths: the same folder can be spelled differently, e.g. an 8.3
+    // short name in LOCALAPPDATA (`C:\Users\RUNNER~1\…`) against the long name a project was
+    // stored under. Comparing the spellings let a project inside Kiln's folder be deleted.
+    let canonical_candidates: Vec<(PathBuf, u64)> = candidates
+        .iter()
+        .map(|(dir, size)| (canonical(dir), *size))
+        .collect();
+    let canonical_projects: Vec<PathBuf> = projects.iter().map(|p| canonical(p)).collect();
+    plan.folders = check_folders(&canonical_candidates, &canonical_projects);
     Ok(plan)
 }
 
@@ -233,7 +256,8 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
                 })
                 .count()
         });
-    let state_dir = kiln_state::default_state_dir();
+    // Canonical, like the planned folders, so the comparison below can't miss on spelling.
+    let state_dir = kiln_state::default_state_dir().map(|d| canonical(&d));
     for folder in &plan.folders {
         if let Some(why) = &folder.keep_because {
             println!("Kept {} ({why}).", folder.path.display());

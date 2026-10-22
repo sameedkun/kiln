@@ -18,9 +18,11 @@ struct Sandbox {
 }
 
 impl Sandbox {
+    /// The sandbox root is spelled with 8.3 short names where the volume has them (as
+    /// `LOCALAPPDATA` is on GitHub's runners), so Kiln must compare real paths, not spellings.
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
+        let root = short_path(dir.path());
         Self { _dir: dir, root }
     }
 
@@ -42,6 +44,25 @@ impl Sandbox {
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         (output.status.success(), text)
+    }
+}
+
+/// `path` in 8.3 form (`cmd`'s `%~s`), or unchanged where short names aren't available.
+fn short_path(path: &Path) -> PathBuf {
+    use std::os::windows::process::CommandExt;
+    // raw_arg: cmd doesn't understand the C-style quote escaping `arg` would add.
+    let output = Command::new("cmd")
+        .raw_arg(format!(
+            "/C for %I in (\"{}\") do @echo %~sI",
+            path.display()
+        ))
+        .output()
+        .unwrap();
+    let short = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if output.status.success() && !short.is_empty() && Path::new(&short).is_dir() {
+        PathBuf::from(short)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -82,14 +103,13 @@ fn dry_run_changes_nothing_and_uninstall_removes_only_kiln_s_folders() {
     let (ok, out) = sandbox.kiln(&["uninstall", "--dry-run"]);
     assert!(ok, "{out}");
     assert!(out.contains("no system changes in effect"), "{out}");
-    assert!(
-        out.contains(&sandbox.local().join("Kiln").display().to_string()),
-        "{out}"
-    );
-    assert!(
-        out.contains(&sandbox.roaming().join("Kiln").display().to_string()),
-        "{out}"
-    );
+    // The plan names folders by their real (long) path, however APPDATA spells them.
+    for dir in [sandbox.local().join("Kiln"), sandbox.roaming().join("Kiln")] {
+        let real = std::fs::canonicalize(&dir).unwrap();
+        let real = real.display().to_string();
+        let real = real.trim_start_matches(r"\\?\");
+        assert!(out.contains(real), "{real} not in:\n{out}");
+    }
     assert!(out.contains("Dry run: nothing was changed."), "{out}");
     assert!(sandbox.local().join("Kiln").is_dir() && sandbox.roaming().join("Kiln").is_dir());
     let (_, same) = sandbox.kiln(&["plan", "uninstall"]);

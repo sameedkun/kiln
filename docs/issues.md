@@ -61,6 +61,7 @@ commits and PRs.
 | [I-49](#i-49) | PHP | Renaming the extracted PHP folder into place failed with Access denied | ✅ (extract in place behind an incomplete-marker) |
 | [I-50](#i-50) | Caddy | A request in flight during a Caddy reload can't be retried if its worker is recycling at that moment (502) | 🔶 (rare at real limits; accepted) |
 | [I-51](#i-51) | supervisor | "Exited within 1 s" wrongly treated busy, healthy workers as crashed | ✅ (crash = non-zero exit) |
+| [I-52](#i-52) | uninstall | A project inside Kiln's folder was deleted when LOCALAPPDATA used 8.3 short names (spelling compared, not paths) | ✅ (canonical paths; caught by a test before release) |
 
 ---
 
@@ -575,3 +576,20 @@ commits and PRs.
     `Packages\…\LocalCache` path.
   - Ancestors are opened for query only. Asking for terminate rights as well was refused by
     the packaged app's process, which first hid the match.
+
+## P1-13: history, undo, uninstall
+
+<a id="i-52"></a>
+### I-52: Uninstall compared path spellings, so a project inside Kiln's folder could be deleted ✅
+- **Found:** the first CI run of P1-13. On GitHub's Windows runner `LOCALAPPDATA` is spelled
+  with 8.3 short names (`C:\Users\RUNNER~1\…`). `kiln link` stores a project under its real
+  long path (`C:\Users\runneradmin\…`).
+  - The safety rule "never delete a Kiln folder that holds a project" compared the two
+    spellings with `starts_with`. It saw no match and **deleted the folder, project included**.
+  - The sandbox test that guards this rule failed, so it was never released.
+- **Fix:** Kiln's folders and project paths are both canonicalized (real long path, no `\?\`)
+  before comparing. The state-folder check in the executor uses the same canonical form.
+- **Test:** the sandbox now spells its root with 8.3 short names (via `cmd`'s `%~s`, passed
+  with `raw_arg`, because `arg` escapes quotes in a way `cmd` doesn't understand). Without the
+  fix it reproduces locally (the project is deleted); with it, the project survives.
+- **Rule:** any destructive path check compares canonical paths, never spellings.

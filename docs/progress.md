@@ -629,7 +629,9 @@ Design: [ADR 0018](adr/0018-history-undo-uninstall.md).
   - `uninstall --yes` removes both Kiln folders while the parked project survives;
   - **a junction inside Kiln's folder pointing elsewhere is removed without deleting what it
     points to**;
-  - a Kiln folder holding a project is kept;
+  - a Kiln folder holding a project is kept, even when APPDATA is spelled with 8.3 short names
+    ([I-52](issues.md#i-52): a real bug the first CI run caught, fixed by comparing canonical
+    paths);
   - `--keep-files` keeps everything.
 
   Real journal undos in order are covered by the engine's `revert_all` tests. In the sandbox
