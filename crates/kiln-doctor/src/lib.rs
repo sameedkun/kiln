@@ -912,14 +912,16 @@ mod tests {
     #[test]
     fn shims_report_what_php_resolves_to() {
         let mut facts = base();
+        // Built with `join`, so the paths are real paths on every OS the tests run on.
+        let shims_dir = PathBuf::from("kiln").join("bin").join("shims");
         facts.shims = ShimFacts {
             installed: true,
-            shims_dir: PathBuf::from(r"C:\kiln\bin\shims"),
-            php_on_path: Some(PathBuf::from(r"C:\Users\dev\.config\herd\bin\php.bat")),
+            shims_dir: shims_dir.clone(),
+            php_on_path: Some(PathBuf::from("herd").join("bin").join("php.bat")),
         };
         let report = diagnose(&facts);
         assert_eq!(of(&report, Area::Shims)[0].status, Status::Warn);
-        facts.shims.php_on_path = Some(PathBuf::from(r"C:\kiln\bin\shims\php.exe"));
+        facts.shims.php_on_path = Some(shims_dir.join("php.exe"));
         assert_eq!(of(&diagnose(&facts), Area::Shims)[0].status, Status::Ok);
     }
 
