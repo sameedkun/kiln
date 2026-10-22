@@ -11,8 +11,10 @@ use kiln_platform::hosts;
 
 mod apply;
 mod doctor;
+mod history;
 mod php;
 mod pool;
+mod uninstall;
 mod web;
 
 #[derive(Debug, Parser)]
@@ -109,9 +111,29 @@ enum Command {
         #[command(subcommand)]
         action: WebAction,
     },
-    /// Undo a recorded operation by its number (see the output of the command that made it).
+    /// List what Kiln changed on this machine (newest first) and what is still in effect.
+    History {
+        /// Include operations that were undone or rolled back.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Remove Kiln: stop it, undo every system change (newest first), delete its folders.
+    /// Always shows the full plan first; your projects and other tools are never touched.
+    Uninstall {
+        /// Show the plan and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Stop and undo system changes, but keep Kiln's folders (e.g. before reinstalling).
+        #[arg(long)]
+        keep_files: bool,
+        /// Do not ask for confirmation (the plan is still printed).
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Undo a recorded operation by its number (see `kiln history`), or the newest one.
     Undo {
-        id: u64,
+        /// The operation number (see `kiln history`); default: the newest one still in effect.
+        id: Option<u64>,
         /// Undo even if the target was edited by hand since (overwrites those edits).
         #[arg(long)]
         force: bool,
@@ -269,6 +291,8 @@ fn state_info(dir: Option<PathBuf>) -> Result<(), String> {
 
 #[derive(Debug, Subcommand)]
 enum PlanTarget {
+    /// Show what `kiln uninstall` would do (same as `kiln uninstall --dry-run`).
+    Uninstall,
     /// Preview Kiln's managed block in the hosts file for the given site names.
     Hosts {
         /// Site names, with or without the TLD (e.g. `blog` or `blog.test`).
@@ -335,6 +359,15 @@ fn main() -> ExitCode {
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, &tld, file),
+        Command::Plan {
+            target: PlanTarget::Uninstall,
+        } => uninstall::uninstall(true, false, false),
+        Command::History { all } => history::history(all),
+        Command::Uninstall {
+            dry_run,
+            keep_files,
+            yes,
+        } => uninstall::uninstall(dry_run, keep_files, yes),
         Command::State {
             action: StateAction::Info { dir },
         } => state_info(dir),

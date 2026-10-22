@@ -180,6 +180,25 @@ impl StateStore {
         .collect()
     }
 
+    /// When each operation was first recorded and last changed (Unix milliseconds), for
+    /// `kiln history`.
+    pub fn operation_times(
+        &self,
+    ) -> Result<std::collections::BTreeMap<u64, (i64, i64)>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, COALESCE(MIN(e.at_ms), o.updated_ms), o.updated_ms
+             FROM operations o LEFT JOIN operation_events e ON e.op_id = o.id
+             GROUP BY o.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?),
+            ))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// Every state an operation went through, oldest first, with notes.
     pub fn history(&self, id: u64) -> Result<Vec<(OpState, Option<String>)>, StateError> {
         let id = i64::try_from(id).map_err(|e| StateError::Invalid {
@@ -372,6 +391,19 @@ mod tests {
             store.counts_by_state().unwrap(),
             vec![(OpState::Reverted, 1)]
         );
+    }
+
+    #[test]
+    fn operation_times_span_first_record_to_last_change() {
+        let mut store = StateStore::open_in_memory().unwrap();
+        let mut e = sample_entry(3, OpState::Prepared);
+        store.record(&e).unwrap();
+        e.state = OpState::Applied;
+        store.record(&e).unwrap();
+        let times = store.operation_times().unwrap();
+        let (created, updated) = times[&3];
+        assert!(created > 0 && updated >= created);
+        assert_eq!(times.len(), 1);
     }
 
     #[test]

@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (11 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (12 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0017 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0018 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -65,8 +65,8 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-10 | Sites + drivers | **done** 2026-10-22 | [ADR 0015](adr/0015-parked-folders-and-drivers.md); see below. `kiln park`, document-root drivers (no Valet code) |
 | P1-11 | Per-site PHP + shims | **done** 2026-10-22 (Windows) | [ADR 0016](adr/0016-per-site-php-and-shims.md); see below. `kiln isolate`, a pool per version, `php`/`composer` shims, reversible user PATH |
 | P1-12 | `kiln doctor` | **done** 2026-10-22 | [ADR 0017](adr/0017-kiln-doctor.md); see below. Read-only checks with fixes; `--json` |
-| P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | **next** | |
-| P1-14 | Coexistence detection | later | [I-11](issues.md#i-11) |
+| P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | **done** 2026-10-22 | [ADR 0018](adr/0018-history-undo-uninstall.md); see below. `kiln history`, `kiln undo` (newest), `kiln uninstall` with full plan |
+| P1-14 | Coexistence detection | **next** | Herd, XAMPP, Laragon; ports; [I-11](issues.md#i-11) |
 | P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
 
 ### P1-01 delivered (2026-10-21)
@@ -597,6 +597,57 @@ cd D:\Code\Rea\laravel-herd\kiln
 .\target\debug\kiln.exe web stop
 ```
 
+<a id="p1-13"></a>
+### P1-13 delivered (2026-10-22)
+
+Design: [ADR 0018](adr/0018-history-undo-uninstall.md).
+
+- **`kiln history [--all]`:** what Kiln changed, newest first, with time, state and a plain
+  description, e.g. `hosts file: blog.test, shop.test`, `trusted for your account: CN=Kiln…`,
+  `C:\…\shims first on your user PATH`. By default it shows only changes still in effect or
+  needing attention.
+- **`kiln undo [n]`:** without a number it undoes the newest change still in effect. It
+  describes the change before asking, and refuses one that's already undone, giving its state.
+- **`kiln uninstall [--dry-run] [--keep-files] [--yes]`** (and `kiln plan uninstall`) always
+  prints the full plan first:
+  - what it stops;
+  - every change it undoes, newest first;
+  - stuck changes that need attention;
+  - Kiln's two folders with their sizes;
+  - what is never touched (projects, Herd and other tools, the kiln programs).
+
+  The order is stop → undo (`revert_all`) → delete, with the state folder last.
+  - If an undo fails, it stops and deletes nothing, so it can be re-run.
+  - The state folder is kept while anything is still in effect or stuck.
+  - It deletes only folders named `Kiln` under a parent, never one holding a linked or parked
+    project, and doesn't follow junctions.
+- **`kiln-platform::describe`:** one-line descriptions from journal parameters.
+  **`kiln-state`:** `operation_times()`.
+- **Tests:** 9 new, 212 total. A sandboxed run of the real `kiln` binary (own APPDATA /
+  LOCALAPPDATA) checks that:
+  - the dry run deletes nothing;
+  - `uninstall --yes` removes both Kiln folders while the parked project survives;
+  - **a junction inside Kiln's folder pointing elsewhere is removed without deleting what it
+    points to**;
+  - a Kiln folder holding a project is kept;
+  - `--keep-files` keeps everything.
+
+  Real journal undos in order are covered by the engine's `revert_all` tests. In the sandbox
+  they would touch the real hosts file, trust store or PATH.
+
+**Check from a normal terminal** (the last, optional part really uninstalls):
+
+```powershell
+cd D:\Code\Rea\laravel-herd\kiln
+.\target\debug\kiln.exe hosts sync           # UAC: Yes (gives history something to show)
+.\target\debug\kiln.exe history              # "#n … in effect  hosts file: …"
+.\target\debug\kiln.exe uninstall --dry-run  # stop / undo #n / delete both Kiln folders (sizes) / never touched
+.\target\debug\kiln.exe undo                 # no number: undoes that newest hosts change (UAC: Yes)
+.\target\debug\kiln.exe history --all        # now shows it as "undone"
+# Optional, real: removes Kiln completely (PHP builds and downloads too; `kiln php install` brings them back)
+# .\target\debug\kiln.exe uninstall
+```
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -613,6 +664,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | P1-10 park check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-11 check from a normal terminal (shims + PATH) | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
+| P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | no; user runs it ([script](#p1-13)) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -654,6 +706,7 @@ cd D:\Code\Rea\laravel-herd\kiln
 | 2026-10-22 | **P1-11 checked by the user from a normal PowerShell:** installed PHP 8.3.36 + Composer 2.10.3 (verified); `larademo` pinned to 8.3 → browser and `php -v` showed 8.3.36, `phpdemo` 8.4.27; `web start` ran two pools; `unisolate`/`isolate` on the running server switched `larademo` without a restart while the 8.4 pool kept its ports (61726–61729); `shims install` (#7) showed Herd's `php.bat`/`composer.bat` being displaced, and in a new terminal `php`/`composer` followed each folder (`exit(7)` → 7); `undo 7` restored PATH (`where.exe php` → Herd's `php.bat` again); hosts `undo 6`. |
 | 2026-10-22 | **P1-12 done:** ADR 0017. `kiln doctor` (read-only, fixes as commands, `--json`, exit 1 on failure); new `kiln-doctor` crate (pure rules); `kiln-sys` TCP listener owners, process parents, query-only process open. Detects the packaged-app container (I-45: the real path is `E:WindowsApps…` on this machine), ports held by other programs, PHP/pool/DNS/CA/shim problems, and explains Schannel revocation (I-12). 11 new tests, 203 total. |
 | 2026-10-22 | **P1-12 checked by the user from a normal PowerShell:** idle: "normal terminal", ports 8080/8443 free, Caddy and PHP 8.3.36/8.4.27 found, and three accurate warnings (old demo links not in hosts, CA trust undone, `php` is Herd's). After `web start`: all four listeners reported as Kiln's web server (PID 15852), pool 8.4.27 with 4 workers listening. `--json` worked; exit code 0. |
+| 2026-10-22 | **P1-13 done:** ADR 0018. `kiln history [--all]` (plain descriptions, times), `kiln undo` without a number (newest change in effect; clear refusal otherwise), `kiln uninstall [--dry-run|--keep-files|--yes]` and `kiln plan uninstall` (full plan: stop, undo newest first, delete Kiln's two folders with sizes, never-touched list; stops and deletes nothing if an undo fails; never deletes a folder holding a project; doesn't follow junctions). 9 new tests, 212 total, including a sandboxed real-binary uninstall. |
 
 ## How to update this file
 

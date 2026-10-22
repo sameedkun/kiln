@@ -140,17 +140,34 @@ mod windows {
         Ok(())
     }
 
-    pub fn undo(id: u64, force: bool, yes: bool) -> Result<(), String> {
+    /// `kiln undo [n]` ([ADR 0018] §2): the given operation, or the most recent one still in
+    /// effect.
+    ///
+    /// [ADR 0018]: ../../../docs/adr/0018-history-undo-uninstall.md
+    pub fn undo(id: Option<u64>, force: bool, yes: bool) -> Result<(), String> {
         let mut ctx = open()?;
-        let entry = kiln_ops::Journal::entries(ctx.engine.journal())
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|e| e.id == id)
-            .ok_or_else(|| format!("no operation #{id} in the journal"))?;
-        println!(
-            "Undo operation #{id} ({}, currently {:?}).",
-            entry.kind, entry.state
-        );
+        let entries =
+            kiln_ops::Journal::entries(ctx.engine.journal()).map_err(|e| e.to_string())?;
+        let entry = match id {
+            Some(id) => entries
+                .into_iter()
+                .find(|e| e.id == id)
+                .ok_or_else(|| format!("no operation #{id}; see `kiln history`"))?,
+            None => entries
+                .into_iter()
+                .rev()
+                .find(|e| e.state == kiln_ops::OpState::Applied)
+                .ok_or("nothing to undo: no operation is in effect (see `kiln history --all`)")?,
+        };
+        let id = entry.id;
+        let what = kiln_platform::describe::describe(&entry.kind, &entry.params);
+        if entry.state != kiln_ops::OpState::Applied {
+            return Err(format!(
+                "operation #{id} ({what}) is {}, so there is nothing to undo",
+                super::state_word(entry.state)
+            ));
+        }
+        println!("Undo operation #{id}: {what}.");
         if !yes && !confirm("Undo it? Windows will ask for administrator approval if needed.") {
             println!("Nothing was changed.");
             return Ok(());
@@ -160,6 +177,18 @@ mod windows {
         println!("Undone.");
         report_elevation(&ctx.session);
         Ok(())
+    }
+
+    /// Undoes every operation in effect, newest first, stopping at the first failure
+    /// ([ADR 0018] §4). Returns the undone operation numbers.
+    ///
+    /// [ADR 0018]: ../../../docs/adr/0018-history-undo-uninstall.md
+    pub fn undo_all() -> Result<Vec<u64>, String> {
+        let mut ctx = open()?;
+        let result = ctx.engine.revert_all(false).map_err(|e| e.to_string());
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        report_elevation(&ctx.session);
+        result
     }
 
     /// `kiln shims install` ([ADR 0016] §8, §11): copies `kiln-shim` in as `php.exe` and
@@ -346,7 +375,7 @@ pub fn ca_info() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub use windows::{ca_trust, hosts_set, shims_install, undo};
+pub use windows::{ca_trust, hosts_set, shims_install, undo, undo_all};
 
 #[cfg(not(windows))]
 pub fn ca_trust(_yes: bool) -> Result<(), String> {
@@ -359,7 +388,7 @@ pub fn hosts_set(_tld: Tld, _entries: Vec<DnsEntry>, _yes: bool) -> Result<(), S
 }
 
 #[cfg(not(windows))]
-pub fn undo(_id: u64, _force: bool, _yes: bool) -> Result<(), String> {
+pub fn undo(_id: Option<u64>, _force: bool, _yes: bool) -> Result<(), String> {
     Err("undo is not available on this platform yet (Linux: P1-04)".into())
 }
 
@@ -380,4 +409,21 @@ pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
             })
         })
         .find(|candidate| candidate.is_file())
+}
+
+/// How a journal state reads in a sentence.
+pub(crate) fn state_word(state: kiln_ops::OpState) -> &'static str {
+    use kiln_ops::OpState;
+    match state {
+        OpState::Prepared => "half-done (interrupted)",
+        OpState::Applied => "in effect",
+        OpState::RolledBack => "rolled back",
+        OpState::Reverted => "undone",
+        OpState::Stuck => "stuck (needs attention)",
+    }
+}
+
+#[cfg(not(windows))]
+pub fn undo_all() -> Result<Vec<u64>, String> {
+    Err("undoing system changes is not available on this platform yet (Linux: P1-04)".into())
 }

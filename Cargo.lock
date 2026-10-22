@@ -642,6 +642,7 @@ dependencies = [
  "kiln-sys",
  "kiln-web",
  "serde_json",
+ "tempfile",
  "time",
 ]
 

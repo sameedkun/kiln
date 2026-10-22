@@ -33,6 +33,7 @@ working name). Start here.
 | [0015](adr/0015-parked-folders-and-drivers.md) | Parked folders (every subfolder a site; links win) and framework drivers that only detect the document root; hosts sync covers parked sites; no Valet code | accepted, implemented (P1-10) |
 | [0016](adr/0016-per-site-php-and-shims.md) | Per-site PHP pins (`kiln isolate`), one pool per version in use, `kiln-shim` as `php`/`composer`, verified Composer, reversible user-PATH prepend | accepted, implemented (P1-11) |
 | [0017](adr/0017-kiln-doctor.md) | `kiln doctor`: read-only health checks as pure rules over gathered facts, fixes as commands, `--json`; port owners, container detection, Schannel note | accepted, implemented (P1-12) |
+| [0018](adr/0018-history-undo-uninstall.md) | `kiln history`, `kiln undo` (newest by default), `kiln uninstall` with full plan/dry run: stop → undo newest first → delete Kiln folders (state last); safety checks | accepted, implemented (P1-13) |
 
 ## Conventions
 
