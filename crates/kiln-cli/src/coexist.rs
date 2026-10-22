@@ -97,9 +97,27 @@ pub(crate) fn is_free(port: u16) -> bool {
 fn why_busy(listeners: &Listeners, port: u16) -> String {
     match listeners.holder(port) {
         Some(holder) => format!("used by {}", holder.describe()),
-        // Nobody listens, but binding fails: e.g. a range Windows reserves (Hyper-V, WSL).
-        None => "not available (reserved, or used by another program)".to_owned(),
+        None => match first_unprivileged_port() {
+            Some(first) if port < first => {
+                format!("only for root on this system (ports below {first})")
+            }
+            // Nobody listens, but binding fails: e.g. a range Windows reserves (Hyper-V, WSL).
+            _ => "not available (reserved, or used by another program)".to_owned(),
+        },
     }
+}
+
+/// The lowest port a normal user may listen on: Linux reserves those below it for root
+/// (1024 unless changed). `None` where every port is open to users (Windows, macOS).
+fn first_unprivileged_port() -> Option<u16> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .or(Some(1024))
+        .filter(|&first| first > 0)
 }
 
 /// Decides the port `kind` uses for this start and saves it ([ADR 0019] §3). `chosen` is the

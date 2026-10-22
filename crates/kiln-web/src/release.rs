@@ -62,7 +62,49 @@ pub const CADDY_RELEASES: &[Release] = &[
         sha512: "5e232f5fd68968c288034d98f8b4a6b16f246da6d5f1d3a8c7543b83327f1de0bf5d01d627768fbfd1dd254d7d53eb94589a40b126c29def10ac01365a3fe982",
         executable: "caddy.exe",
     },
+    Release {
+        version: "2.11.7",
+        os: "linux",
+        arch: "x86_64",
+        archive: "caddy_2.11.7_linux_amd64.tar.gz",
+        sha512: "a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7",
+        executable: "caddy",
+    },
+    Release {
+        version: "2.11.7",
+        os: "linux",
+        arch: "aarch64",
+        archive: "caddy_2.11.7_linux_arm64.tar.gz",
+        sha512: "3db36ba90c7a6e8dda40ee3dd71fa08844c76b5fb08f61b31e5e78d2ed38e71c51dc7baed875e50d1ca1279196e84302967237386ae87c91ae9f2aaceada682e",
+        executable: "caddy",
+    },
 ];
+
+/// The bytes of `executable` (a top-level file) in a release archive: `.zip` on Windows,
+/// `.tar.gz` elsewhere.
+fn read_executable(archive_name: &str, data: Vec<u8>, executable: &str) -> Result<Vec<u8>, String> {
+    let mut buffer = Vec::new();
+    if archive_name.ends_with(".tar.gz") {
+        let gz = flate2::read::GzDecoder::new(io::Cursor::new(data));
+        let mut tar = tar::Archive::new(gz);
+        for entry in tar.entries().map_err(|e| e.to_string())? {
+            let mut entry = entry.map_err(|e| e.to_string())?;
+            let is_it = entry.header().entry_type().is_file()
+                && entry.path().is_ok_and(|p| {
+                    p.as_os_str() == executable || p == Path::new(".").join(executable)
+                });
+            if is_it {
+                entry.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+                return Ok(buffer);
+            }
+        }
+        return Err("not in the archive".into());
+    }
+    let mut zip = zip::ZipArchive::new(io::Cursor::new(data)).map_err(|e| e.to_string())?;
+    let mut entry = zip.by_name(executable).map_err(|e| e.to_string())?;
+    entry.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    Ok(buffer)
+}
 
 /// The newest pinned release for this OS and CPU, if there is one.
 #[must_use]
@@ -151,10 +193,7 @@ pub fn install_from(
         executable: release.executable,
         detail,
     };
-    let mut zip = zip::ZipArchive::new(io::Cursor::new(data)).map_err(|e| bad(e.to_string()))?;
-    let mut entry = zip
-        .by_name(release.executable)
-        .map_err(|e| bad(e.to_string()))?;
+    let buffer = read_executable(release.archive, data, release.executable).map_err(bad)?;
 
     let dir = dest.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(dir).map_err(io_err(format!("cannot create {}", dir.display())))?;
@@ -162,10 +201,6 @@ pub fn install_from(
     let result = (|| {
         let mut out =
             File::create(&temp).map_err(io_err(format!("cannot create {}", temp.display())))?;
-        let mut buffer = Vec::new();
-        entry
-            .read_to_end(&mut buffer)
-            .map_err(|e| bad(e.to_string()))?;
         out.write_all(&buffer)
             .and_then(|()| out.sync_all())
             .map_err(io_err(format!("cannot write {}", temp.display())))?;
@@ -227,6 +262,32 @@ mod tests {
         // Reinstalling replaces it in place.
         install_from(&archive, &dest, &[pinned(hash)]).unwrap();
         assert!(!dest.with_extension("partial").exists());
+    }
+
+    /// Linux and macOS releases are `.tar.gz` with `caddy` at the top level.
+    #[test]
+    fn installs_from_a_pinned_tar_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("caddy.tar.gz");
+        let gz = flate2::write::GzEncoder::new(
+            File::create(&path).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut tar = tar::Builder::new(gz);
+        for (name, contents) in [("LICENSE", &b"Apache-2.0"[..]), ("caddy", b"\x7fELF fake")] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, name, contents).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+        let mut release = pinned(sha512_hex(&fs::read(&path).unwrap()));
+        release.archive = "caddy_test.tar.gz";
+        release.executable = "caddy";
+        let dest = dir.path().join("bin").join("kiln-caddy");
+        install_from(&path, &dest, &[release]).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"\x7fELF fake");
     }
 
     #[test]

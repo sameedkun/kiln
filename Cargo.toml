@@ -53,6 +53,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 # Caddy release archives (ADR 0011). Pure-Rust deflate only; no bzip2/lzma/zstd C code.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Caddy release archives for Linux and macOS (.tar.gz): pure-Rust gzip through zlib-rs.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+tar = { version = "0.4", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
