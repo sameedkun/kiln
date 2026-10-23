@@ -40,10 +40,11 @@ pub fn confirm(question: &str) -> bool {
 }
 
 /// Journaled system changes through the privileged helper: UAC on Windows, polkit or sudo on
-/// Linux ([ADR 0020], [ADR 0021]). The shims are Windows-only until P1-04 part d.
+/// Linux ([ADR 0020], [ADR 0021], [ADR 0023]).
 ///
 /// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
 /// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+/// [ADR 0023]: ../../../docs/adr/0023-linux-shims-and-path.md
 mod system {
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -125,6 +126,7 @@ mod system {
                 PrivilegedTrust, detect_anchors, register_system_trust,
             };
             register_nss_trust(&mut registry, nss_tool());
+            kiln_platform::shell_profile::register_shell_profile(&mut registry);
             let trust: Rc<dyn PrivilegedTrust> = session.clone();
             register_system_trust(
                 &mut registry,
@@ -323,6 +325,139 @@ mod system {
         println!(
             "Trusted. Recorded as operation #{} (remove with `kiln undo {}`).",
             report.entry_ids[0], report.entry_ids[0]
+        );
+        Ok(())
+    }
+
+    /// `'text'` for sh, with any `'` in it escaped.
+    #[cfg(not(windows))]
+    fn sh_quote(text: &str) -> String {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+
+    /// Copies `source` to `dest` as an executable, through a temporary file and a rename, so a
+    /// shim that is running right now is replaced rather than rewritten in place.
+    #[cfg(not(windows))]
+    fn install_executable(source: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = dest.with_extension("kiln-new");
+        std::fs::copy(source, &temp)
+            .and_then(|_| std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755)))
+            .and_then(|()| kiln_sys::rename_replace(&temp, dest))
+            .map_err(|e| format!("cannot write {}: {e}", dest.display()))
+    }
+
+    /// `kiln shims install` on Linux ([ADR 0023]): copies of `kiln-shim` as `php` and
+    /// `composer`, Kiln's `env` scripts, and a journaled block sourcing them at the end of each
+    /// shell startup file (`~/.profile`, `~/.bashrc`, `~/.zshrc`, fish's `conf.d`).
+    ///
+    /// [ADR 0023]: ../../../docs/adr/0023-linux-shims-and-path.md
+    #[cfg(not(windows))]
+    pub fn shims_install(yes: bool) -> Result<(), String> {
+        use kiln_platform::shell_profile::ShellProfileOp;
+        use kiln_runtime::shim::{SHIMS_DIR, Tool};
+
+        let local = kiln_state::default_local_dir()
+            .ok_or("cannot determine Kiln's local data directory")?;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME isn't set")?;
+        let shims = local.join(SHIMS_DIR);
+        let source = std::env::current_exe()
+            .map_err(|e| e.to_string())?
+            .with_file_name("kiln-shim");
+        if !source.is_file() {
+            return Err(format!(
+                "{} not found; build or install kiln-shim next to kiln",
+                source.display()
+            ));
+        }
+        std::fs::create_dir_all(&shims).map_err(|e| e.to_string())?;
+        for tool in [Tool::Php, Tool::Composer] {
+            install_executable(&source, &shims.join(tool.file_name()))?;
+        }
+        println!("Shims written to {}.", shims.display());
+
+        // Kiln's own scripts: put the shims first on PATH, once (ADR 0023 §2).
+        let dir = shims.to_string_lossy();
+        let env_sh = local.join("env");
+        let env_fish = local.join("env.fish");
+        std::fs::write(
+            &env_sh,
+            format!(
+                "# Written by Kiln: puts its php/composer shims first on PATH (`kiln undo` removes\n\
+                 # the lines that source this file).\n\
+                 case \":${{PATH}}:\" in\n  *:{q}:*) ;;\n  *) export PATH={q}\":${{PATH}}\" ;;\nesac\n",
+                q = sh_quote(&dir)
+            ),
+        )
+        .map_err(|e| format!("cannot write {}: {e}", env_sh.display()))?;
+        std::fs::write(
+            &env_fish,
+            format!(
+                "# Written by Kiln: puts its php/composer shims first on PATH.\n\
+                 if not contains -- {q} $PATH\n    set -gx PATH {q} $PATH\nend\n",
+                q = sh_quote(&dir)
+            ),
+        )
+        .map_err(|e| format!("cannot write {}: {e}", env_fish.display()))?;
+
+        // Which startup files get the block (ADR 0023 §3).
+        let source_sh = format!(". {}", sh_quote(&env_sh.to_string_lossy()));
+        let path_now = std::env::var("PATH").unwrap_or_default();
+        let shell = std::env::var("SHELL").unwrap_or_default();
+        let mut files = vec![home.join(".profile")];
+        if home.join(".bashrc").is_file() {
+            files.push(home.join(".bashrc"));
+        }
+        if home.join(".zshrc").is_file() || shell.ends_with("zsh") {
+            files.push(home.join(".zshrc"));
+        }
+        let mut ops: Vec<Box<dyn Operation>> = files
+            .into_iter()
+            .map(|file| {
+                Box::new(ShellProfileOp::new(file, source_sh.clone())) as Box<dyn Operation>
+            })
+            .collect();
+        if super::which_on(&path_now, "fish").is_some() {
+            ops.push(Box::new(ShellProfileOp::new(
+                home.join(".config/fish/conf.d/kiln.fish"),
+                format!("source {}", sh_quote(&env_fish.to_string_lossy())),
+            )));
+        }
+
+        for tool in [Tool::Php, Tool::Composer] {
+            match super::which_on(&path_now, tool.name()) {
+                Some(found) if found.starts_with(&shims) => {}
+                Some(found) => println!(
+                    "`{}` in new terminals: now {}; after this, Kiln's shim (it follows each site's PHP).",
+                    tool.name(),
+                    found.display()
+                ),
+                None => println!(
+                    "`{}` in new terminals: now not found; after this, Kiln's shim.",
+                    tool.name()
+                ),
+            }
+        }
+        let mut ctx = open()?;
+        for op in &ops {
+            print_preview(&op.preview().map_err(|e| e.to_string())?, "(no Kiln block)");
+        }
+        if !yes
+            && !confirm("Change these shell startup files? (`kiln undo` takes the lines back out)")
+        {
+            println!("Nothing was changed. The shims are in place but not on PATH.");
+            return Ok(());
+        }
+        let report = ctx.engine.apply(&ops).map_err(|e| e.to_string())?;
+        let ids: Vec<String> = report.entry_ids.iter().map(|id| format!("#{id}")).collect();
+        println!(
+            "Done. Recorded as operation(s) {} (`kiln undo` removes them, newest first).",
+            ids.join(", ")
+        );
+        println!(
+            "Open a new terminal to use it. Apps started from the desktop (an IDE) see it after you log in again."
         );
         Ok(())
     }
@@ -537,14 +672,7 @@ pub fn ca_info() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
-pub use system::shims_install;
-pub use system::{ca_trust, hosts_set, undo, undo_all};
-
-#[cfg(not(windows))]
-pub fn shims_install(_yes: bool) -> Result<(), String> {
-    Err("the php/composer shims are only available on Windows so far (Linux: P1-04)".into())
-}
+pub use system::{ca_trust, hosts_set, shims_install, undo, undo_all};
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.
 #[cfg(windows)]

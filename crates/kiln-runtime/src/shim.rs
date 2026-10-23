@@ -9,10 +9,19 @@ use std::process::Command;
 
 use crate::DirPhp;
 
-/// Folder (under Kiln's local data) holding `php.exe` and `composer.exe`.
-pub const SHIMS_DIR: &str = r"bin\shims";
+/// Folder (under Kiln's local data) holding the shims (`php.exe` / `php`, `composer.exe` /
+/// `composer`).
+pub const SHIMS_DIR: &str = if cfg!(windows) {
+    r"bin\shims"
+} else {
+    "bin/shims"
+};
 /// Where `kiln composer install` puts Composer (under Kiln's local data).
-pub const COMPOSER_PHAR: &str = r"bin\composer.phar";
+pub const COMPOSER_PHAR: &str = if cfg!(windows) {
+    r"bin\composer.phar"
+} else {
+    "bin/composer.phar"
+};
 
 /// What a shim pretends to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

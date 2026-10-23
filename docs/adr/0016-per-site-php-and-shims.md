@@ -86,7 +86,7 @@ its PHP on the user's `PATH`. So this must be visible, consented and reversible.
       the environment changed (`WM_SETTINGCHANGE`), so new terminals see it; open terminals
       keep their old `PATH`.
     - Only the user's `PATH`, never the machine's, so no administrator rights are needed.
-12. **Windows only** in P1-11. On Linux the same shims come with P1-04.
+12. **Windows only** in P1-11. On Linux the same shims came with P1-04, with `PATH` set by a block in the shell startup files ([ADR 0023](0023-linux-shims-and-path.md)).
 
 ## Consequences
 

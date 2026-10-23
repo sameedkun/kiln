@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done; P1-04 parts a–c of 4 done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (14 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0022 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0023 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -22,7 +22,7 @@
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
-| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (static builds, SHA-256 pinned in Kiln) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. Not yet: shims (d) |
+| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (static builds, SHA-256 pinned in Kiln) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. **Part d done:** `kiln shims install` puts `php`/`composer` shims on PATH through a block in the shell startup files, undone byte for byte. **Linux now matches Windows for Phase 1.** |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -58,7 +58,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
-| P1-04 | Linux (parts a–d) | **a done** 2026-10-22, **b, c done** 2026-10-23 | [ADR 0020](adr/0020-linux-dns-and-privilege.md), [0021](adr/0021-linux-ca-key-and-trust.md), [0022](adr/0022-linux-php-runtimes-and-fpm.md); see below. a: hosts DNS via pkexec, undo, Caddy, port owners. b: CA key in the keyring, trust in browsers and the system store. c: pinned static PHP or the system's, PHP-FPM pools. Next: d shims |
+| P1-04 | Linux (parts a–d) | **done** 2026-10-23 (a 10-22; b, c, d 10-23) | [ADR 0020](adr/0020-linux-dns-and-privilege.md), [0021](adr/0021-linux-ca-key-and-trust.md), [0022](adr/0022-linux-php-runtimes-and-fpm.md); see below. a: hosts DNS via pkexec, undo, Caddy, port owners. b: CA key in the keyring, trust in browsers and the system store. c: pinned static PHP or the system's, PHP-FPM pools. d: `php`/`composer` shims on PATH via the shell startup files ([ADR 0023](adr/0023-linux-shims-and-path.md)) |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
@@ -842,6 +842,40 @@ Design: [ADR 0022](adr/0022-linux-php-runtimes-and-fpm.md). Checked first:
   isolated to it reported PHP 8.3.6 with **intl** (from Ubuntu's packages) and Kiln's
   `php.ini`. Ubuntu's own `php8.3-fpm` service, running as root, kept running untouched.
 
+<a id="p1-04d"></a>
+### P1-04 part d delivered (2026-10-23): P1-04 complete
+
+Design: [ADR 0023](adr/0023-linux-shims-and-path.md). Linux has no user `PATH` value: it comes
+from shell startup files (`~/.profile` for the desktop and login shells, `~/.bashrc` for
+terminals).
+
+- **Shims:** `kiln shims install` copies `kiln-shim` as `php` and `composer` into
+  `~/.local/share/kiln/bin/shims`. They are real copies, not links: `/proc/self/exe` resolves
+  links. The shim now takes its role from `argv[0]` first. The shim path constants use `/` on
+  Linux.
+- **`PATH`:** Kiln writes `~/.local/share/kiln/env` (and `env.fish`), which put the shims
+  first on `PATH` once.
+  - A journaled `env.shell_profile` operation per file adds a marked block sourcing it at the
+    end of `~/.profile` (created if missing), `~/.bashrc` and `~/.zshrc` if present, and
+    `~/.config/fish/conf.d/kiln.fish` if fish is installed.
+  - The block is edited as bytes like the hosts block: other bytes, line endings and mode are
+    kept, ambiguous markers are refused, and a file Kiln created is removed on undo.
+- `kiln composer install` and `kiln which` work on Linux.
+- **Tests:** 251 on Windows and 222 in the VM, all passing. New: block round trips (LF,
+  CRLF, no final newline, empty), refused markers, the operation keeping user edits and file
+  mode, created files removed, an older block restored, and the new journal description.
+
+**Checked over SSH in the VM** (shims need no password):
+- `kiln shims install` showed `php` moving from `/usr/bin/php` to Kiln's shim, and wrote
+  blocks to `~/.profile` and `~/.bashrc` (#5, #6).
+- In a new terminal, `php` in the project pinned to 8.3 ran 8.3.32, and elsewhere the default
+  8.4.23. `composer --version` worked, and `exit(7)` came through as 7.
+- A login shell found the shim too. A shell reading both files had the shims folder on
+  `PATH` once.
+- `kiln doctor` in a new terminal: "`php` on this terminal's PATH is Kiln's shim".
+- Two `kiln undo`s left `~/.profile` and `~/.bashrc` **byte-identical** to before (SHA-256),
+  and `php` was Ubuntu's again.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -860,7 +894,7 @@ Design: [ADR 0022](adr/0022-linux-php-runtimes-and-fpm.md). Checked first:
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
 | P1-14 coexistence check from a normal terminal (Herd running) | [I-45](issues.md#i-45) | done 2026-10-22 (user); found I-54, fixed |
-| P1-04 part d (shims) | [ADR 0020](adr/0020-linux-dns-and-privilege.md) | next |
+| P1-04 part d (shims) | [ADR 0023](adr/0023-linux-shims-and-path.md) | done 2026-10-23 |
 | P1-04b browser recheck after the I-57 fix (Firefox and Chrome windows in the VM) | [I-57](issues.md#i-57) | done 2026-10-23 (user) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
@@ -913,6 +947,7 @@ Design: [ADR 0022](adr/0022-linux-php-runtimes-and-fpm.md). Checked first:
 | 2026-10-23 | **P1-04b checked by the user in the VM's desktop:** `kiln ca init` put the root key **in the desktop keyring**. `hosts sync` (#6) and `ca trust --system` (#7–#9, Chrome, Firefox and the system store) each took **one polkit dialog**, and the doctor showed all three trusted. But curl, Chrome and Firefox rejected `https://hello.test:8443/`: [I-57](issues.md#i-57), stale site certificates from the replaced CA. Fixed and verified in the VM. `kiln uninstall` undid #9 → #6 with one dialog, **removed the key from the keyring**, and deleted both Kiln folders. |
 | 2026-10-23 | **P1-04b rechecked by the user after the I-57 fix**, in the VM's desktop. `kiln ca info` showed the root key in the desktop keyring. `hosts sync` (#1) and `ca trust --system` (#2–#4) each took one polkit dialog. **curl** printed the page. The doctor showed Chrome's database, the Firefox snap profile and the system store all trusting the root. **Firefox** loaded `https://hello.test:8443/` with no warning, and **Chrome** showed "Connection is secure". |
 | 2026-10-23 | **P1-04 part c done:** ADR 0022. Linux PHP: static-php-cli `common` builds of 8.2–8.5 (x86-64) with SHA-256 pinned in Kiln from two agreeing downloads, or the distribution's PHP via `--system`. Served by PHP-FPM masters under the supervisor (SIGTERM stop, parent-death signal), with per-site versions switched live. The `bulk` set was rejected for lacking `pdo_sqlite`. 247 tests on Windows, 218 in the VM. |
+| 2026-10-23 | **P1-04 part d done, so P1-04 is complete:** ADR 0023. Linux shims are copies of `kiln-shim` (role from `argv[0]` first), put on PATH by Kiln's `env` script, sourced from a journaled marked block in each shell startup file (`env.shell_profile`). Verified in the VM: per-folder PHP, Composer, exit codes, one PATH entry, and byte-identical undo. 251 tests on Windows, 222 in the VM. **Linux now matches Windows for Phase 1; only P1-15 is left.** |
 
 ## How to update this file
 

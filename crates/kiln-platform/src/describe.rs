@@ -7,6 +7,7 @@
 use serde_json::Value;
 
 use crate::hosts_op::HOSTS_BLOCK_KIND;
+use crate::shell_profile::SHELL_PROFILE_KIND;
 use crate::trust_nss::NSS_TRUST_KIND;
 use crate::trust_system::SYSTEM_TRUST_KIND;
 use crate::user_path::USER_PATH_KIND;
@@ -42,6 +43,10 @@ pub fn describe(kind: &str, params: &Value) -> String {
         NSS_TRUST_KIND => format!(
             "Kiln's root CA trusted in {}",
             params["label"].as_str().unwrap_or("a browser")
+        ),
+        SHELL_PROFILE_KIND => format!(
+            "Kiln's shims on PATH in {}",
+            params["file"].as_str().unwrap_or("a shell startup file")
         ),
         SYSTEM_TRUST_KIND => "Kiln's root CA trusted machine-wide (system store)".to_owned(),
         other => other.to_owned(),
@@ -91,6 +96,10 @@ mod tests {
             "Kiln's root CA trusted in Firefox profile x"
         );
         assert!(describe(SYSTEM_TRUST_KIND, &json!({})).contains("machine-wide"));
+        assert_eq!(
+            describe(SHELL_PROFILE_KIND, &json!({"file": "/home/me/.bashrc"})),
+            "Kiln's shims on PATH in /home/me/.bashrc"
+        );
         assert_eq!(describe("future.kind", &json!({})), "future.kind");
     }
 

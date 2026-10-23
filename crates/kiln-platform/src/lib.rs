@@ -7,6 +7,7 @@
 pub mod describe;
 pub mod hosts;
 pub mod hosts_op;
+pub mod shell_profile;
 #[cfg(windows)]
 pub mod trust;
 pub mod trust_nss;
