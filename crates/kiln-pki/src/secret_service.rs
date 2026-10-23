@@ -9,17 +9,23 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::pin::Pin;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use futures_core::Stream;
+use zbus::proxy::SignalStream;
+use zbus::{Connection, Message, ObjectPath, OwnedObjectPath, OwnedVariant, Proxy, Variant};
 
 use crate::store::KeyProtector;
 
 const SERVICE: &str = "org.freedesktop.secrets";
 const SERVICE_PATH: &str = "/org/freedesktop/secrets";
 const DEFAULT_COLLECTION: &str = "/org/freedesktop/secrets/aliases/default";
+const SERVICE_IFACE: &str = "org.freedesktop.Secret.Service";
+const COLLECTION_IFACE: &str = "org.freedesktop.Secret.Collection";
+const ITEM_IFACE: &str = "org.freedesktop.Secret.Item";
+const PROMPT_IFACE: &str = "org.freedesktop.Secret.Prompt";
 const LABEL: &str = "Kiln local CA root key";
 /// What `root.key.protected` starts with when the key is in the Secret Service.
 const REFERENCE: &[u8] = b"kiln-secret-service/1 ";
@@ -133,7 +139,13 @@ fn attributes(id: &str) -> HashMap<&str, &str> {
     ])
 }
 
-/// One connection and `plain` session with the Secret Service.
+/// The next message of `stream`, or `None` when it ends.
+async fn next(stream: &mut SignalStream<'_>) -> Option<Message> {
+    std::future::poll_fn(|cx| Stream::poll_next(Pin::new(&mut *stream), cx)).await
+}
+
+/// One connection and `plain` session with the Secret Service. Every call is driven to
+/// completion on the calling thread (`zbus::block_on`); Kiln runs no async runtime.
 struct Session {
     conn: Connection,
     path: OwnedObjectPath,
@@ -141,55 +153,54 @@ struct Session {
 
 impl Session {
     fn open() -> io::Result<Self> {
-        let conn = Connection::session().map_err(err)?;
-        let service = Proxy::new(
-            &conn,
-            SERVICE,
-            SERVICE_PATH,
-            "org.freedesktop.Secret.Service",
-        )
-        .map_err(err)?;
-        let (_, path): (OwnedValue, OwnedObjectPath) = service
-            .call("OpenSession", &("plain", Value::from("")))
-            .map_err(err)?;
-        Ok(Self { conn, path })
-    }
-
-    fn proxy<'a>(&'a self, path: &'a str, interface: &'a str) -> io::Result<Proxy<'a>> {
-        Proxy::new(&self.conn, SERVICE, path, interface).map_err(err)
-    }
-
-    fn service(&self) -> io::Result<Proxy<'_>> {
-        self.proxy(SERVICE_PATH, "org.freedesktop.Secret.Service")
+        zbus::block_on(async {
+            let conn = Connection::session().await?;
+            let (_, path): (OwnedVariant, OwnedObjectPath) =
+                Proxy::new(&conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
+                    .await?
+                    .call("OpenSession", &("plain", Variant::from("")))
+                    .await?;
+            Ok::<_, zbus::Error>(Self { conn, path })
+        })
+        .map_err(err)
     }
 
     fn has_default_collection(&self) -> bool {
-        self.service()
-            .and_then(|s| {
-                s.call::<_, _, OwnedObjectPath>("ReadAlias", &("default",))
-                    .map_err(err)
-            })
-            .is_ok_and(|path| !no_prompt(&path))
+        zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
+                .await?
+                .call::<_, _, OwnedObjectPath>("ReadAlias", &("default",))
+                .await
+        })
+        .is_ok_and(|path| !no_prompt(&path))
     }
 
     /// Shows the desktop's dialog for `prompt` (unless it is `/`, no dialog needed) and
-    /// returns its result, or an error if the user dismissed it.
-    fn complete(&self, prompt: &ObjectPath<'_>) -> io::Result<Option<OwnedValue>> {
+    /// returns its result, or an error if the user dismissed it. The wait runs on its own
+    /// thread so it can time out.
+    fn complete(&self, prompt: &ObjectPath<'_>) -> io::Result<Option<OwnedVariant>> {
         if no_prompt(prompt) {
             return Ok(None);
         }
-        let proxy = self.proxy(prompt.as_str(), "org.freedesktop.Secret.Prompt")?;
-        let mut completed = proxy.receive_signal("Completed").map_err(err)?;
-        proxy.call::<_, _, ()>("Prompt", &("",)).map_err(err)?;
+        let conn = self.conn.clone();
+        let path = OwnedObjectPath::from(prompt.clone());
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(completed.next());
+            let result = zbus::block_on(async move {
+                let proxy = Proxy::new(&conn, SERVICE, path.as_str(), PROMPT_IFACE).await?;
+                let mut completed = proxy.receive_signal("Completed").await?;
+                proxy.call::<_, _, ()>("Prompt", &("",)).await?;
+                let message = next(&mut completed)
+                    .await
+                    .ok_or_else(|| zbus::Error::Failure("the keyring closed its dialog".into()))?;
+                message.body().deserialize::<(bool, OwnedVariant)>()
+            });
+            let _ = tx.send(result);
         });
-        let message = rx
+        let (dismissed, result) = rx
             .recv_timeout(PROMPT_TIMEOUT)
             .map_err(|_| err("the keyring's unlock dialog wasn't answered in time"))?
-            .ok_or_else(|| err("the keyring closed its dialog"))?;
-        let (dismissed, result): (bool, OwnedValue) = message.body().deserialize().map_err(err)?;
+            .map_err(err)?;
         if dismissed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -200,9 +211,13 @@ impl Session {
     }
 
     fn default_locked(&self) -> bool {
-        self.proxy(DEFAULT_COLLECTION, "org.freedesktop.Secret.Collection")
-            .and_then(|c| c.get_property::<bool>("Locked").map_err(err))
-            .unwrap_or(true)
+        zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, DEFAULT_COLLECTION, COLLECTION_IFACE)
+                .await?
+                .get_property::<bool>("Locked")
+                .await
+        })
+        .unwrap_or(true)
     }
 
     /// Unlocks a locked `object` (a collection or an item) through the desktop's dialog.
@@ -214,10 +229,13 @@ impl Session {
                 "Secret Service: the keyring is locked and there is no desktop session here to unlock it; run this from a terminal on the desktop, or log in to the desktop first",
             ));
         }
-        let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) = self
-            .service()?
-            .call("Unlock", &(vec![object],))
-            .map_err(err)?;
+        let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) = zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
+                .await?
+                .call("Unlock", &(vec![object],))
+                .await
+        })
+        .map_err(err)?;
         self.complete(&prompt).map(|_| ())
     }
 
@@ -226,10 +244,10 @@ impl Session {
             self.unlock(OwnedObjectPath::try_from(DEFAULT_COLLECTION).map_err(err)?)?;
         }
         let properties = HashMap::from([
-            ("org.freedesktop.Secret.Item.Label", Value::from(LABEL)),
+            ("org.freedesktop.Secret.Item.Label", Variant::from(LABEL)),
             (
                 "org.freedesktop.Secret.Item.Attributes",
-                Value::from(attributes(id)),
+                Variant::from(attributes(id)),
             ),
         ]);
         let secret: Secret = (
@@ -238,18 +256,25 @@ impl Session {
             key.to_vec(),
             "application/octet-stream".to_owned(),
         );
-        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) = self
-            .proxy(DEFAULT_COLLECTION, "org.freedesktop.Secret.Collection")?
-            .call("CreateItem", &(properties, secret, false))
-            .map_err(err)?;
+        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) = zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, DEFAULT_COLLECTION, COLLECTION_IFACE)
+                .await?
+                .call("CreateItem", &(properties, secret, false))
+                .await
+        })
+        .map_err(err)?;
         self.complete(&prompt).map(|_| ())
     }
 
     /// The item for `id`, unlocked; `None` if there is none.
     fn find(&self, id: &str) -> io::Result<Option<OwnedObjectPath>> {
-        let (unlocked, locked): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) = self
-            .service()?
-            .call("SearchItems", &(attributes(id),))
+        let (unlocked, locked): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) =
+            zbus::block_on(async {
+                Proxy::new(&self.conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
+                    .await?
+                    .call("SearchItems", &(attributes(id),))
+                    .await
+            })
             .map_err(err)?;
         if let Some(item) = unlocked.into_iter().next() {
             return Ok(Some(item));
@@ -268,10 +293,13 @@ impl Session {
                 "Secret Service: Kiln's root key item is missing from the keyring",
             )
         })?;
-        let (secret,): (Secret,) = self
-            .proxy(item.as_str(), "org.freedesktop.Secret.Item")?
-            .call("GetSecret", &(&self.path,))
-            .map_err(err)?;
+        let (secret,): (Secret,) = zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, item.as_str(), ITEM_IFACE)
+                .await?
+                .call("GetSecret", &(&self.path,))
+                .await
+        })
+        .map_err(err)?;
         Ok(secret.2)
     }
 
@@ -279,10 +307,13 @@ impl Session {
         let Some(item) = self.find(id)? else {
             return Ok(());
         };
-        let prompt: OwnedObjectPath = self
-            .proxy(item.as_str(), "org.freedesktop.Secret.Item")?
-            .call("Delete", &())
-            .map_err(err)?;
+        let prompt: OwnedObjectPath = zbus::block_on(async {
+            Proxy::new(&self.conn, SERVICE, item.as_str(), ITEM_IFACE)
+                .await?
+                .call("Delete", &())
+                .await
+        })
+        .map_err(err)?;
         self.complete(&prompt).map(|_| ())
     }
 }

@@ -19,6 +19,7 @@ x509-parser.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
+futures-core.workspace = true
 getrandom.workspace = true
 
 [dev-dependencies]

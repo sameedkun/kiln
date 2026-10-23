@@ -46,10 +46,13 @@ Measured in the Ubuntu 24.04 Desktop test VM on 2026-10-23 (Kiln's root, an HTTP
    `0600` as before, and `kiln ca init` says so. The blob format tells the two apart, so a
    key created either way keeps working.
 3. `kiln uninstall` deletes the Secret Service item together with Kiln's folders.
-4. The Secret Service is spoken over D-Bus with `zbus` 5 (MIT; its blocking API; no C
-   libraries), a Linux-only dependency of `kiln-pki`. Items use the `plain` session: the
-   session bus is private to the user, and that is what libsecret does with GNOME Keyring
-   too.
+4. The Secret Service is spoken over D-Bus with `zbus` 6 (MIT; no C libraries), a
+   Linux-only dependency of `kiln-pki`, with only its client features (`default-rt`,
+   `proxy`): 35 crates. Each call is driven to completion with `zbus::block_on`, so Kiln
+   runs no async runtime. Items use the `plain` session: the session bus is private to the
+   user, and that is what libsecret does with GNOME Keyring too.
+   - `zbus` 5 was used first, but its `zvariant` crates were declared unmaintained on
+     2026-10-23 (RUSTSEC-2026-0370 to 0372) after being merged into `zbus` 6.
 
 ### Trust: NSS databases per user, the system store on request
 
@@ -114,7 +117,7 @@ Measured in the Ubuntu 24.04 Desktop test VM on 2026-10-23 (Kiln's root, an HTTP
 - **Writing `cert9.db` with SQLite directly:** possible (Kiln has SQLite), but NSS's object
   format is internal, and a running browser holds the database.
 - **The `secret-service` crate:** about 240 dependency lines (async runtime, big-integer and
-  AES code for the DH session), against about 60 for `zbus` alone.
+  AES code for the DH session), against 35 crates for `zbus` 6 alone.
 - **A hand-written D-Bus client:** fewer dependencies, but its marshalling would be new,
   hard-to-test code guarding a secret.
 - **An AEAD-encrypted key file with only the wrapping key in the Secret Service:** the same
