@@ -68,6 +68,7 @@ commits and PRs.
 | [I-56](#i-56) | process | Shell-quoted substitutions turned `\e` in a Windows path into an escape byte | ✅ (caught before commit) |
 | [I-57](#i-57) | TLS | After the CA changed, Caddy kept serving site certificates from the old intermediate; browsers rejected the site though every store trusted the new root | ✅ (found in the user's VM check) |
 | [I-58](#i-58) | dependencies | Two advisories during P1-04b: `ctutils` 0.4.3, and zbus 5's `zvariant` crates declared unmaintained | ✅ (ctutils 0.4.5; zbus 6) |
+| [I-59](#i-59) | uninstall | With the keyring locked, `kiln uninstall` deleted the state folder and orphaned the CA key's keyring item | ✅ (state folder kept until the key is removed) |
 
 ---
 
@@ -700,3 +701,22 @@ commits and PRs.
   the zbus swap was kept.
 - **Rule:** update single dependencies (`cargo update -p <crate>`), never the whole
   lockfile as a side effect of other work.
+
+## P1-15: integration test VMs
+
+<a id="i-59"></a>
+### I-59: Uninstall with a locked keyring orphaned the CA key's keyring item ✅
+- **Found:** preparing the Linux VM for P1-15. Over SSH, with nobody logged in to the
+  desktop, the keyring was locked.
+  - `kiln uninstall` reported "Couldn't remove the CA root key from your keyring" and then
+    deleted the state folder anyway.
+  - That folder held the only reference to the item (`root.key.protected`), so nothing
+    could find the item afterwards.
+  - The keyring had five such items, from earlier test runs.
+- **Fix:** when the keyring item can't be removed, uninstall keeps the state folder and says:
+  "Run `kiln uninstall` again from a terminal on the desktop to finish." The second run
+  removes the item, then the folder.
+- **Rule:** never delete the last reference to something Kiln created outside its folders
+  before that thing is gone.
+- **Left over:** the five orphaned items in the test VM's keyring are removed by hand
+  (Passwords and Keys, label "Kiln local CA root key") when someone is at its desktop.

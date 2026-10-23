@@ -250,14 +250,20 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
         println!("Done. Kiln's folders were kept (--keep-files).");
         return Ok(());
     }
-    // The root key may live outside Kiln's folders (the Secret Service, ADR 0021 §3).
-    if let Err(e) =
-        crate::apply::ca_store().and_then(|ca| ca.forget_root_key().map_err(|e| e.to_string()))
-    {
+    // The root key may live outside Kiln's folders (the Secret Service, ADR 0021 §3). If it
+    // can't be removed now, the state folder, which holds the only reference to it, is kept,
+    // so a later `kiln uninstall` can finish the job instead of orphaning it (I-59).
+    let forgotten =
+        crate::apply::ca_store().and_then(|ca| ca.forget_root_key().map_err(|e| e.to_string()));
+    let key_left = if let Err(e) = &forgotten {
         println!("Couldn't remove the CA root key from your keyring: {e}");
-    } else if plan.key_in_keyring {
-        println!("Removed the CA root key from your keyring.");
-    }
+        true
+    } else {
+        if plan.key_in_keyring {
+            println!("Removed the CA root key from your keyring.");
+        }
+        false
+    };
 
     // 3. Delete; the state folder only if nothing is left in effect or stuck.
     let unresolved = crate::web::open_store()
@@ -283,6 +289,13 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
         if unresolved > 0 && Some(&folder.path) == state_dir.as_ref() {
             println!(
                 "Kept {}: {unresolved} operation(s) still need attention (`kiln history`).",
+                folder.path.display()
+            );
+            continue;
+        }
+        if key_left && Some(&folder.path) == state_dir.as_ref() {
+            println!(
+                "Kept {}: it refers to the CA root key still in your keyring. Run `kiln uninstall` again from a terminal on the desktop to finish.",
                 folder.path.display()
             );
             continue;
