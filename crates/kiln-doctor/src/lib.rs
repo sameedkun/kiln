@@ -227,6 +227,8 @@ pub struct CertFacts {
     pub certutil: Option<bool>,
     /// Linux: whether the system store has Kiln's root; `None` elsewhere.
     pub system_trusted: Option<bool>,
+    /// The web server keeps site certificates issued from an earlier intermediate (I-57).
+    pub stale_site_certificates: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -736,6 +738,16 @@ fn certificates(facts: &CertFacts) -> Vec<Finding> {
             "trust can't be checked on this platform yet",
         )],
     };
+    if facts.stale_site_certificates {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                "the web server still has site certificates from an earlier Kiln CA; browsers trusting the current one reject them",
+            ),
+            "kiln web restart",
+        ));
+    }
     if let Some(kept) = &facts.key_storage {
         out.push(finding(
             area,
@@ -1229,6 +1241,18 @@ mod tests {
         assert!(
             !certs.iter().any(|f| f.message.contains("Schannel")),
             "Windows notes stay on Windows"
+        );
+
+        // Site certificates from an earlier CA (I-57) are reported, and only then.
+        assert!(
+            !certs.iter().any(|f| f.message.contains("earlier Kiln CA")),
+            "no stale certificates reported unless there are some"
+        );
+        facts.certificates.as_mut().unwrap().stale_site_certificates = true;
+        assert!(
+            of(&diagnose(&facts), Area::Certificates)
+                .iter()
+                .any(|f| f.fix.as_deref() == Some("kiln web restart"))
         );
 
         // Without certutil the browsers can't be checked or changed: one clear warning.

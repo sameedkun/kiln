@@ -116,9 +116,25 @@ pub fn issue_intermediate(
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let mut params = CertificateParams::default();
     let mut dn = DistinguishedName::new();
+    // Unique per root and per issue: browsers match a site's issuer by name, and two
+    // intermediates with one name made Firefox check a site against the wrong one (I-57).
+    let root_id =
+        sha2::Sha256::digest(root_cert_der)
+            .iter()
+            .take(4)
+            .fold(String::new(), |mut hex, b| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{b:02x}");
+                hex
+            });
     dn.push(
         DnType::CommonName,
-        format!("Kiln Intermediate CA ({})", now.date()),
+        format!(
+            "Kiln Intermediate CA ({} {:02}:{:02}, root {root_id})",
+            now.date(),
+            now.hour(),
+            now.minute()
+        ),
     );
     dn.push(DnType::OrganizationName, "Kiln");
     params.distinguished_name = dn;

@@ -385,12 +385,27 @@ fn certificates() -> CertFacts {
         intermediate_days_left,
         firefox_profiles: firefox_profiles(),
         key_storage: ca.root_key_description().map(str::to_owned),
+        stale_site_certificates: stale_site_certificates(&ca),
         ..CertFacts::default()
     };
     if let Some(root) = &root {
         linux_trust(&mut facts, root);
     }
     facts
+}
+
+/// Whether Caddy's stored site certificates came from another intermediate than the current
+/// one (I-57). Read-only.
+fn stale_site_certificates(ca: &kiln_pki::CaStore) -> bool {
+    let (Ok(Some(intermediate)), Ok(server)) = (ca.intermediate(), web::server()) else {
+        return false;
+    };
+    let storage = server
+        .config_path()
+        .parent()
+        .map(|dir| dir.join("storage"))
+        .unwrap_or_default();
+    !kiln_web::issued::issued_from(&storage, &intermediate.sha256)
 }
 
 /// Each browser NSS database and the system store ([ADR 0021] §8). Read-only: `certutil -L`

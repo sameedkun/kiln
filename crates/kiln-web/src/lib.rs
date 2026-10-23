@@ -4,6 +4,7 @@
 //! - [`release`]: the pinned Caddy release archives and installing the binary as `kiln-caddy`.
 //! - [`process`]: starting, checking, reloading and stopping Caddy in the background.
 //! - [`admin`]: the admin API client over its Unix socket (ADR 0012).
+//! - [`issued`]: clearing site certificates issued from an earlier intermediate (I-57).
 //!
 //! This crate knows nothing about the state database; callers build a [`WebConfig`] from it.
 //!
@@ -12,6 +13,7 @@
 
 pub mod admin;
 pub mod config;
+pub mod issued;
 pub mod process;
 pub mod release;
 

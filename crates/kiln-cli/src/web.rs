@@ -95,6 +95,34 @@ fn ca_files() -> Result<CaFiles, String> {
     })
 }
 
+/// The current intermediate's SHA-256 if Caddy's stored site certificates were issued from
+/// another one (I-57); `None` without HTTPS sites or when nothing changed.
+fn ca_changed(config: &WebConfig) -> Result<Option<String>, String> {
+    let Some(ca) = &config.ca else {
+        return Ok(None);
+    };
+    let pem = std::fs::read_to_string(&ca.intermediate_cert)
+        .map_err(|e| format!("cannot read {}: {e}", ca.intermediate_cert.display()))?;
+    let der = kiln_pki::pem_to_der(&pem).map_err(|e| e.to_string())?;
+    let sha256 = kiln_pki::sha256_fingerprint(&der);
+    Ok((!kiln_web::issued::issued_from(&config.storage_dir, &sha256)).then_some(sha256))
+}
+
+/// After Kiln's CA changed, a reload would keep serving the old site certificates from
+/// Caddy's memory, so a running server restarts instead (I-57). Returns whether it did.
+fn restart_if_ca_changed(store: &StateStore) -> Result<bool, String> {
+    let config = web_config(store)?; // may re-issue an expiring intermediate first
+    if ca_changed(&config)?.is_none() {
+        return Ok(false);
+    }
+    println!(
+        "Kiln's CA changed since the web server started; restarting it so sites get certificates from the new one."
+    );
+    stop()?;
+    start(None, None, false)?;
+    Ok(true)
+}
+
 fn web_config(store: &StateStore) -> Result<WebConfig, String> {
     let run = server()?;
     let run_dir = run
@@ -163,6 +191,9 @@ fn describe(site: &kiln_sites::Site) -> String {
 pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
     if !is_running()? {
         println!("The web server isn't running; it takes effect at `kiln web start`.");
+        return Ok(());
+    }
+    if restart_if_ca_changed(store)? {
         return Ok(());
     }
     let saved =
@@ -638,6 +669,17 @@ pub fn start(
             return Err(e);
         }
     };
+    // Site certificates from an earlier intermediate would be served on (I-57).
+    let forgotten = ca_changed(&config).and_then(|changed| {
+        changed.map_or(Ok(()), |sha256| {
+            kiln_web::issued::forget_other_issuers(&config.storage_dir, &sha256)
+                .map_err(|e| format!("cannot clear old site certificates: {e}"))
+        })
+    });
+    if let Err(e) = forgotten {
+        let _ = supervisor.stop();
+        return Err(e);
+    }
     let pid = match server.start(&config) {
         Ok(pid) => pid,
         Err(e) => {
@@ -709,6 +751,9 @@ pub fn restart() -> Result<(), String> {
 /// Re-applies the current sites and settings to the running server without restarting it.
 pub fn reload() -> Result<(), String> {
     let store = open_store()?;
+    if is_running()? && restart_if_ca_changed(&store)? {
+        return Ok(());
+    }
     let config = web_config(&store)?;
     server()?.reload(&config).map_err(|e| e.to_string())?;
     println!("Web server reloaded.");
