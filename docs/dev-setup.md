@@ -105,6 +105,21 @@ The console uses Hyper-V's enhanced session (clipboard works); `tests/vm/type.ps
 into a VM in a basic session. Closing the console window doesn't stop the VM:
 `vmconnect.exe localhost kiln-ubuntu` reopens it.
 
+More VM notes:
+- **Its address changes** when the host restarts (Hyper-V's Default Switch), and the VM may
+  be off. `Start-VM kiln-ubuntu`, then find the address from its MAC:
+  `Get-NetNeighbor -LinkLayerAddress ((Get-VMNetworkAdapter -VMName kiln-ubuntu).MacAddress -replace '(..)(?!$)','$1-')`.
+- **Black screen after logging in:** the enhanced session started a second desktop for a
+  user already logged in at the console. Turn off View → Enhanced session to reach the
+  console session.
+- **Headless Chrome** as a TLS probe:
+  `google-chrome --headless=new --password-store=basic --user-data-dir=$(mktemp -d) --host-resolver-rules="MAP hello.test 127.0.0.1" --dump-dom https://hello.test:8443/`.
+  The verdict is in its log (`Page load failed: net::ERR_CERT_…`). Without
+  `--password-store=basic` it hangs once the desktop keyring is unlocked. Headless Firefox
+  (snap) can't screenshot over SSH; check Firefox in its window.
+- `kiln ca init` over SSH uses the keyring only if it is already unlocked (someone is logged
+  in to the desktop). Otherwise it keeps the key in a `0600` file and says so.
+
 ## Running the spikes
 
 Spikes live in `spikes/` (outside the Cargo workspace). Downloads go to each spike's

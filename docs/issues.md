@@ -66,6 +66,8 @@ commits and PRs.
 | [I-54](#i-54) | coexistence | Before the first `kiln web start`, `kiln link` printed URLs on port 80 although Kiln would pick 8080 | ✅ (found in the user's check) |
 | [I-55](#i-55) | doctor | On Linux, `kiln doctor` called Kiln's own busy port 8080 free | ✅ (found in the user's VM check) |
 | [I-56](#i-56) | process | Shell-quoted substitutions turned `\e` in a Windows path into an escape byte | ✅ (caught before commit) |
+| [I-57](#i-57) | TLS | After the CA changed, Caddy kept serving site certificates from the old intermediate; browsers rejected the site though every store trusted the new root | ✅ (found in the user's VM check) |
+| [I-58](#i-58) | dependencies | Two advisories during P1-04b: `ctutils` 0.4.3, and zbus 5's `zvariant` crates declared unmaintained | ✅ (ctutils 0.4.5; zbus 6) |
 
 ---
 
@@ -653,3 +655,48 @@ commits and PRs.
   bytes (`grep -P '\x1b'`): none left.
 - **Rule:** never pass text containing backslashes through shell-quoted `sed`/`perl`
   replacements; edit such lines with the editor tool.
+
+## P1-04b: Linux CA
+
+<a id="i-57"></a>
+### I-57: After the CA changed, browsers got certificates from the old one ✅
+- **Found:** the user's P1-04b check in the Ubuntu VM. After `rm -rf …/ca && kiln ca init`,
+  `kiln web restart` and `kiln ca trust --system`, `kiln doctor` said Chrome's database,
+  Firefox's profile and the system store all trusted the new root. Yet:
+  - curl reported `unable to get local issuer certificate`;
+  - Chrome reported `NET::ERR_CERT_AUTHORITY_INVALID`;
+  - Firefox reported `SEC_ERROR_BAD_SIGNATURE`.
+- **Cause:** Caddy keeps the site certificates it issued in
+  `storage/certificates/kiln/<site>/` and in memory, **across config reloads and
+  restarts**, until each nears expiry. It went on serving `hello.test`'s certificate from the
+  old intermediate, which chains to the old root.
+  - Both intermediates were named `Kiln Intermediate CA (2026-10-23)`. Firefox matched the
+    leaf to the new intermediate by name, and its signature didn't verify.
+  - On Windows the same happens whenever the CA is replaced.
+- **Fix:**
+  - Caddy's storage records which intermediate its certificates came from
+    (`kiln-web::issued`). `kiln web start` clears Kiln's CA folder there when it changed.
+  - A running server restarts instead of reloading when the CA changed, on site changes and
+    on `kiln web reload`, since a reload keeps the copies in memory.
+  - Intermediates are named with time and root id:
+    `Kiln Intermediate CA (2026-10-23 11:17, root eb9e00f8)`.
+  - `kiln doctor` warns while stale certificates are stored.
+- **Verified in the VM:** reproduced first (rejected). Then trusted after a restart, after
+  replacing the CA while running followed by a site change (Kiln restarts and says why), and
+  after a plain reload with the same CA. The doctor warns while the stale certificates are
+  there, and not after.
+- **Rule:** when Kiln changes something a running server caches, decide explicitly whether a
+  reload is enough.
+
+<a id="i-58"></a>
+### I-58: Two dependency advisories during P1-04b ✅
+- `cargo deny` reported **RUSTSEC-2026-0385** in `ctutils` 0.4.3, through RustCrypto's
+  `digest`: non-constant-time comparisons. Updated to 0.4.5 with `cargo update -p ctutils`.
+- The same day (2026-10-23), **RUSTSEC-2026-0370 to 0372** declared `zvariant`,
+  `zvariant_derive` and `zbus_names` unmaintained: they were merged into `zbus` 6. P1-04b had
+  just added `zbus` 5 for the Secret Service. Ported to `zbus` 6, with client features only
+  and driven by `zbus::block_on`. That is 35 crates instead of about 60.
+- A bare `cargo update` during the port bumped the whole lockfile; it was reset, and only
+  the zbus swap was kept.
+- **Rule:** update single dependencies (`cargo update -p <crate>`), never the whole
+  lockfile as a side effect of other work.

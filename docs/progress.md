@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done; P1-04 part a of 4 done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (13 of 15 tasks done; P1-04 parts a and b of 4 done) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0020 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0021 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -22,7 +22,7 @@
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
-| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. Not yet: CA trust (b), PHP (c), shims (d) |
+| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. Not yet: PHP (c), shims (d) |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -58,7 +58,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-01 | State store (SQLite) + journal migration | **done** 2026-10-21 | see below |
 | P1-02 | `kiln-helper` (Windows) | **done** 2026-10-21 | [ADR 0009](adr/0009-windows-privileged-helper.md); see below. Open: [I-41](issues.md#i-41); [I-42](issues.md#i-42) verified |
 | P1-03 | `HostsBlock` provider (Windows) | **done** 2026-10-21 | see below |
-| P1-04 | Linux (parts a–d) | **a done** 2026-10-22 | [ADR 0020](adr/0020-linux-dns-and-privilege.md); see below. a: hosts DNS via pkexec, undo, Caddy, port owners. Next: b CA, c PHP-FPM, d shims |
+| P1-04 | Linux (parts a–d) | **a done** 2026-10-22, **b done** 2026-10-23 | [ADR 0020](adr/0020-linux-dns-and-privilege.md), [ADR 0021](adr/0021-linux-ca-key-and-trust.md); see below. a: hosts DNS via pkexec, undo, Caddy, port owners. b: CA key in the keyring, trust in browsers and the system store. Next: c PHP-FPM, d shims |
 | P1-05 | Local CA + trust stores | **done** 2026-10-21 (Windows) | see below; Linux key encryption + NSS with P1-04 |
 | P1-06 | Caddy integration | **done** 2026-10-21 (Windows) | [ADR 0011](adr/0011-caddy-integration.md); see below. HTTP by default, HTTPS per site |
 | P1-07 | Caddy admin API lockdown + live reload | **done** 2026-10-21 | [ADR 0012](adr/0012-caddy-admin-channel.md); see below. Admin on a per-user Unix socket, live reload; verified from a normal terminal |
@@ -745,6 +745,58 @@ this is part a. Reference system: the new **Ubuntu 24.04 Desktop** Hyper-V VM
 
 **Checked by the user in the VM's own Terminal:** see the log entry for 2026-10-22.
 
+<a id="p1-04b"></a>
+### P1-04 part b delivered (2026-10-23)
+
+Design: [ADR 0021](adr/0021-linux-ca-key-and-trust.md). Measured first in the Ubuntu VM, with
+Kiln's root and an HTTPS site:
+- the system store (`update-ca-certificates`) makes curl trust the site, but **not Chrome**;
+- the user NSS database `~/.pki/nssdb` makes Chrome trust it, and removing the root
+  untrusts it again;
+- the Firefox snap keeps its own NSS database per profile.
+
+- **Root key in the desktop keyring:** a Secret Service item
+  (`org.freedesktop.secrets`, over `zbus` 6), with only a reference in
+  `root.key.protected`.
+  - No usable keyring (a server, or SSH to a desktop nobody is logged in to): a `0600` file
+    as before, and `kiln ca init` / `kiln ca info` / `kiln doctor` say how the stored key is
+    kept.
+  - A locked keyring with a desktop shows the desktop's unlock dialog. Without a desktop,
+    Kiln explains at once instead of waiting.
+- **`kiln ca trust`** (no password) adds the root to every browser NSS database with
+  `certutil`: `~/.pki/nssdb`, created as Chrome would if a Chromium browser is installed;
+  the Chromium snap; Firefox deb, snap and Flatpak profiles.
+  - One journaled `trust.ca.nss` operation per database. Undo removes only what Kiln added,
+    and a database Kiln created goes again if nothing else moved in.
+  - Without `certutil`, Kiln says what to install per distribution.
+- **`kiln ca trust --system`** adds `trust.ca.system` through the helper (protocol v3:
+  `TrustSystemCa` / `UntrustSystemCa`). The helper accepts only a CA with a Kiln subject
+  whose **critical name constraints permit one non-public TLD**
+  (`kiln_pki::kiln_root_tld`). It writes the certificate from the parsed DER into the
+  distribution's anchor folder and runs its update tool, with a cleared environment.
+  Supported: Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE.
+- **`kiln doctor`** (Linux) reports each browser database's trust, `certutil`, the system
+  store, where the key is kept, and stale site certificates ([I-57](issues.md#i-57)).
+- **`kiln uninstall`** also removes the keyring item, and its plan says so.
+- **Fixed on the way:** [I-57](issues.md#i-57), site certificates from an old CA (found in
+  the user's check). [I-58](issues.md#i-58), two dependency advisories.
+- **Tests:** 13 new on Windows (243 total) and 15 in the VM (213 total), all passing. They
+  cover:
+  - the NSS operation against a fake `certutil` (undo, created databases, already trusted);
+  - finding the databases;
+  - the system operation (distribution detection, undo);
+  - the helper's certificate check (impostors refused, no paths through the fingerprint);
+  - the constrained-root check;
+  - stale-certificate clearing;
+  - the doctor rules.
+
+  The real keyring test runs by hand in the VM.
+
+**Checked over SSH in the VM:** `kiln ca trust` added the root to Chrome's database and the
+Firefox snap profile (#4, #5, no password). Headless Chrome then loaded the site, and after
+two `kiln undo`s it rejected it again (`ERR_CERT_AUTHORITY_INVALID`). The I-57 reproduction
+and fix are described in the issue.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -763,7 +815,8 @@ this is part a. Reference system: the new **Ubuntu 24.04 Desktop** Hyper-V VM
 | P1-12 `kiln doctor` from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user) |
 | P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
 | P1-14 coexistence check from a normal terminal (Herd running) | [I-45](issues.md#i-45) | done 2026-10-22 (user); found I-54, fixed |
-| P1-04 parts b (CA: libsecret, system store, NSS), c (PHP runtimes, PHP-FPM pools), d (shims) | [ADR 0020](adr/0020-linux-dns-and-privilege.md) | next |
+| P1-04 parts c (PHP runtimes, PHP-FPM pools), d (shims) | [ADR 0020](adr/0020-linux-dns-and-privilege.md) | next |
+| P1-04b browser recheck after the I-57 fix (Firefox and Chrome windows in the VM) | [I-57](issues.md#i-57) | waiting for the user |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -811,6 +864,8 @@ this is part a. Reference system: the new **Ubuntu 24.04 Desktop** Hyper-V VM
 | 2026-10-22 | **P1-14 checked by the user from a normal PowerShell, with Herd running:** before any Kiln state, `doctor` showed only the missing database as a problem, plus "Other tools": Herd installed, its nginx (12 processes) on 127.0.0.1:80/:443, and `php` being Herd's `php.bat`. `web install` re-downloaded Caddy 2.11.7 (SHA-512 verified). `link herd-studio` printed the "also in the hosts file for Laravel Herd" note. `web start` said why and used 8080/8443. `doctor` then showed Kiln's server on 8080 and one warning for `herd-studio.test` with `http://herd-studio.test:8080/`. `web start --http-port 80` was refused, naming Herd and suggesting 8080 or `--auto-ports`. The next plain `web start` still used 8080. Herd was untouched. Found [I-54](issues.md#i-54): URLs printed by `link` before the first start said port 80. Fixed with `planned_port`; 223 tests. |
 | 2026-10-22 | **P1-04 part a done** (`a80098e`, `16046fe`, `6eb9ebd`, and the `/proc` fix): ADR 0020. P1-04 split into parts a–d. Built the Ubuntu 24.04 Desktop test VM from Canonical's Hyper-V image (SHA-256 verified). Linux: `pkexec kiln-helper --stdio` with the shared protocol, `/etc/hosts` writes keeping xattrs, `hosts sync`/`undo`/`uninstall`, pinned Caddy `.tar.gz` releases, doctor resolver checks, port owners from `/proc`. Found I-55 (from the user's check) and I-56. 230 tests on Windows, 198 in the VM, CI green. |
 | 2026-10-22 | **P1-04a checked by the user in the VM's own Terminal:** `kiln hosts sync` showed the plan, **one polkit password dialog**, recorded #2, and reloaded the server. `getent hosts hello.test` gave 127.0.0.1, and **Firefox in the VM loaded `http://hello.test:8080/`**. `kiln undo` used one more dialog, and the name was gone afterwards. `kiln doctor` showed nsswitch OK and systemd-resolved. Cancelling the dialog on a second `hosts sync` gave "approval was declined; nothing was changed". The doctor called Kiln's own port 8080 free: [I-55](issues.md#i-55), fixed and rechecked in the VM. |
+| 2026-10-23 | **P1-04 part b done** (`7510533`, `1834c90`, `c2a30e2`, `c9720fe`): ADR 0021. Measured in the VM which stores Chrome, Firefox and curl read. Root key in the desktop keyring (Secret Service via zbus 6). `kiln ca trust` for every browser NSS database (`certutil`), `--system` for the system store through the helper (protocol v3, constrained-root check inside the helper). Doctor, uninstall and history cover it all. Found I-57 (from the user's check) and I-58. 243 tests on Windows, 213 in the VM, CI green. |
+| 2026-10-23 | **P1-04b checked by the user in the VM's desktop:** `kiln ca init` put the root key **in the desktop keyring**. `hosts sync` (#6) and `ca trust --system` (#7–#9, Chrome, Firefox and the system store) each took **one polkit dialog**, and the doctor showed all three trusted. But curl, Chrome and Firefox rejected `https://hello.test:8443/`: [I-57](issues.md#i-57), stale site certificates from the replaced CA. Fixed and verified in the VM. `kiln uninstall` undid #9 → #6 with one dialog, **removed the key from the keyring**, and deleted both Kiln folders. |
 
 ## How to update this file
 
