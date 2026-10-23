@@ -816,7 +816,7 @@ and fix are described in the issue.
 | P1-13 history/undo/uninstall check from a normal terminal | [I-45](issues.md#i-45) | done 2026-10-22 (user), including a real uninstall |
 | P1-14 coexistence check from a normal terminal (Herd running) | [I-45](issues.md#i-45) | done 2026-10-22 (user); found I-54, fixed |
 | P1-04 parts c (PHP runtimes, PHP-FPM pools), d (shims) | [ADR 0020](adr/0020-linux-dns-and-privilege.md) | next |
-| P1-04b browser recheck after the I-57 fix (Firefox and Chrome windows in the VM) | [I-57](issues.md#i-57) | waiting for the user |
+| P1-04b browser recheck after the I-57 fix (Firefox and Chrome windows in the VM) | [I-57](issues.md#i-57) | done 2026-10-23 (user) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
@@ -866,6 +866,7 @@ and fix are described in the issue.
 | 2026-10-22 | **P1-04a checked by the user in the VM's own Terminal:** `kiln hosts sync` showed the plan, **one polkit password dialog**, recorded #2, and reloaded the server. `getent hosts hello.test` gave 127.0.0.1, and **Firefox in the VM loaded `http://hello.test:8080/`**. `kiln undo` used one more dialog, and the name was gone afterwards. `kiln doctor` showed nsswitch OK and systemd-resolved. Cancelling the dialog on a second `hosts sync` gave "approval was declined; nothing was changed". The doctor called Kiln's own port 8080 free: [I-55](issues.md#i-55), fixed and rechecked in the VM. |
 | 2026-10-23 | **P1-04 part b done** (`7510533`, `1834c90`, `c2a30e2`, `c9720fe`): ADR 0021. Measured in the VM which stores Chrome, Firefox and curl read. Root key in the desktop keyring (Secret Service via zbus 6). `kiln ca trust` for every browser NSS database (`certutil`), `--system` for the system store through the helper (protocol v3, constrained-root check inside the helper). Doctor, uninstall and history cover it all. Found I-57 (from the user's check) and I-58. 243 tests on Windows, 213 in the VM, CI green. |
 | 2026-10-23 | **P1-04b checked by the user in the VM's desktop:** `kiln ca init` put the root key **in the desktop keyring**. `hosts sync` (#6) and `ca trust --system` (#7–#9, Chrome, Firefox and the system store) each took **one polkit dialog**, and the doctor showed all three trusted. But curl, Chrome and Firefox rejected `https://hello.test:8443/`: [I-57](issues.md#i-57), stale site certificates from the replaced CA. Fixed and verified in the VM. `kiln uninstall` undid #9 → #6 with one dialog, **removed the key from the keyring**, and deleted both Kiln folders. |
+| 2026-10-23 | **P1-04b rechecked by the user after the I-57 fix**, in the VM's desktop. `kiln ca info` showed the root key in the desktop keyring. `hosts sync` (#1) and `ca trust --system` (#2–#4) each took one polkit dialog. **curl** printed the page. The doctor showed Chrome's database, the Firefox snap profile and the system store all trusting the root. **Firefox** loaded `https://hello.test:8443/` with no warning, and **Chrome** showed "Connection is secure". |
 
 ## How to update this file
 
