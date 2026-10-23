@@ -783,10 +783,12 @@ dependencies = [
 name = "kiln-php"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "kiln-fetch",
  "kiln-sys",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror",
  "zip",

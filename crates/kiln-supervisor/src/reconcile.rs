@@ -63,8 +63,10 @@ pub enum Event {
 /// Everything that determines how a worker is started; a change means a restart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Identity {
-    php_cgi: std::path::PathBuf,
+    kind: crate::pools::PoolKind,
+    program: std::path::PathBuf,
     ini: std::path::PathBuf,
+    fpm_config: Option<std::path::PathBuf>,
     max_requests: u32,
 }
 
@@ -204,8 +206,10 @@ impl<L: Launcher> Supervisor<L> {
 
 fn identity(pool: &PoolSpec, worker: WorkerSpec) -> Identity {
     Identity {
-        php_cgi: pool.php_cgi.clone(),
+        kind: pool.kind,
+        program: pool.program.clone(),
         ini: pool.ini.clone(),
+        fpm_config: pool.fpm_config.clone(),
         max_requests: worker.max_requests,
     }
 }

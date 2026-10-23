@@ -73,23 +73,64 @@ pub fn needs(store: &StateStore) -> Result<Needs, String> {
     Ok(needs)
 }
 
-/// A fresh pool for `php` on free ports.
+/// A fresh pool for `php` on free ports: php-cgi workers on Windows, a PHP-FPM master
+/// elsewhere ([ADR 0022] §4–5).
+///
+/// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
 pub fn pool_for(php: &PhpRecord, workers: usize) -> Result<PoolSpec, String> {
-    let ports = free_ports(workers).map_err(|e| format!("cannot find free ports: {e}"))?;
-    Ok(PoolSpec::new(
+    if cfg!(windows) {
+        let ports = free_ports(workers).map_err(|e| format!("cannot find free ports: {e}"))?;
+        return Ok(PoolSpec::new(
+            php.version.clone(),
+            php.dir.join(kiln_php::PHP_CGI_EXE),
+            php.dir.join("php.ini"),
+            &ports,
+            DEFAULT_MAX_REQUESTS,
+        ));
+    }
+    let port = free_ports(1)
+        .map_err(|e| format!("cannot find a free port: {e}"))?
+        .into_iter()
+        .next()
+        .ok_or("cannot find a free port")?;
+    let supervisor = supervisor()?;
+    let config = fpm_config_path(&php.version, workers)?;
+    let text = kiln_supervisor::pools::fpm_config(
+        port,
+        workers,
+        DEFAULT_MAX_REQUESTS,
+        &supervisor.errors_path(),
+    );
+    if let Some(dir) = config.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(&config, text).map_err(|e| format!("cannot write {}: {e}", config.display()))?;
+    Ok(PoolSpec::fpm(
         php.version.clone(),
-        php.dir.join(kiln_php::PHP_CGI_EXE),
+        php.dir.join(kiln_php::linux::PHP_FPM_BIN),
         php.dir.join("php.ini"),
-        &ports,
+        config,
+        port,
         DEFAULT_MAX_REQUESTS,
     ))
+}
+
+/// Where the PHP-FPM config of `version` with `children` children lives. The count is in the
+/// name, so a changed `kiln php workers` makes a new pool rather than editing a running one.
+fn fpm_config_path(version: &str, children: usize) -> Result<std::path::PathBuf, String> {
+    let local =
+        kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
+    Ok(local
+        .join("supervisor")
+        .join(format!("php-fpm-{version}-x{children}.conf")))
 }
 
 /// The pools to run, or `None` when there's no PHP (sites stay static). A pool already in
 /// `running` with the right build and worker count is kept as is (same ports), so its sites
 /// aren't touched ([ADR 0016] §7).
 pub fn plan(store: &StateStore, running: Option<&Pools>) -> Result<Option<Pools>, String> {
-    if !cfg!(windows) {
+    if !cfg!(any(windows, target_os = "linux")) {
         return Ok(None);
     }
     let needs = needs(store)?;
@@ -102,8 +143,13 @@ pub fn plan(store: &StateStore, running: Option<&Pools>) -> Result<Option<Pools>
         let reusable = running.and_then(|r| {
             r.pools.iter().find(|p| {
                 p.id == php.version
-                    && p.php_cgi == php.dir.join(kiln_php::PHP_CGI_EXE)
-                    && p.workers.len() == workers
+                    && if cfg!(windows) {
+                        p.program == php.dir.join(kiln_php::PHP_CGI_EXE)
+                            && p.workers.len() == workers
+                    } else {
+                        p.program == php.dir.join(kiln_php::linux::PHP_FPM_BIN)
+                            && p.fpm_config == fpm_config_path(&php.version, workers).ok()
+                    }
             })
         });
         pools.push(match reusable {

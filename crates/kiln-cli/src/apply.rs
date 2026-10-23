@@ -40,9 +40,10 @@ pub fn confirm(question: &str) -> bool {
 }
 
 /// Journaled system changes through the privileged helper: UAC on Windows, polkit or sudo on
-/// Linux ([ADR 0020]). CA trust and shims are Windows-only until P1-04 parts b and d.
+/// Linux ([ADR 0020], [ADR 0021]). The shims are Windows-only until P1-04 part d.
 ///
 /// [ADR 0020]: ../../../docs/adr/0020-linux-dns-and-privilege.md
+/// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
 mod system {
     use std::path::PathBuf;
     use std::rc::Rc;

@@ -12,6 +12,8 @@ kiln-fetch.workspace = true
 kiln-sys.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+flate2.workspace = true
+tar.workspace = true
 zip.workspace = true
 
 [dev-dependencies]

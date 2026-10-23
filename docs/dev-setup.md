@@ -119,6 +119,12 @@ More VM notes:
   (snap) can't screenshot over SSH; check Firefox in its window.
 - `kiln ca init` over SSH uses the keyring only if it is already unlocked (someone is logged
   in to the desktop). Otherwise it keeps the key in a `0600` file and says so.
+- **Counting or killing processes over SSH:** `pgrep -f <pattern>` / `pkill -f` also match
+  the remote shell whose command line contains the pattern, which kills your own SSH
+  session. Match by process name instead (`ps -C php-fpm`, `ps -C kiln-supervisor -o pid=`).
+- **Long downloads in the VM:** run them with `setsid nohup … &` so a dropped SSH session
+  doesn't stop them, resume with `curl -C -`, and compare sizes with the server's
+  `Content-Length` before hashing. `dl.static-php.dev` is slow and drops connections.
 
 ## Running the spikes
 

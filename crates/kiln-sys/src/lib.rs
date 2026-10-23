@@ -9,6 +9,9 @@ mod replace;
 pub mod win;
 
 pub use replace::{rename_replace, replace_file, write_replacing};
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+pub mod linux;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub mod wincrypt;

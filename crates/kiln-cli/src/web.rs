@@ -704,20 +704,24 @@ fn print_php(pools: Option<&Pools>) {
         Some(pools) => {
             for pool in &pools.pools {
                 let ports: Vec<String> = pool.workers.iter().map(|w| w.port.to_string()).collect();
-                println!(
-                    "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
-                    pool.id,
-                    pool.workers.len(),
-                    ports.join(", ")
-                );
+                match pool.kind {
+                    kiln_supervisor::pools::PoolKind::Cgi => println!(
+                        "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
+                        pool.id,
+                        pool.workers.len(),
+                        ports.join(", ")
+                    ),
+                    kiln_supervisor::pools::PoolKind::Fpm => println!(
+                        "PHP {}: PHP-FPM on 127.0.0.1:{}.",
+                        pool.id,
+                        ports.join(", ")
+                    ),
+                }
             }
         }
-        None if cfg!(windows) => println!(
+        None => println!(
             "No PHP installed, so sites are served as static files. Add PHP with `kiln php install 8.4`."
         ),
-        None => {
-            println!("PHP for sites comes to this platform with P1-04; sites are static for now.");
-        }
     }
 }
 

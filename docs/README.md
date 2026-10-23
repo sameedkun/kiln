@@ -37,6 +37,7 @@ working name). Start here.
 | [0019](adr/0019-coexistence.md) | Coexisting with Herd, XAMPP, Laragon, WampServer: read-only detection, port owners named, shared `.test` names warned, free ports picked automatically (80→8080…, 443→8443…), chosen ports never moved | accepted, implemented (P1-14) |
 | [0020](adr/0020-linux-dns-and-privilege.md) | Linux: `.test` names in `/etc/hosts` (nsswitch `files` first; systemd-resolved reads it too); `pkexec kiln-helper --stdio` per batch (sudo fallback), key on stdin; keeps mode/owner/SELinux xattrs; Caddy `.tar.gz` pins; port owners from `/proc`; P1-04 split into parts a–d | accepted, part a implemented |
 | [0021](adr/0021-linux-ca-key-and-trust.md) | Linux CA: root key in the desktop's Secret Service (zbus 6; `0600` file without a usable keyring); `kiln ca trust` adds it to every browser NSS database via `certutil` (Chrome `~/.pki/nssdb`, Firefox deb/snap/Flatpak profiles), `--system` to the distribution's anchor folder through the helper (protocol v3); measured: Chrome ignores the system store | accepted, implemented (P1-04 part b) |
+| [0022](adr/0022-linux-php-runtimes-and-fpm.md) | Linux PHP: static-php-cli `common` builds (8.2–8.5, x86-64) with SHA-256 pinned in Kiln (the source publishes none; two agreeing downloads per pin), or the distribution's PHP linked in with `--system`; one PHP-FPM master per version under the supervisor (SIGTERM stop, `PR_SET_PDEATHSIG`) | accepted, implemented (P1-04 part c) |
 
 ## Conventions
 

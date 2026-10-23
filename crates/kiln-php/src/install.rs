@@ -13,8 +13,12 @@ use kiln_fetch::{FetchError, Fetcher};
 use crate::index::PhpRelease;
 use crate::ini;
 
-pub const PHP_EXE: &str = "php.exe";
+/// The PHP CLI in an install: `php.exe` on Windows, `php` on Linux ([`crate::linux::PHP_BIN`]).
+pub const PHP_EXE: &str = if cfg!(windows) { "php.exe" } else { "php" };
 pub const PHP_CGI_EXE: &str = "php-cgi.exe";
+/// The CLI in a windows.php.net build, whatever platform this code runs on (its tests run on
+/// Linux too).
+const WINDOWS_PHP_EXE: &str = "php.exe";
 /// Upper bound for one extracted build (a real one is about 120 MB).
 pub const MAX_EXTRACTED: u64 = 1024 * 1024 * 1024;
 /// Microsoft's permanent link to the Visual C++ 2015–2022 x64 runtime.
@@ -78,7 +82,7 @@ pub(crate) fn install_with(
 ) -> Result<Installed, InstallError> {
     let dir = php_root.join(&release.version);
     let marker = dir.join(INCOMPLETE_MARKER);
-    if is_installed(&dir) {
+    if windows_build_installed(&dir) {
         return Ok(Installed {
             version: release.version.clone(),
             dir,
@@ -97,7 +101,7 @@ pub(crate) fn install_with(
         .map_err(io_err(format!("cannot write {}", marker.display())))?;
     let result = (|| {
         extract(&archive, &dir)?;
-        for required in [PHP_EXE, PHP_CGI_EXE, "php.ini-development"] {
+        for required in [WINDOWS_PHP_EXE, PHP_CGI_EXE, "php.ini-development"] {
             if !dir.join(required).is_file() {
                 return Err(InstallError::Archive {
                     archive: archive.clone(),
@@ -112,7 +116,7 @@ pub(crate) fn install_with(
             ext_dir.join(format!("php_{name}.dll")).is_file()
         });
         fs::write(dir.join("php.ini"), text).map_err(io_err("cannot write php.ini"))?;
-        check(&dir.join(PHP_EXE), &release.version)?;
+        check(&dir.join(WINDOWS_PHP_EXE), &release.version)?;
         fs::remove_file(&marker).map_err(io_err(format!("cannot remove {}", marker.display())))?;
         Ok(extensions)
     })();
@@ -133,10 +137,21 @@ pub(crate) fn install_with(
 /// Present only while an install is in progress; a folder holding it isn't a usable PHP.
 pub const INCOMPLETE_MARKER: &str = ".kiln-install-incomplete";
 
-/// Whether `dir` holds a completed install.
+/// Whether `dir` holds a completed install of this platform (on Linux, see
+/// [`crate::linux::is_installed`]).
 #[must_use]
 pub fn is_installed(dir: &Path) -> bool {
-    dir.join(PHP_EXE).is_file() && !dir.join(INCOMPLETE_MARKER).exists()
+    if cfg!(windows) {
+        windows_build_installed(dir)
+    } else {
+        crate::linux::is_installed(dir)
+    }
+}
+
+/// Whether `dir` holds a completed windows.php.net build (this module's installs, on any
+/// platform its tests run on).
+fn windows_build_installed(dir: &Path) -> bool {
+    dir.join(WINDOWS_PHP_EXE).is_file() && !dir.join(INCOMPLETE_MARKER).exists()
 }
 
 fn remove_dir_if_present(dir: &Path) -> Result<(), InstallError> {
@@ -308,7 +323,7 @@ mod tests {
             !installed.dir.join(INCOMPLETE_MARKER).exists(),
             "marker removed"
         );
-        assert!(is_installed(&installed.dir));
+        assert!(windows_build_installed(&installed.dir));
 
         let again = install_with(&fetcher, &release, &root, &mut |_, _| {}, &ok_check).unwrap();
         assert!(again.already);
@@ -351,13 +366,13 @@ mod tests {
         // What a crash mid-install leaves: files plus the marker.
         let left = root.join("8.4.27");
         fs::create_dir_all(&left).unwrap();
-        fs::write(left.join(PHP_EXE), b"half").unwrap();
+        fs::write(left.join(WINDOWS_PHP_EXE), b"half").unwrap();
         fs::write(left.join(INCOMPLETE_MARKER), b"").unwrap();
-        assert!(!is_installed(&left));
+        assert!(!windows_build_installed(&left));
         let installed = install_with(&fetcher, &release, &root, &mut |_, _| {}, &ok_check).unwrap();
         assert!(!installed.already, "redone, not trusted");
-        assert_eq!(fs::read(left.join(PHP_EXE)).unwrap(), b"MZ php");
-        assert!(is_installed(&left));
+        assert_eq!(fs::read(left.join(WINDOWS_PHP_EXE)).unwrap(), b"MZ php");
+        assert!(windows_build_installed(&left));
     }
 
     #[test]

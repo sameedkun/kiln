@@ -236,11 +236,12 @@ mod tests {
     fn pins_win_and_a_missing_pinned_version_falls_back_to_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = StateStore::open_in_memory().unwrap();
-        // "Installed" builds: folders with php.exe.
+        // "Installed" builds: folders with this platform's binaries.
         for version in ["8.1.34", "8.4.27"] {
             let php = dir.path().join(version);
             std::fs::create_dir_all(&php).unwrap();
-            std::fs::write(php.join("php.exe"), "").unwrap();
+            std::fs::write(php.join(kiln_php::PHP_EXE), "").unwrap();
+            std::fs::write(php.join(kiln_php::linux::PHP_FPM_BIN), "").unwrap();
             store
                 .put_php(&PhpRecord {
                     version: version.into(),

@@ -59,6 +59,9 @@ fn releases(fetcher: &Fetcher) -> Result<Vec<PhpRelease>, String> {
 }
 
 pub fn available() -> Result<(), String> {
+    if !cfg!(windows) {
+        return available_linux();
+    }
     let fetcher = fetcher()?;
     let releases = releases(&fetcher)?;
     let installed: Vec<String> = open_store()?
@@ -83,9 +86,18 @@ pub fn available() -> Result<(), String> {
     Ok(())
 }
 
-pub fn install(spec: &str) -> Result<(), String> {
+pub fn install(spec: &str, system: bool) -> Result<(), String> {
     if !cfg!(windows) {
-        return Err("PHP runtimes are only available on Windows so far (Linux: P1-04)".into());
+        return if system {
+            install_system(spec)
+        } else {
+            install_static(spec)
+        };
+    }
+    if system {
+        return Err(
+            "--system is for Linux; on Windows Kiln installs PHP from windows.php.net".into(),
+        );
     }
     let fetcher = fetcher()?;
     let releases = releases(&fetcher)?;
@@ -129,6 +141,177 @@ pub fn install(spec: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Linux: the pinned static builds for this CPU, and the distribution's PHP found here.
+fn available_linux() -> Result<(), String> {
+    use kiln_php::linux;
+    let arch = std::env::consts::ARCH;
+    let installed: Vec<String> = open_store()?
+        .php_versions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|r| r.version)
+        .collect();
+    let mark = |version: &str| {
+        if installed.iter().any(|v| v == version) {
+            "  (installed)"
+        } else {
+            ""
+        }
+    };
+    println!("Downloadable (static-php-cli, {arch}, SHA-256 pinned in Kiln):");
+    let builds: Vec<_> = linux::STATIC_BUILDS
+        .iter()
+        .filter(|b| b.arch == arch)
+        .collect();
+    if builds.is_empty() {
+        println!("  (none for {arch} yet)");
+    }
+    for build in builds.iter().rev() {
+        println!(
+            "  {:<6} {:<8}{}",
+            build.minor(),
+            build.version,
+            mark(build.version)
+        );
+    }
+    println!("From your distribution (`kiln php install <version> --system`):");
+    let system = linux::find_system(std::path::Path::new("/"), None);
+    if system.is_empty() {
+        println!("  (none with PHP-FPM; e.g. `sudo apt install php8.3-fpm php8.3-cli`)");
+    }
+    for php in system {
+        let version = linux::version_of(&php.php).unwrap_or_else(|_| "?".into());
+        println!(
+            "  {:<8} {} + {}{}",
+            version,
+            php.php.display(),
+            php.fpm.display(),
+            mark(&version)
+        );
+    }
+    Ok(())
+}
+
+/// The first two parts of `8.3` or `8.3.6`.
+#[cfg(unix)]
+fn minor_of(spec: &str) -> Result<String, String> {
+    let parts: Vec<&str> = spec.trim().split('.').collect();
+    if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.parse::<u32>().is_err()) {
+        return Err(format!("{spec:?} isn't a PHP version (expected e.g. 8.3)"));
+    }
+    Ok(format!("{}.{}", parts[0], parts[1]))
+}
+
+/// `kiln php install 8.4` on Linux ([ADR 0022] §1): a static-php-cli build whose SHA-256 is
+/// pinned in Kiln.
+///
+/// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
+fn install_static(spec: &str) -> Result<(), String> {
+    use kiln_php::linux;
+    let build = linux::resolve_static(spec, std::env::consts::ARCH).map_err(|e| e.to_string())?;
+    let fetcher = fetcher()?;
+    let mut store = open_store()?;
+    let php_root = local_dir()?.join("php");
+    println!(
+        "PHP {} (static-php-cli, {}), SHA-256 pinned in Kiln",
+        build.version,
+        std::env::consts::ARCH
+    );
+    let installed = linux::install_static(
+        &fetcher,
+        build,
+        &php_root,
+        &mut progress_printer("Downloading"),
+        &linux::check_runs,
+    )
+    .map_err(|e| e.to_string())?;
+    store
+        .put_php(&PhpRecord {
+            version: installed.version.clone(),
+            dir: installed.dir.clone(),
+            archive: build.cli.archive.to_owned(),
+            sha256: build.cli.sha256.to_owned(),
+        })
+        .map_err(|e| e.to_string())?;
+    if installed.already {
+        println!(
+            "PHP {} is already installed in {}.",
+            installed.version,
+            installed.dir.display()
+        );
+    } else {
+        println!(
+            "Verified and installed PHP {} (php and php-fpm) in {}.",
+            installed.version,
+            installed.dir.display()
+        );
+        println!(
+            "Extensions are built in (`{} -m` lists them). intl, opcache and sodium aren't; for those use your distribution's PHP: `kiln php install {} --system`.",
+            installed.dir.join(linux::PHP_BIN).display(),
+            build.minor()
+        );
+    }
+    Ok(())
+}
+
+/// `kiln php install 8.3 --system` ([ADR 0022] §2): links the distribution's PHP into Kiln's
+/// folder. Nothing is downloaded and nothing outside Kiln's folder changes.
+///
+/// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
+#[cfg(unix)]
+fn install_system(spec: &str) -> Result<(), String> {
+    use kiln_php::linux;
+    let minor = minor_of(spec)?;
+    let candidates = linux::find_system(std::path::Path::new("/"), None);
+    let found = candidates.iter().find_map(|system| {
+        let version = linux::version_of(&system.php).ok()?;
+        version
+            .starts_with(&format!("{minor}."))
+            .then(|| (system.clone(), version))
+    });
+    let Some((system, version)) = found else {
+        let have: Vec<String> = candidates
+            .iter()
+            .filter_map(|s| linux::version_of(&s.php).ok())
+            .collect();
+        return Err(format!(
+            "no PHP {minor} with PHP-FPM from your distribution{}. Install it first, e.g. `sudo apt install php{minor}-fpm php{minor}-cli` (Debian/Ubuntu) or `sudo dnf install php-fpm php-cli` (Fedora), or let Kiln download one: `kiln php install {minor}`",
+            if have.is_empty() {
+                String::new()
+            } else {
+                format!(" (found: {})", have.join(", "))
+            }
+        ));
+    };
+    let mut store = open_store()?;
+    let php_root = local_dir()?.join("php");
+    let installed =
+        linux::install_system(&system, &version, &php_root).map_err(|e| e.to_string())?;
+    store
+        .put_php(&PhpRecord {
+            version: installed.version.clone(),
+            dir: installed.dir.clone(),
+            archive: linux::SYSTEM_ARCHIVE.to_owned(),
+            sha256: String::new(),
+        })
+        .map_err(|e| e.to_string())?;
+    println!(
+        "Using your distribution's PHP {version}: {} and {}, linked into {}.",
+        system.php.display(),
+        system.fpm.display(),
+        installed.dir.display()
+    );
+    println!(
+        "Kiln's php.ini there sets development defaults; extensions come from your distribution's packages."
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_system(_spec: &str) -> Result<(), String> {
+    Err("--system is for Linux".into())
+}
+
 pub fn list() -> Result<(), String> {
     let records = open_store()?.php_versions().map_err(|e| e.to_string())?;
     if records.is_empty() {
@@ -141,7 +324,16 @@ pub fn list() -> Result<(), String> {
         } else {
             "  (missing on disk; reinstall)"
         };
-        println!("{:<8} {}{state}", record.version, record.dir.display());
+        let origin = if record.archive == kiln_php::linux::SYSTEM_ARCHIVE {
+            "  (your distribution's)"
+        } else {
+            ""
+        };
+        println!(
+            "{:<8} {}{origin}{state}",
+            record.version,
+            record.dir.display()
+        );
     }
     Ok(())
 }

@@ -165,14 +165,20 @@ enum PhpAction {
     /// List the PHP versions that can be installed (latest patch of each).
     Available,
     /// Download, verify and install a PHP version, e.g. 8.4 (or its exact latest patch).
-    Install { version: String },
+    Install {
+        version: String,
+        /// Linux: use the PHP your distribution installed (php8.3 and php-fpm8.3) instead of
+        /// downloading one.
+        #[arg(long)]
+        system: bool,
+    },
     /// List the PHP versions Kiln has installed.
     List,
     /// Delete an installed PHP version.
     Remove { version: String },
     /// Choose the PHP version that serves sites (applied live if the server runs).
     Default { version: String },
-    /// Set how many php-cgi workers serve sites (1–32, default 4; applied live).
+    /// Set how many PHP workers serve sites per version (1–32, default 4; applied live).
     Workers { count: usize },
 }
 
@@ -421,7 +427,7 @@ fn main() -> ExitCode {
         } => apply::shims_install(yes),
         Command::Php { action } => match action {
             PhpAction::Available => php::available(),
-            PhpAction::Install { version } => php::install(&version),
+            PhpAction::Install { version, system } => php::install(&version, system),
             PhpAction::List => php::list(),
             PhpAction::Remove { version } => php::remove(&version),
             PhpAction::Default { version } => php::set_default(&version),
