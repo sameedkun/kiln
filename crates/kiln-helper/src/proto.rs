@@ -12,10 +12,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 
 /// Protocol label mixed into every MAC.
-pub const PROTOCOL: &str = "kiln-helper/2";
+pub const PROTOCOL: &str = "kiln-helper/3";
 /// Version reported by `Ping`; client and helper must match exactly.
 /// v2 (P1-03): `HostsSetBlock.remove_file_if_empty`, `HostsWritten.deleted`.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3 (P1-04b, ADR 0021): `TrustSystemCa`, `UntrustSystemCa` (Linux).
+pub const PROTOCOL_VERSION: u32 = 3;
 /// Largest accepted frame, in bytes.
 pub const MAX_FRAME: usize = 1 << 20;
 /// Largest accepted number of hosts entries in one request.
@@ -39,6 +40,16 @@ pub enum Request {
         /// with any other content is never deleted.
         #[serde(default)]
         remove_file_if_empty: bool,
+    },
+    /// Add a Kiln root (PEM) to the Linux system store. The helper accepts only a CA whose
+    /// critical name constraints permit one development TLD (ADR 0021 §7).
+    TrustSystemCa {
+        pem: String,
+    },
+    /// Remove the root with this SHA-256 (64 hex digits) from the system store, if Kiln's
+    /// file for it is there.
+    UntrustSystemCa {
+        sha256: String,
     },
     Shutdown,
 }
@@ -66,6 +77,12 @@ pub enum Response {
         unchanged: bool,
         bytes_before: u64,
         bytes_after: u64,
+    },
+    SystemTrustChanged {
+        /// The anchor file written or removed.
+        file: String,
+        /// Whether anything changed (false: already as requested).
+        changed: bool,
     },
     Bye,
     Error {

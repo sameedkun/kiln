@@ -12,6 +12,7 @@ use kiln_core::Tld;
 use kiln_ops::OpError;
 use kiln_platform::DnsEntry;
 use kiln_platform::hosts_op::PrivilegedHosts;
+use kiln_platform::trust_system::PrivilegedTrust;
 
 #[cfg(windows)]
 type Process = kiln_sys::win::ElevatedProcess;
@@ -108,13 +109,13 @@ impl HelperSession {
     }
 }
 
-impl PrivilegedHosts for HelperSession {
-    fn set_block(
+impl HelperSession {
+    /// Runs `request` on the session's client, launching the helper first if this is the
+    /// batch's first privileged write.
+    fn with_client<T>(
         &self,
-        tld: &Tld,
-        entries: &[DnsEntry],
-        remove_file_if_empty: bool,
-    ) -> Result<(), OpError> {
+        request: impl FnOnce(&mut HelperClient) -> Result<T, ClientError>,
+    ) -> Result<T, OpError> {
         let mut state = self.state.borrow_mut();
         if state.client.is_none() {
             match &self.source {
@@ -134,11 +135,34 @@ impl PrivilegedHosts for HelperSession {
             }
         }
         let client = state.client.as_mut().expect("set above");
-        client
-            .hosts_set_block(tld.as_str(), entries, remove_file_if_empty)
-            .map_err(|e| op_error(&e))?;
+        let result = request(client).map_err(|e| op_error(&e))?;
         state.writes += 1;
-        Ok(())
+        Ok(result)
+    }
+}
+
+impl PrivilegedHosts for HelperSession {
+    fn set_block(
+        &self,
+        tld: &Tld,
+        entries: &[DnsEntry],
+        remove_file_if_empty: bool,
+    ) -> Result<(), OpError> {
+        self.with_client(|client| {
+            client
+                .hosts_set_block(tld.as_str(), entries, remove_file_if_empty)
+                .map(drop)
+        })
+    }
+}
+
+impl PrivilegedTrust for HelperSession {
+    fn trust_system_ca(&self, pem: &str) -> Result<(), OpError> {
+        self.with_client(|client| client.trust_system_ca(pem).map(drop))
+    }
+
+    fn untrust_system_ca(&self, sha256: &str) -> Result<(), OpError> {
+        self.with_client(|client| client.untrust_system_ca(sha256).map(drop))
     }
 }
 

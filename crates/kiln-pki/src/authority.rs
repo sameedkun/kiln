@@ -21,6 +21,8 @@ pub enum PkiError {
     Generate(#[from] rcgen::Error),
     #[error("cannot parse certificate: {0}")]
     Parse(String),
+    #[error("not a Kiln root CA: {0}")]
+    NotKilnRoot(&'static str),
 }
 
 /// A freshly generated root. `key_der` is secret: callers must protect it before storing.
@@ -149,6 +151,50 @@ pub fn describe(der: &[u8]) -> Result<(String, OffsetDateTime), PkiError> {
     ))
 }
 
+/// The one TLD a Kiln root certificate (DER) may vouch for, after checking it is a Kiln
+/// root: a CA named as one, whose **critical** name constraints permit DNS names under
+/// exactly one domain and nothing else. Used before trusting a certificate machine-wide
+/// ([ADR 0021] §7); the caller still checks the TLD itself (public TLDs are refused).
+///
+/// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+pub fn kiln_root_tld(der: &[u8]) -> Result<String, PkiError> {
+    use x509_parser::extensions::GeneralName;
+    let (_, cert) =
+        x509_parser::parse_x509_certificate(der).map_err(|e| PkiError::Parse(e.to_string()))?;
+    if !cert.subject().to_string().contains(ROOT_MARKER) {
+        return Err(PkiError::NotKilnRoot(
+            "its subject doesn't name a Kiln root",
+        ));
+    }
+    let is_ca = cert
+        .basic_constraints()
+        .map_err(|e| PkiError::Parse(e.to_string()))?
+        .is_some_and(|bc| bc.value.ca);
+    if !is_ca {
+        return Err(PkiError::NotKilnRoot("it isn't a CA certificate"));
+    }
+    let constraints = cert
+        .name_constraints()
+        .map_err(|e| PkiError::Parse(e.to_string()))?
+        .ok_or(PkiError::NotKilnRoot("it has no name constraints"))?;
+    if !constraints.critical {
+        return Err(PkiError::NotKilnRoot(
+            "its name constraints aren't critical",
+        ));
+    }
+    match constraints.value.permitted_subtrees.as_deref() {
+        Some([subtree]) => match &subtree.base {
+            GeneralName::DNSName(domain) if !domain.is_empty() => Ok((*domain).to_owned()),
+            _ => Err(PkiError::NotKilnRoot(
+                "it permits something other than DNS names",
+            )),
+        },
+        _ => Err(PkiError::NotKilnRoot(
+            "its name constraints don't permit exactly one domain",
+        )),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -226,6 +272,36 @@ pub(crate) mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn only_a_constrained_kiln_root_passes_the_system_trust_check() {
+        let root = generate_root(&Tld::new("wip").unwrap(), "dev@box", now()).unwrap();
+        assert_eq!(kiln_root_tld(&root.cert_der).unwrap(), "wip");
+
+        // An unconstrained CA calling itself a Kiln root.
+        let mut params = CertificateParams::default();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, format!("{ROOT_MARKER} (impostor)"));
+        params.distinguished_name = dn;
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let impostor = params.self_signed(&key).unwrap();
+        assert!(matches!(
+            kiln_root_tld(impostor.der()),
+            Err(PkiError::NotKilnRoot(_))
+        ));
+
+        // A constrained CA that isn't Kiln's, and a Kiln-named leaf that isn't a CA.
+        let mut params = CertificateParams::default();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.name_constraints = Some(constraints(&Tld::default()));
+        let other = params.self_signed(&key).unwrap();
+        assert!(kiln_root_tld(other.der()).is_err());
+        let inter =
+            issue_intermediate(&root.cert_der, &root.key_der, &Tld::default(), now()).unwrap();
+        assert!(kiln_root_tld(&leaf(&inter, "blog.test")).is_err());
+        assert!(kiln_root_tld(b"not a certificate").is_err());
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub struct Plan {
     pub attention: Vec<(u64, String, String)>,
     /// Local data first, the state folder last.
     pub folders: Vec<Folder>,
+    /// The root key is in the desktop keyring (Linux), outside Kiln's folders.
+    pub key_in_keyring: bool,
 }
 
 /// Whether `dir` looks like one of Kiln's folders: its last component is `Kiln` (any case),
@@ -163,6 +165,10 @@ fn build_plan() -> Result<Plan, String> {
         .collect();
     let canonical_projects: Vec<PathBuf> = projects.iter().map(|p| canonical(p)).collect();
     plan.folders = check_folders(&canonical_candidates, &canonical_projects);
+    plan.key_in_keyring = crate::apply::ca_store()
+        .ok()
+        .and_then(|ca| ca.root_key_description())
+        .is_some_and(|kept| kept.contains("keyring"));
     Ok(plan)
 }
 
@@ -200,6 +206,9 @@ fn print_plan(plan: &Plan, keep_files: bool) {
     }
     if plan.folders.is_empty() {
         println!("     (none exist)");
+    }
+    if plan.key_in_keyring && !keep_files {
+        println!("     and the CA root key's entry in your desktop keyring");
     }
     println!(
         "Never touched: your project folders (linked or parked), other tools such as Laravel Herd"
@@ -240,6 +249,14 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
     if keep_files {
         println!("Done. Kiln's folders were kept (--keep-files).");
         return Ok(());
+    }
+    // The root key may live outside Kiln's folders (the Secret Service, ADR 0021 §3).
+    if let Err(e) =
+        crate::apply::ca_store().and_then(|ca| ca.forget_root_key().map_err(|e| e.to_string()))
+    {
+        println!("Couldn't remove the CA root key from your keyring: {e}");
+    } else if plan.key_in_keyring {
+        println!("Removed the CA root key from your keyring.");
     }
 
     // 3. Delete; the state folder only if nothing is left in effect or stuck.

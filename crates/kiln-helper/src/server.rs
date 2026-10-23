@@ -8,7 +8,9 @@ use std::path::Path;
 use crate::proto::{
     Channel, ErrorCode, Joined, PROTOCOL_VERSION, ProtoError, Request, Response, read_key_line,
 };
-use crate::{hosts, validate};
+use kiln_platform::trust_system::Anchors;
+
+use crate::{hosts, system_trust, validate};
 
 /// What happened in a completed session.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -17,7 +19,12 @@ pub struct Summary {
     pub hosts_writes: u64,
 }
 
-fn handle(request: Request, summary: &mut Summary, hosts_path: &Path) -> Response {
+fn handle(
+    request: Request,
+    summary: &mut Summary,
+    hosts_path: &Path,
+    anchors: Option<&Anchors>,
+) -> Response {
     match request {
         Request::Ping => Response::Pong {
             protocol: PROTOCOL_VERSION,
@@ -54,7 +61,24 @@ fn handle(request: Request, summary: &mut Summary, hosts_path: &Path) -> Respons
                 },
             }
         }
+        Request::TrustSystemCa { pem } => trust_result(system_trust::trust(anchors, &pem)),
+        Request::UntrustSystemCa { sha256 } => {
+            trust_result(system_trust::untrust(anchors, &sha256))
+        }
         Request::Shutdown => Response::Bye,
+    }
+}
+
+fn trust_result(result: Result<(std::path::PathBuf, bool), hosts::Failure>) -> Response {
+    match result {
+        Ok((file, changed)) => Response::SystemTrustChanged {
+            file: file.display().to_string(),
+            changed,
+        },
+        Err(f) => Response::Error {
+            code: f.code,
+            message: f.message,
+        },
     }
 }
 
@@ -63,6 +87,7 @@ fn handle(request: Request, summary: &mut Summary, hosts_path: &Path) -> Respons
 pub fn run_session<S: Read + Write>(
     channel: &mut Channel<S>,
     hosts_path: &Path,
+    anchors: Option<&Anchors>,
 ) -> Result<Summary, ProtoError> {
     let mut summary = Summary::default();
     loop {
@@ -73,7 +98,7 @@ pub fn run_session<S: Read + Write>(
         };
         summary.requests += 1;
         let shutdown = request == Request::Shutdown;
-        let response = handle(request, &mut summary, hosts_path);
+        let response = handle(request, &mut summary, hosts_path, anchors);
         channel.respond(seq, &response)?;
         if shutdown {
             return Ok(summary);
@@ -89,10 +114,11 @@ pub fn serve_stdio<R: Read, W: Write>(
     mut input: R,
     output: W,
     hosts_path: &Path,
+    anchors: Option<&Anchors>,
 ) -> Result<Summary, ProtoError> {
     let key = read_key_line(&mut input)?;
     let mut channel = Channel::new(Joined::new(input, output), key);
-    run_session(&mut channel, hosts_path)
+    run_session(&mut channel, hosts_path, anchors)
 }
 
 #[cfg(windows)]
@@ -158,6 +184,6 @@ mod pipe {
             });
         }
         let mut channel = Channel::new(pipe.into_file(), config.key);
-        Ok(run_session(&mut channel, &config.hosts_path)?)
+        Ok(run_session(&mut channel, &config.hosts_path, None)?)
     }
 }

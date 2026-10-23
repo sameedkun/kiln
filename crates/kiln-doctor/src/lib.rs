@@ -216,6 +216,17 @@ pub struct CertFacts {
     pub intermediate_days_left: Option<i64>,
     /// Firefox profiles found (Firefox may keep its own trust store).
     pub firefox_profiles: usize,
+    /// How the root key is kept, e.g. "in your desktop keyring (Secret Service)…".
+    pub key_storage: Option<String>,
+    /// Linux ([ADR 0021] §8): each browser NSS database found, and whether it trusts the
+    /// root (`None`: couldn't tell, e.g. no `certutil`).
+    ///
+    /// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+    pub nss: Vec<(String, Option<bool>)>,
+    /// Linux: whether `certutil` is installed; `None` elsewhere.
+    pub certutil: Option<bool>,
+    /// Linux: whether the system store has Kiln's root; `None` elsewhere.
+    pub system_trusted: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -633,6 +644,65 @@ fn resolver_findings(facts: &ResolverFacts) -> Vec<Finding> {
     out
 }
 
+/// Linux trust ([ADR 0021] §8): per browser NSS database, `certutil`, and the system store.
+///
+/// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+fn linux_trust(facts: &CertFacts, certutil: bool) -> Vec<Finding> {
+    let area = Area::Certificates;
+    let mut out = Vec::new();
+    if facts.nss.is_empty() {
+        out.push(finding(
+            area,
+            Status::Info,
+            "no browser certificate database found (Firefox, or a Chromium browser started once)",
+        ));
+    } else if !certutil {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Warn,
+                "certutil isn't installed, so Kiln can't make Chrome or Firefox trust its CA",
+            ),
+            "sudo apt install libnss3-tools  (Fedora: nss-tools; Arch: nss), then kiln ca trust",
+        ));
+    }
+    for (label, trusted) in &facts.nss {
+        match trusted {
+            Some(true) => out.push(finding(
+                area,
+                Status::Ok,
+                format!("{label} trusts Kiln's CA"),
+            )),
+            Some(false) => out.push(with_fix(
+                finding(
+                    area,
+                    Status::Warn,
+                    format!("{label} doesn't trust Kiln's CA; it will warn on HTTPS sites"),
+                ),
+                "kiln ca trust",
+            )),
+            None => {}
+        }
+    }
+    match facts.system_trusted {
+        Some(true) => out.push(finding(
+            area,
+            Status::Ok,
+            "the system store trusts Kiln's CA (curl, PHP, Node, git)",
+        )),
+        Some(false) => out.push(with_fix(
+            finding(
+                area,
+                Status::Info,
+                "command-line tools (curl, PHP, Node, git) don't trust Kiln's CA; browsers don't need this",
+            ),
+            "kiln ca trust --system",
+        )),
+        None => {}
+    }
+    out
+}
+
 fn certificates(facts: &CertFacts) -> Vec<Finding> {
     let area = Area::Certificates;
     if !facts.root_present {
@@ -645,26 +715,38 @@ fn certificates(facts: &CertFacts) -> Vec<Finding> {
             "kiln ca init && kiln ca trust",
         )];
     }
-    let mut out = vec![match facts.trusted {
-        Some(true) => finding(
+    let mut out = match (facts.trusted, facts.certutil) {
+        (Some(true), _) => vec![finding(
             area,
             Status::Ok,
             "Kiln's root CA is trusted for your account",
-        ),
-        Some(false) => with_fix(
+        )],
+        (Some(false), _) => vec![with_fix(
             finding(
                 area,
                 Status::Warn,
                 "Kiln's root CA isn't trusted; browsers will warn on HTTPS sites",
             ),
             "kiln ca trust",
-        ),
-        None => finding(
+        )],
+        (None, Some(certutil)) => linux_trust(facts, certutil),
+        (None, None) => vec![finding(
             area,
             Status::Info,
             "trust can't be checked on this platform yet",
-        ),
-    }];
+        )],
+    };
+    if let Some(kept) = &facts.key_storage {
+        out.push(finding(
+            area,
+            if kept.contains("file permissions only") {
+                Status::Info
+            } else {
+                Status::Ok
+            },
+            format!("the root key is {kept}"),
+        ));
+    }
     match facts.intermediate_days_left {
         Some(days) if days < 10 => out.push(with_fix(
             finding(
@@ -683,6 +765,10 @@ fn certificates(facts: &CertFacts) -> Vec<Finding> {
             finding(area, Status::Warn, "no intermediate certificate yet"),
             "kiln web start  (issues it)",
         )),
+    }
+    // Windows-only notes; Linux reports each browser's own database instead.
+    if facts.certutil.is_some() {
+        return out;
     }
     out.push(finding(
         area,
@@ -1114,6 +1200,52 @@ mod tests {
     }
 
     #[test]
+    fn linux_reports_each_browser_database_and_the_system_store() {
+        let mut facts = base();
+        facts.certificates = Some(CertFacts {
+            root_present: true,
+            intermediate_days_left: Some(20),
+            key_storage: Some("in your desktop keyring (Secret Service)".into()),
+            nss: vec![
+                ("Chrome and other Chromium browsers".into(), Some(true)),
+                ("Firefox (snap) profile x.default".into(), Some(false)),
+            ],
+            certutil: Some(true),
+            system_trusted: Some(false),
+            ..CertFacts::default()
+        });
+        let report = diagnose(&facts);
+        let certs = of(&report, Area::Certificates);
+        let warns: Vec<_> = certs.iter().filter(|f| f.status == Status::Warn).collect();
+        assert_eq!(warns.len(), 1, "{}", report.render());
+        assert!(warns[0].message.contains("Firefox (snap)"));
+        assert_eq!(warns[0].fix.as_deref(), Some("kiln ca trust"));
+        assert!(
+            certs
+                .iter()
+                .any(|f| f.fix.as_deref() == Some("kiln ca trust --system"))
+        );
+        assert!(certs.iter().any(|f| f.message.contains("desktop keyring")));
+        assert!(
+            !certs.iter().any(|f| f.message.contains("Schannel")),
+            "Windows notes stay on Windows"
+        );
+
+        // Without certutil the browsers can't be checked or changed: one clear warning.
+        let linux = facts.certificates.as_mut().unwrap();
+        linux.certutil = Some(false);
+        linux.nss = vec![("Firefox profile y".into(), None)];
+        let report = diagnose(&facts);
+        let certs = of(&report, Area::Certificates);
+        assert!(certs.iter().any(|f| {
+            f.status == Status::Warn
+                && f.fix
+                    .as_deref()
+                    .is_some_and(|fix| fix.contains("libnss3-tools"))
+        }));
+    }
+
+    #[test]
     fn https_sites_get_trust_expiry_and_the_schannel_note() {
         let mut facts = base();
         facts.certificates = Some(CertFacts {
@@ -1121,6 +1253,7 @@ mod tests {
             trusted: Some(false),
             intermediate_days_left: Some(3),
             firefox_profiles: 1,
+            ..CertFacts::default()
         });
         let report = diagnose(&facts);
         let certs = of(&report, Area::Certificates);

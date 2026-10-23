@@ -379,13 +379,48 @@ fn certificates() -> CertFacts {
         .ok()
         .flatten()
         .map(|i| (i.not_after - time::OffsetDateTime::now_utc()).whole_days());
-    CertFacts {
+    let mut facts = CertFacts {
         root_present: root.is_some(),
         trusted: root.as_ref().and_then(trusted),
         intermediate_days_left,
         firefox_profiles: firefox_profiles(),
+        key_storage: ca.root_key_description().map(str::to_owned),
+        ..CertFacts::default()
+    };
+    if let Some(root) = &root {
+        linux_trust(&mut facts, root);
     }
+    facts
 }
+
+/// Each browser NSS database and the system store ([ADR 0021] §8). Read-only: `certutil -L`
+/// and a file check.
+///
+/// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+#[cfg(target_os = "linux")]
+fn linux_trust(facts: &mut CertFacts, root: &kiln_pki::CertInfo) {
+    use kiln_platform::trust_nss::{Certutil, NssTool, nickname_for, nss_databases};
+    use kiln_platform::trust_system::{anchor_file_name, detect_anchors};
+    let certutil = Certutil::find();
+    let nickname = nickname_for(&root.sha256);
+    facts.certutil = Some(certutil.is_some());
+    facts.nss = std::env::var_os("HOME")
+        .map(|home| nss_databases(Path::new(&home), false))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|db| {
+            let trusted = certutil
+                .as_ref()
+                .and_then(|c| c.contains(&db.path, &nickname).ok());
+            (db.label, trusted)
+        })
+        .collect();
+    facts.system_trusted = detect_anchors(Path::new("/"))
+        .map(|anchors| anchors.dir.join(anchor_file_name(&root.sha256)).is_file());
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_trust(_facts: &mut CertFacts, _root: &kiln_pki::CertInfo) {}
 
 #[cfg(windows)]
 fn trusted(root: &kiln_pki::CertInfo) -> Option<bool> {

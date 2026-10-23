@@ -7,6 +7,8 @@
 use serde_json::Value;
 
 use crate::hosts_op::HOSTS_BLOCK_KIND;
+use crate::trust_nss::NSS_TRUST_KIND;
+use crate::trust_system::SYSTEM_TRUST_KIND;
 use crate::user_path::USER_PATH_KIND;
 
 /// Same value as `trust::TRUST_CA_KIND`, which only exists on Windows.
@@ -37,6 +39,11 @@ pub fn describe(kind: &str, params: &Value) -> String {
             "{} first on your user PATH",
             params["entry"].as_str().unwrap_or("?")
         ),
+        NSS_TRUST_KIND => format!(
+            "Kiln's root CA trusted in {}",
+            params["label"].as_str().unwrap_or("a browser")
+        ),
+        SYSTEM_TRUST_KIND => "Kiln's root CA trusted machine-wide (system store)".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -79,6 +86,11 @@ mod tests {
             describe(USER_PATH_KIND, &json!({"entry": r"C:\Kiln\bin\shims"})),
             r"C:\Kiln\bin\shims first on your user PATH"
         );
+        assert_eq!(
+            describe(NSS_TRUST_KIND, &json!({"label": "Firefox profile x"})),
+            "Kiln's root CA trusted in Firefox profile x"
+        );
+        assert!(describe(SYSTEM_TRUST_KIND, &json!({})).contains("machine-wide"));
         assert_eq!(describe("future.kind", &json!({})), "future.kind");
     }
 

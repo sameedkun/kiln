@@ -21,7 +21,7 @@ type Server = JoinHandle<Result<Summary, ProtoError>>;
 fn helper(hosts: PathBuf) -> (PipeReader, PipeWriter, Server) {
     let (from_kiln, to_helper) = pipe().unwrap();
     let (from_helper, to_kiln) = pipe().unwrap();
-    let server = std::thread::spawn(move || serve_stdio(from_kiln, to_kiln, &hosts));
+    let server = std::thread::spawn(move || serve_stdio(from_kiln, to_kiln, &hosts, None));
     (from_helper, to_helper, server)
 }
 

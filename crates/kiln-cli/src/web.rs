@@ -448,10 +448,24 @@ fn trust_hint() -> Result<(), String> {
     Ok(())
 }
 
+/// Linux: a hint unless every browser NSS database found already trusts the root.
 #[cfg(not(windows))]
-#[allow(clippy::unnecessary_wraps)] // same signature as the Windows version
 fn trust_hint() -> Result<(), String> {
-    println!("Make sure your browser trusts Kiln's CA (trust setup for Linux arrives with P1-04).");
+    use kiln_platform::trust_nss::{Certutil, NssTool, nss_databases};
+    let root = apply::ca_store()?.root().map_err(|e| e.to_string())?;
+    let nickname = kiln_platform::trust_nss::nickname_for(&root.sha256);
+    let databases = std::env::var_os("HOME")
+        .map(|home| nss_databases(std::path::Path::new(&home), false))
+        .unwrap_or_default();
+    let trusted = Certutil::find().is_some_and(|certutil| {
+        !databases.is_empty()
+            && databases
+                .iter()
+                .all(|db| certutil.contains(&db.path, &nickname).unwrap_or(false))
+    });
+    if !trusted {
+        println!("Browsers won't trust it until you run `kiln ca trust`.");
+    }
     Ok(())
 }
 

@@ -24,6 +24,20 @@ pub trait KeyProtector: std::fmt::Debug {
     fn unprotect(&self, blob: &[u8]) -> io::Result<Vec<u8>>;
     /// Whether the key is encrypted (not merely permission-restricted) on disk.
     fn encrypted_at_rest(&self) -> bool;
+    /// Removes whatever `blob` refers to outside the CA directory (a Secret Service item on
+    /// Linux), for `kiln uninstall`. Nothing to do where the blob is the whole key.
+    fn forget(&self, _blob: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+    /// How the key in `blob` is kept, for people. It describes the stored key, which may
+    /// predate what this machine offers now.
+    fn describe(&self, _blob: &[u8]) -> &'static str {
+        if self.encrypted_at_rest() {
+            "encrypted"
+        } else {
+            "protected by file permissions only"
+        }
+    }
 }
 
 /// DPAPI, current-user scope, with Kiln-specific entropy.
@@ -45,10 +59,13 @@ impl KeyProtector for Dpapi {
     fn encrypted_at_rest(&self) -> bool {
         true
     }
+    fn describe(&self, _blob: &[u8]) -> &'static str {
+        "encrypted for your Windows account (DPAPI)"
+    }
 }
 
-/// Stand-in until the Secret Service backend exists (P1-04): the key is stored as-is and the
-/// file is restricted to the user (`0600` on Unix).
+/// The key stored as-is, the file restricted to the user (`0600` on Unix): where nothing
+/// better exists (macOS until Phase 3; Linux without a Secret Service uses the same format).
 #[derive(Debug, Default)]
 pub struct PermissionsOnly;
 
@@ -71,7 +88,11 @@ pub fn default_protector() -> Box<dyn KeyProtector> {
     {
         Box::new(Dpapi)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(crate::secret_service::DesktopKeyring::detect())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Box::new(PermissionsOnly)
     }
@@ -103,7 +124,8 @@ impl CertInfo {
     }
 }
 
-fn pem_to_der(pem: &str) -> Result<Vec<u8>, PkiError> {
+/// The DER bytes of the first certificate in `pem`.
+pub fn pem_to_der(pem: &str) -> Result<Vec<u8>, PkiError> {
     let (_, parsed) = x509_parser::pem::parse_x509_pem(pem.as_bytes())
         .map_err(|e| PkiError::Parse(e.to_string()))?;
     Ok(parsed.contents)
@@ -216,6 +238,25 @@ impl CaStore {
         Ok(CertInfo::from_pem(inter.cert_pem)?)
     }
 
+    /// How the stored root key is kept, for people; `None` if there is no root yet.
+    #[must_use]
+    pub fn root_key_description(&self) -> Option<&'static str> {
+        let blob = fs::read(self.path("root.key.protected")).ok()?;
+        Some(self.protector.describe(&blob))
+    }
+
+    /// Removes the root key from where it is kept outside this directory (the Secret
+    /// Service on Linux), for `kiln uninstall`. The directory itself is deleted separately.
+    pub fn forget_root_key(&self) -> Result<(), StoreError> {
+        let key_path = self.path("root.key.protected");
+        let protected = match fs::read(&key_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(io_err(&key_path)(e)),
+        };
+        self.protector.forget(&protected).map_err(io_err(&key_path))
+    }
+
     /// The current intermediate, if one was issued.
     pub fn intermediate(&self) -> Result<Option<CertInfo>, StoreError> {
         let path = self.path("intermediate.crt");
@@ -243,8 +284,15 @@ mod tests {
     use crate::authority::tests::{leaf, verifies};
     use crate::authority::{INTERMEDIATE_DAYS, Intermediate};
 
+    /// DPAPI on Windows; never the real desktop keyring on Linux, which may be locked (its own
+    /// test is `secret_service::tests`, run by hand).
     fn store(dir: &Path) -> CaStore {
-        CaStore::new(dir.join("ca"), default_protector())
+        let protector: Box<dyn KeyProtector> = if cfg!(windows) {
+            default_protector()
+        } else {
+            Box::new(PermissionsOnly)
+        };
+        CaStore::new(dir.join("ca"), protector)
     }
 
     #[test]

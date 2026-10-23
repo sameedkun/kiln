@@ -124,6 +124,27 @@ impl HelperClient {
         }
     }
 
+    /// Adds a Kiln root to the Linux system store (ADR 0021 §7). Returns whether anything
+    /// changed.
+    pub fn trust_system_ca(&mut self, pem: &str) -> Result<bool, ClientError> {
+        match self.call(&Request::TrustSystemCa {
+            pem: pem.to_owned(),
+        })? {
+            Response::SystemTrustChanged { changed, .. } => Ok(changed),
+            other => Err(ClientError::Unexpected(Box::new(other))),
+        }
+    }
+
+    /// Removes the root with this SHA-256 from the Linux system store.
+    pub fn untrust_system_ca(&mut self, sha256: &str) -> Result<bool, ClientError> {
+        match self.call(&Request::UntrustSystemCa {
+            sha256: sha256.to_owned(),
+        })? {
+            Response::SystemTrustChanged { changed, .. } => Ok(changed),
+            other => Err(ClientError::Unexpected(Box::new(other))),
+        }
+    }
+
     /// Ends the session; the helper exits afterwards.
     pub fn shutdown(mut self) -> Result<(), ClientError> {
         match self.call(&Request::Shutdown)? {

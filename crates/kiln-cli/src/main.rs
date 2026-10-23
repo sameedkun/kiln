@@ -219,11 +219,16 @@ enum CaAction {
     },
     /// Show the CA's certificates, fingerprints and expiry.
     Info,
-    /// Trust the root CA for your Windows account (Windows asks you to confirm).
+    /// Trust the root CA for your account: the Windows certificate store (Windows asks you to
+    /// confirm), or on Linux each browser's NSS database (Chrome, Firefox).
     Trust {
         /// Do not ask for confirmation in the terminal (Windows still shows its own dialog).
         #[arg(long, short)]
         yes: bool,
+        /// Linux: also trust it machine-wide in the system store, for command-line tools
+        /// (curl, PHP, Node, git). Asks for an administrator password.
+        #[arg(long)]
+        system: bool,
     },
 }
 
@@ -393,8 +398,8 @@ fn main() -> ExitCode {
             action: CaAction::Info,
         } => apply::ca_info(),
         Command::Ca {
-            action: CaAction::Trust { yes },
-        } => apply::ca_trust(yes),
+            action: CaAction::Trust { yes, system },
+        } => apply::ca_trust(yes, system),
         Command::Hosts {
             action: HostsAction::Sync { yes },
         } => web::hosts_sync(yes),

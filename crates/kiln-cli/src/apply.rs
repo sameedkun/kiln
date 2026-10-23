@@ -117,6 +117,20 @@ mod system {
             register_trust_ca(&mut registry);
             register_user_path(&mut registry, Rc::new(RegistryPath));
         }
+        #[cfg(not(windows))]
+        {
+            use kiln_platform::trust_nss::{nss_tool, register_nss_trust};
+            use kiln_platform::trust_system::{
+                PrivilegedTrust, detect_anchors, register_system_trust,
+            };
+            register_nss_trust(&mut registry, nss_tool());
+            let trust: Rc<dyn PrivilegedTrust> = session.clone();
+            register_system_trust(
+                &mut registry,
+                detect_anchors(std::path::Path::new("/")),
+                trust,
+            );
+        }
         let mut engine = Engine::new(store, registry);
         let recovery = engine.recover().map_err(|e| e.to_string())?;
         if !recovery.rolled_back.is_empty() {
@@ -285,7 +299,12 @@ mod system {
     #[cfg(windows)]
     /// Trusts Kiln's root for the current Windows user (no administrator rights; Windows
     /// shows its own confirmation dialog).
-    pub fn ca_trust(yes: bool) -> Result<(), String> {
+    pub fn ca_trust(yes: bool, system: bool) -> Result<(), String> {
+        if system {
+            return Err(
+                "machine-wide trust isn't available on Windows yet; `kiln ca trust` trusts it for your account, which browsers and most tools use".into(),
+            );
+        }
         let root = ca_store()?.root().map_err(|e| e.to_string())?;
         let mut ctx = open()?;
         let op: Box<dyn Operation> =
@@ -304,6 +323,123 @@ mod system {
             "Trusted. Recorded as operation #{} (remove with `kiln undo {}`).",
             report.entry_ids[0], report.entry_ids[0]
         );
+        Ok(())
+    }
+
+    /// Whether a Chromium-family browser is installed (it would create `~/.pki/nssdb`).
+    #[cfg(not(windows))]
+    fn chromium_installed() -> bool {
+        let path = std::env::var("PATH").unwrap_or_default();
+        [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "microsoft-edge",
+            "brave-browser",
+            "vivaldi",
+        ]
+        .iter()
+        .any(|name| super::which_on(&path, name).is_some())
+    }
+
+    /// `kiln ca trust [--system]` on Linux ([ADR 0021] §5–7): Kiln's root in every browser's
+    /// NSS database (no password), and with `--system` in the system store (one password
+    /// prompt). One journaled operation per database, undone like any other.
+    ///
+    /// [ADR 0021]: ../../../docs/adr/0021-linux-ca-key-and-trust.md
+    #[cfg(not(windows))]
+    pub fn ca_trust(yes: bool, system: bool) -> Result<(), String> {
+        use kiln_platform::trust_nss::{
+            CERTUTIL_HINT, Certutil, NssTool, NssTrustOp, nss_databases,
+        };
+        use kiln_platform::trust_system::{PrivilegedTrust, SystemTrustOp, detect_anchors};
+
+        let root = super::ca_store()?.root().map_err(|e| e.to_string())?;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME isn't set")?;
+        let databases = nss_databases(&home, chromium_installed());
+        let mut ctx = open()?;
+        let mut ops: Vec<Box<dyn Operation>> = Vec::new();
+        match Certutil::find() {
+            Some(certutil) => {
+                let tool: Rc<dyn NssTool> = Rc::new(certutil);
+                for db in &databases {
+                    ops.push(Box::new(NssTrustOp::new(
+                        db.path.clone(),
+                        db.label.clone(),
+                        root.pem.clone(),
+                        root.sha256.clone(),
+                        db.create,
+                        tool.clone(),
+                    )));
+                }
+                if databases.is_empty() {
+                    println!(
+                        "No browser certificate database found (Firefox or a Chromium browser that has been started once)."
+                    );
+                }
+            }
+            None if databases.is_empty() => {}
+            None => {
+                println!(
+                    "Browsers ({}) need `certutil` to trust Kiln's CA: {CERTUTIL_HINT}.",
+                    databases
+                        .iter()
+                        .map(|db| db.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                if !system {
+                    return Err("nothing was changed".into());
+                }
+            }
+        }
+        if system {
+            let writer: Rc<dyn PrivilegedTrust> = ctx.session.clone();
+            ops.push(Box::new(SystemTrustOp::new(
+                root.pem.clone(),
+                &root.sha256,
+                root.subject.clone(),
+                detect_anchors(std::path::Path::new("/")),
+                writer,
+            )));
+        }
+        if ops.is_empty() {
+            println!(
+                "Nothing to trust it in. `kiln ca trust --system` trusts it for command-line tools."
+            );
+            return Ok(());
+        }
+        for op in &ops {
+            print_preview(&op.preview().map_err(|e| e.to_string())?, "(not trusted)");
+        }
+        let question = if system {
+            format!("Trust it? {APPROVAL}")
+        } else {
+            "Trust it?".to_owned()
+        };
+        if !yes && !confirm(&question) {
+            println!("Nothing was changed.");
+            return Ok(());
+        }
+        let report = ctx.engine.apply(&ops).map_err(|e| e.to_string())?;
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        let ids: Vec<String> = report.entry_ids.iter().map(|id| format!("#{id}")).collect();
+        println!(
+            "Trusted. Recorded as operation(s) {} (`kiln undo` removes them, newest first).",
+            ids.join(", ")
+        );
+        if !databases.is_empty() {
+            println!("Restart Chrome or Firefox if they are open, so they read the change.");
+        }
+        if !system {
+            println!(
+                "Command-line tools (curl, PHP, Node) use the system store: `kiln ca trust --system` adds it there too."
+            );
+        }
+        report_elevation(&ctx.session);
         Ok(())
     }
 }
@@ -365,14 +501,16 @@ pub fn ca_init(tld: &str) -> Result<(), String> {
     print_cert("Root", &root);
     let inter = ca.issue_intermediate(&tld).map_err(|e| e.to_string())?;
     print_cert("Intermediate (for the web server)", &inter);
-    if ca.key_encrypted_at_rest() {
-        println!(
-            "The root key is encrypted for your Windows account (DPAPI) and never given to the web server."
-        );
+    let kept = ca.root_key_description().unwrap_or("missing");
+    if kept.contains("file permissions only") {
+        println!("Warning: the root key is {kept}.");
+        if cfg!(target_os = "linux") {
+            println!(
+                "  On a desktop, Kiln keeps it in your keyring instead; run `kiln ca init` from a desktop session before the first one to get that."
+            );
+        }
     } else {
-        println!(
-            "Warning: the root key is protected by file permissions only on this platform (encryption arrives with P1-04)."
-        );
+        println!("The root key is {kept}, and never given to the web server.");
     }
     println!("Next: `kiln ca trust` so browsers accept these certificates.");
     Ok(())
@@ -393,23 +531,14 @@ pub fn ca_info() -> Result<(), String> {
     }
     println!(
         "Root key: {}",
-        if ca.key_encrypted_at_rest() {
-            "encrypted (DPAPI)"
-        } else {
-            "file permissions only"
-        }
+        ca.root_key_description().unwrap_or("missing")
     );
     Ok(())
 }
 
 #[cfg(windows)]
-pub use system::{ca_trust, shims_install};
-pub use system::{hosts_set, undo, undo_all};
-
-#[cfg(not(windows))]
-pub fn ca_trust(_yes: bool) -> Result<(), String> {
-    Err("trusting the CA is not available on this platform yet (Linux: P1-04)".into())
-}
+pub use system::shims_install;
+pub use system::{ca_trust, hosts_set, undo, undo_all};
 
 #[cfg(not(windows))]
 pub fn shims_install(_yes: bool) -> Result<(), String> {

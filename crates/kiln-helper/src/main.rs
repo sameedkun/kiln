@@ -116,6 +116,7 @@ fn run_stdio() -> ExitCode {
             std::io::stdin().lock(),
             std::io::stdout(),
             std::path::Path::new("/etc/hosts"),
+            kiln_platform::trust_system::detect_anchors(std::path::Path::new("/")).as_ref(),
         )
     })
 }

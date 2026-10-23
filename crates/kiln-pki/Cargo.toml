@@ -17,6 +17,10 @@ thiserror.workspace = true
 time.workspace = true
 x509-parser.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+getrandom.workspace = true
+
 [dev-dependencies]
 rustls-pki-types.workspace = true
 rustls-webpki.workspace = true
