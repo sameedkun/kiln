@@ -47,10 +47,38 @@ Set-Content "$sites\static-site\index.html" '<h1>static from kiln</h1>'
 Set-Content "$sites\php-app\index.php" '<?php echo "php ", PHP_VERSION, " via ", PHP_SAPI;'
 
 Check 'php install 8.4' { Kiln php install 8.4 }
+Check 'php install 8.3 (a second version, for per-site PHP)' { Kiln php install 8.3 }
+Check 'composer install' { Kiln composer install }
+Check 'shims install' { Kiln shims install --yes }
 Check 'web install' { Kiln web install }
+
+# Real apps (plan.md, Phase 1 exit criteria): a new Laravel project made with Kiln's Composer,
+# and WordPress from wordpress.org. Composer's cache and config go under C:\kiln-test, so the
+# run leaves nothing of Composer's own behind either.
+$env:COMPOSER_HOME = Join-Path $dir 'composer-home'
+$env:COMPOSER_CACHE_DIR = Join-Path $dir 'composer-cache'
+$composer = Join-Path $env:LOCALAPPDATA 'Kiln\bin\shims\composer.exe'
+Check 'a new Laravel project, made with Kiln''s composer shim' {
+    Push-Location $sites
+    try {
+        & $composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "composer create-project failed ($LASTEXITCODE)" }
+    } finally { Pop-Location }
+}
+Check 'WordPress, from wordpress.org' {
+    $archive = Join-Path $dir 'wordpress.tar.gz'
+    curl.exe -fsSL -o $archive https://wordpress.org/latest.tar.gz
+    if ($LASTEXITCODE -ne 0) { throw "download failed ($LASTEXITCODE)" }
+    tar.exe -xzf $archive -C $sites
+    if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
+    Rename-Item (Join-Path $sites 'wordpress') 'wp-site'
+}
 Check 'ca init' { Kiln ca init }
 Check 'park the sites folder' { Kiln park $sites }
 Check 'secure php-app' { Kiln secure php-app }
+Check 'secure laravel-app' { Kiln secure laravel-app }
+Check 'secure wp-site' { Kiln secure wp-site }
+Check 'isolate php-app to PHP 8.3' { Kiln isolate 8.3 php-app }
 Check 'hosts sync (UAC, answered by the test VM setting)' { Kiln hosts sync --yes }
 # Windows asks before it adds a root to the user's store ("Security Warning") and before it
 # deletes one ("Root Certificate Store"). Those dialogs open behind whatever window has focus
@@ -92,7 +120,6 @@ $answerer = Start-Answerer 'Security Warning'
 Check 'ca trust (Windows'' certificate dialog, answered with the VM''s mouse)' { Kiln ca trust --yes }
 Say "     dialog: $(Receive-Job $answerer -Wait -AutoRemoveJob)"
 Status 'running'
-Check 'shims install' { Kiln shims install --yes }
 $started = ''
 # Herd holds port 80 (and 443 once it serves a site over HTTPS): Kiln takes the next free port
 # for what's taken and prints each site's URL.
@@ -103,18 +130,33 @@ Check 'web start next to Herd moves off port 80 and says why' {
 }
 function SiteUrl($host_) { [regex]::Match($script:started, "https?://$([regex]::Escape($host_))[^\s]*").Value }
 Check 'a static site over HTTP' { Expect 'static from kiln' (Get (SiteUrl 'static-site.test')) }
-Check 'a PHP site over HTTPS, trusted for this user' {
+Check 'a PHP site over HTTPS, trusted for this user, on its own PHP 8.3' {
     $url = SiteUrl 'php-app.test'
     Expect 'https://' $url
-    Expect 'via cgi-fcgi' (Get $url)
+    $page = Get $url
+    Expect 'php 8.3.' $page
+    Expect 'via cgi-fcgi' $page
+}
+Check 'the Laravel app over HTTPS (served from public\, PHP 8.4)' {
+    $url = SiteUrl 'laravel-app.test'
+    Expect 'https://' $url
+    Expect 'Laravel' (Get $url)
+}
+Check 'WordPress over HTTPS (its setup page)' {
+    $url = SiteUrl 'wp-site.test'
+    Expect 'https://' $url
+    Expect 'WordPress' (curl.exe -sSL --ssl-revoke-best-effort $url 2>&1 | Out-String)
 }
 Check 'kiln doctor reports Herd under Other tools' {
     $doctor = & $Kiln doctor 2>&1 | Out-String
     Expect 'Laravel Herd is installed' $doctor
 }
-Check 'the php shim in a new terminal runs Kiln''s PHP' {
-    $out = powershell -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine'); Set-Location '$sites\php-app'; php -r 'echo PHP_VERSION;'" | Out-String
-    Expect '8.4.' $out
+function ShimPhp($folder) {
+    powershell -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine'); Set-Location '$folder'; php -r 'echo PHP_VERSION;'" | Out-String
+}
+Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app, 8.4 in laravel-app)' {
+    Expect '8.3.' (ShimPhp "$sites\php-app")
+    Expect '8.4.' (ShimPhp "$sites\laravel-app")
 }
 
 Say '== Herd restarts while Kiln runs (I-11)'

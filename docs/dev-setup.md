@@ -132,9 +132,18 @@ More VM notes:
 `kiln uninstall --yes`, snapshot again, compare. Run them by hand before a release; CI can't
 host these VMs.
 
+- **What they cover:**
+  - a static site;
+  - a new Laravel project made with Kiln's `composer` shim;
+  - WordPress;
+  - a PHP site pinned to a second PHP version;
+  - HTTPS through Kiln's CA;
+  - the shims;
+  - `kiln doctor`;
+  - then uninstall and the comparison.
 - **Ubuntu:** `tests/vm/ubuntu/run.sh <vm-address>` from Git Bash. It copies the working
   tree in, builds it, and runs `scenario.sh`. One-time setup: `setup-test-vm.sh` (a polkit
-  rule for the test user, test VM only).
+  rule for the test user, test VM only). Shut the Windows VM down first.
 - **Windows:** `tests/vm/windows/run.ps1 -Bin <folder>` from an elevated PowerShell (Hyper-V).
   - Build the binaries first, with the C runtime linked in:
     `$env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win`.
@@ -145,9 +154,9 @@ host these VMs.
     task, then its onboarding by keyboard. Choices: no Defender exclusion, firewall prompt
     cancelled, AI providers and Herd Pro skipped. The `clean` checkpoint is Herd installed
     and running, with no Kiln.
-  - Reset before each run: `Restore-VMSnapshot -VMName kiln-win11 -Name clean`, then
-    `Start-VM`. If restoring fails with "not enough memory", the checkpoint is applied
-    anyway; `Start-VM` again once ~4 GB is free. The Ubuntu VM can't run at the same time.
+  - `run.ps1 -Reset` first returns the VM to `clean` and starts it, retrying for a few
+    minutes while the host is short of the ~4 GB it needs. Run one VM at a time: shut the
+    Ubuntu VM down first.
   - PowerShell Direct (`Invoke-Command -VMName kiln-win11 -Credential (Import-Clixml
     E:\VMs\kiln-win11\vm-credential.xml)`) runs commands in it without a network.
   - Things that need the desktop run as a scheduled task with an Interactive logon.

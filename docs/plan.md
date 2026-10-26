@@ -46,7 +46,8 @@ Details in [progress.md](progress.md#phase-0).
   (Laravel, WordPress, static) at `https://*.test` with a trusted certificate, and per-site
   PHP versions work.
 - `kiln uninstall` restores the hosts file, PATH and trust stores **byte-identical** to a
-  snapshot taken before install. This is verified automatically in CI VMs.
+  snapshot taken before install. This is verified by scripted VM runs before each release
+  ([ADR 0024](adr/0024-integration-test-vms.md): GitHub's hosted runners can't host these VMs).
 - With Herd installed and running on the Windows VM, nothing Herd owns changes. Kiln reports
   port conflicts clearly, and it survives Herd restarting.
 

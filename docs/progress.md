@@ -237,7 +237,7 @@ is turned on per site.**
     - HTTP returns 200, an unknown host returns 404, and the secure site redirects (308).
     - HTTPS verifies against Kiln's root with rustls. A plain site has no certificate.
     - With no secure sites, the HTTPS port isn't bound, and stopping releases the ports.
-    - It passes locally against Caddy 2.11.7. CI skips it until P1-15.
+    - It passes locally against Caddy 2.11.7. CI runs it on Windows and Linux since 2026-10-26, against the Caddy `kiln web install` downloads.
 - **Manual run from the agent session:** install, link `hello` (HTTP) and `shop` (`--secure`),
   then start.
   - With default ports, start refused: `127.0.0.1:80 is already in use … Herd?`.
@@ -937,8 +937,8 @@ entries.
 | P1-04b browser recheck after the I-57 fix (Firefox and Chrome windows in the VM) | [I-57](issues.md#i-57) | done 2026-10-23 (user) |
 | Caddy reload vs a recycling worker (one request) | [I-50](issues.md#i-50) | no; report upstream |
 | Automatic Caddy download | [ADR 0011](adr/0011-caddy-integration.md) §10 | done (P1-08) |
-| Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
-| Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
+| Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | done 2026-10-26 |
+| Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | done 2026-10-26 (Windows, Linux) |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
 | Reliable unattended VM build | [I-36](issues.md#i-36) | done 2026-10-23 (P1-15) |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |

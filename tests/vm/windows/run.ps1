@@ -4,13 +4,32 @@
 #   $env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win
 # Copies them and the scripts in over PowerShell Direct, starts scenario.ps1 in the test user's
 # desktop session, and prints C:\kiln-test\scenario.log. Exit code 0 = passed.
+#   -Reset first returns the VM to its `clean` checkpoint (ADR 0024 §7) and starts it.
 param(
     [string] $Name = 'kiln-win11',
     [string] $Bin = (Join-Path $PSScriptRoot '..\..\..\target\vm-win\release'),
-    [string] $Credential = 'E:\VMs\kiln-win11\vm-credential.xml'
+    [string] $Credential = 'E:\VMs\kiln-win11\vm-credential.xml',
+    [switch] $Reset
 )
 $ErrorActionPreference = 'Stop'
 $cred = Import-Clixml $Credential
+
+if ($Reset) {
+    Stop-VM $Name -TurnOff -Force -WarningAction SilentlyContinue
+    # Restoring applies the checkpoint even when there isn't memory to resume it right away.
+    try { Restore-VMSnapshot -VMName $Name -Name clean -Confirm:$false } catch { Write-Host $_ }
+    # The host may be short of the ~4 GB it needs for a moment: retry for a few minutes.
+    $deadline = (Get-Date).AddMinutes(5)
+    while ((Get-VM $Name).State -ne 'Running') {
+        try { Start-VM $Name } catch {
+            if ((Get-Date) -gt $deadline) { throw }
+            Write-Host "Can't start $Name yet ($($_.Exception.Message.Split("`n")[0])); retrying."
+            Start-Sleep -Seconds 15
+        }
+    }
+    do { Start-Sleep -Seconds 5 } until ((Get-VMIntegrationService -VMName $Name -Name Heartbeat).PrimaryStatusDescription -eq 'OK')
+    Start-Sleep -Seconds 20   # let the desktop session settle
+}
 $s = New-PSSession -VMName $Name -Credential $cred
 Invoke-Command -Session $s {
     # A restored checkpoint keeps the address it had then; the host's virtual switch may have

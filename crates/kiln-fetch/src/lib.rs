@@ -16,6 +16,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256, Sha512};
@@ -25,6 +26,9 @@ pub const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 
 /// Longest a single body may take to arrive.
 pub const BODY_TIMEOUT: Duration = Duration::from_hours(1);
+
+/// Longest a download may go without receiving any data before it is abandoned (I-48).
+pub const STALL_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// A digest the downloaded bytes must match, as lowercase hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +115,11 @@ pub enum FetchError {
     NotHttps(String),
     #[error("download of {url} failed: {detail}")]
     Http { url: String, detail: String },
+    #[error(
+        "download of {url} stalled: no data arrived for {} s; check the connection and try again",
+        .waited.as_secs()
+    )]
+    Stalled { url: String, waited: Duration },
     #[error("{url} is larger than the {limit} bytes allowed")]
     TooLarge { url: String, limit: u64 },
     #[error(
@@ -137,6 +146,7 @@ pub struct Fetcher {
     agent: ureq::Agent,
     cache_dir: PathBuf,
     https_only: bool,
+    stall_timeout: Duration,
 }
 
 impl Fetcher {
@@ -166,8 +176,9 @@ impl Fetcher {
             .max_redirects(10)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(60)))
-            // The whole body, not idle time (ureq has no stall timeout): generous enough for
-            // MAX_DOWNLOAD on a slow line. At ~110 KB/s, PHP (34 MB) takes about 5 minutes.
+            // The whole body, not idle time, so generous enough for MAX_DOWNLOAD on a slow
+            // line (at ~110 KB/s, PHP's 34 MB take about 5 minutes). `fetch` catches stalls
+            // itself (STALL_TIMEOUT).
             .timeout_recv_body(Some(BODY_TIMEOUT))
             .user_agent(concat!("kiln/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -176,7 +187,16 @@ impl Fetcher {
             agent,
             cache_dir,
             https_only,
+            stall_timeout: STALL_TIMEOUT,
         }
+    }
+
+    /// A shorter stall timeout: only for tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_stall_timeout(mut self, timeout: Duration) -> Self {
+        self.stall_timeout = timeout;
+        self
     }
 
     #[must_use]
@@ -270,7 +290,7 @@ impl Fetcher {
         let dest = self.cache_dir.join(name);
         let partial = self.cache_dir.join(format!("{name}.partial"));
 
-        let mut response = self.get(url)?;
+        let response = self.get(url)?;
         let total = response.body().content_length();
         if total.is_some_and(|n| n > MAX_DOWNLOAD) {
             return Err(FetchError::TooLarge {
@@ -278,29 +298,34 @@ impl Fetcher {
                 limit: MAX_DOWNLOAD,
             });
         }
+        let chunks = read_in_background(response);
         let result = (|| {
-            let mut reader = response
-                .body_mut()
-                .with_config()
-                .limit(MAX_DOWNLOAD)
-                .reader();
             let mut out = File::create(&partial)
                 .map_err(io_err(format!("cannot create {}", partial.display())))?;
             let mut hasher = expected.hasher();
-            let mut buffer = vec![0u8; 64 * 1024];
             let mut done = 0u64;
             loop {
-                let n = reader.read(&mut buffer).map_err(|e| FetchError::Http {
-                    url: url.to_owned(),
-                    detail: e.to_string(),
-                })?;
-                if n == 0 {
+                let chunk = match chunks.recv_timeout(self.stall_timeout) {
+                    Ok(chunk) => chunk.map_err(|e| FetchError::Http {
+                        url: url.to_owned(),
+                        detail: e.to_string(),
+                    })?,
+                    Err(RecvTimeoutError::Timeout) => {
+                        return Err(FetchError::Stalled {
+                            url: url.to_owned(),
+                            waited: self.stall_timeout,
+                        });
+                    }
+                    // The reader only hangs up after sending the end or an error.
+                    Err(RecvTimeoutError::Disconnected) => Vec::new(),
+                };
+                if chunk.is_empty() {
                     break;
                 }
-                hasher.update(&buffer[..n]);
-                out.write_all(&buffer[..n])
+                hasher.update(&chunk);
+                out.write_all(&chunk)
                     .map_err(io_err(format!("cannot write {}", partial.display())))?;
-                done += n as u64;
+                done += chunk.len() as u64;
                 progress(done, total);
             }
             out.sync_all()
@@ -323,6 +348,35 @@ impl Fetcher {
         }
         result.map(|()| dest)
     }
+}
+
+/// Reads `response`'s body (up to [`MAX_DOWNLOAD`]) on its own thread and hands over each
+/// chunk; an empty chunk is the end. ureq has no idle timeout, so the caller enforces one by
+/// how long it waits for the next chunk (I-48). A thread blocked on a dead connection is left
+/// behind and ends with the connection or at [`BODY_TIMEOUT`]; it holds no file.
+fn read_in_background(
+    response: ureq::http::Response<ureq::Body>,
+) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::sync_channel(4);
+    std::thread::spawn(move || {
+        let mut reader = response
+            .into_body()
+            .into_with_config()
+            .limit(MAX_DOWNLOAD)
+            .reader();
+        loop {
+            let mut buffer = vec![0u8; 64 * 1024];
+            let chunk = reader.read(&mut buffer).map(|n| {
+                buffer.truncate(n);
+                buffer
+            });
+            let last = !matches!(&chunk, Ok(c) if !c.is_empty());
+            if sender.send(chunk).is_err() || last {
+                return;
+            }
+        }
+    });
+    receiver
 }
 
 /// `name` if it is a plain file name: no separators, no `..`, nothing hidden.
@@ -503,6 +557,42 @@ mod tests {
             .unwrap();
         server.join().unwrap();
         assert_eq!(fs::read(path).unwrap(), b"caddy");
+    }
+
+    #[test]
+    fn a_stalled_download_is_abandoned_and_its_partial_file_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (release, wait) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request);
+            // Promise 100 bytes, send 5, then go quiet with the connection open.
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nhello");
+            let _ = stream.flush();
+            let _ = wait.recv();
+        });
+        let fetcher = Fetcher::insecure_for_tests(dir.path().into())
+            .with_stall_timeout(Duration::from_millis(500));
+        let expected = Expected::sha256(&"0".repeat(64)).unwrap();
+        let mut seen = 0;
+        let err = fetcher
+            .fetch(
+                &format!("{base}/a.zip"),
+                "a.zip",
+                &expected,
+                &mut |done, _| {
+                    seen = done;
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Stalled { .. }), "{err}");
+        assert_eq!(seen, 5, "the bytes that did arrive were counted");
+        assert!(!dir.path().join("a.zip.partial").exists());
+        release.send(()).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

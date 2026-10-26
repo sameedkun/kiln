@@ -2,8 +2,8 @@
 //! reloads (with requests running), the redirect, the 404, and a graceful stop.
 //!
 //! Needs a Caddy binary: set `KILN_TEST_CADDY` to its path (for example the one `kiln web
-//! install` placed under `%LOCALAPPDATA%\Kiln\bin`). Without it the test only prints a note,
-//! because CI doesn't download Caddy yet (P1-15).
+//! install` placed under `%LOCALAPPDATA%\Kiln\bin`). Without it the test only prints a note.
+//! CI downloads Caddy that way and runs it on Windows and Linux.
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};

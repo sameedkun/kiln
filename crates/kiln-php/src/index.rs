@@ -79,13 +79,24 @@ pub fn parse(json: &str) -> Result<Vec<PhpRelease>, IndexError> {
         if numbers(minor).is_none_or(|n| n.len() != 2) {
             continue;
         }
-        let version = entry["version"]
+        let listed = entry["version"]
             .as_str()
             .ok_or_else(|| shape(format!("{minor}: no version")))?;
+        // A rebuild of the same PHP is listed as `8.4.27-1` (since 2026-10): the PHP is
+        // still 8.4.27, which is what `php -v` reports and what Kiln names it by.
+        let version = match listed.split_once('-') {
+            Some((version, rebuild))
+                if !rebuild.is_empty() && rebuild.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                version
+            }
+            Some(_) => "",
+            None => listed,
+        };
         if numbers(version).is_none_or(|n| n.len() != 3)
             || !version.starts_with(&format!("{minor}."))
         {
-            return Err(shape(format!("{minor}: odd version {version:?}")));
+            return Err(shape(format!("{minor}: odd version {listed:?}")));
         }
         // nts-vc15-x64 (7.4), nts-vs16-x64 (8.0–8.3), nts-vs17-x64 (8.4+): take the newest
         // toolchain if several are listed.
@@ -214,6 +225,26 @@ pub(crate) mod tests {
                 matches!(resolve(&releases, bad), Err(IndexError::BadSpec(_))),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn a_rebuild_is_the_same_php_version_with_its_own_archive() {
+        // The real index's shape on 2026-10-26: rebuilds carry a `-1` suffix.
+        let rebuilt = SAMPLE
+            .replace(r#""version": "8.4.27""#, r#""version": "8.4.27-1""#)
+            .replace(
+                "php-8.4.27-nts-Win32-vs17-x64.zip",
+                "php-8.4.27-1-nts-Win32-vs17-x64.zip",
+            );
+        let releases = parse(&rebuilt).unwrap();
+        let php84 = resolve(&releases, "8.4.27").unwrap();
+        assert_eq!(php84.version, "8.4.27");
+        assert_eq!(php84.archive, "php-8.4.27-1-nts-Win32-vs17-x64.zip");
+        assert_eq!(resolve(&releases, "8.4").unwrap(), php84);
+        for odd in ["8.4.27-", "8.4.27-rc1", "8.4.27-1-2", "8.4-1"] {
+            let json = SAMPLE.replace(r#""version": "8.4.27""#, &format!(r#""version": "{odd}""#));
+            assert!(matches!(parse(&json), Err(IndexError::Shape(_))), "{odd}");
         }
     }
 

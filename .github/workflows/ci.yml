@@ -56,6 +56,19 @@ jobs:
       - run: cargo test --workspace --locked
         env:
           PROPTEST_CASES: "512"
+      # Against a real Caddy (ADR 0011): `kiln web install` downloads the pinned, hash-checked
+      # release into the runner's Kiln folder, then the end-to-end test runs against it.
+      - name: real Caddy test
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          cargo run -p kiln-cli --bin kiln --locked -q -- web install
+          if [ "$RUNNER_OS" = Windows ]; then
+            caddy="$LOCALAPPDATA/Kiln/bin/kiln-caddy.exe"
+          else
+            caddy="$HOME/.local/share/kiln/bin/kiln-caddy"
+          fi
+          KILN_TEST_CADDY="$caddy" cargo test -p kiln-web --locked --test caddy -- --nocapture
 
   deny:
     name: licenses & advisories

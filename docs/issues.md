@@ -57,7 +57,7 @@ commits and PRs.
 | [I-45](#i-45) | environment | Commands run from the Claude desktop app see a virtualized AppData; Caddy can't store certificates there; manual checks must use a normal terminal | 📌 (confirmed; `kiln doctor` detects it) |
 | [I-46](#i-46) | Caddy | On Windows, the first admin request after each config load gets an EOF (admin listener swap) | ✅ (retry in the admin client) |
 | [I-47](#i-47) | Caddy | A live reload can close a brand-new connection without a response (about 1 per 3–7 reloads under saturating load, Windows) | 🔶 (accepted; recheck on Linux and newer Caddy) |
-| [I-48](#i-48) | downloads | A 60 s body timeout failed a real 34 MB PHP download on a slow line (ureq's body timeout is total, not idle) | ✅ (1 h total; no stall detection yet) |
+| [I-48](#i-48) | downloads | A 60 s body timeout failed a real 34 MB PHP download on a slow line (ureq's body timeout is total, not idle) | ✅ (1 h total; gives up after 1 min without data) |
 | [I-49](#i-49) | PHP | Renaming the extracted PHP folder into place failed with Access denied | ✅ (extract in place behind an incomplete-marker) |
 | [I-50](#i-50) | Caddy | A request in flight during a Caddy reload can't be retried if its worker is recycling at that moment (502) | 🔶 (rare at real limits; accepted) |
 | [I-51](#i-51) | supervisor | "Exited within 1 s" wrongly treated busy, healthy workers as crashed | ✅ (crash = non-zero exit) |
@@ -70,6 +70,7 @@ commits and PRs.
 | [I-58](#i-58) | dependencies | Two advisories during P1-04b: `ctutils` 0.4.3, and zbus 5's `zvariant` crates declared unmaintained | ✅ (ctutils 0.4.5; zbus 6) |
 | [I-59](#i-59) | uninstall | With the keyring locked, `kiln uninstall` deleted the state folder and orphaned the CA key's keyring item | ✅ (state folder kept until the key is removed) |
 | [I-60](#i-60) | web | On Windows, reading `kiln web start`'s output waited until the web server stopped (it inherited the output pipe) | ✅ (std handles kept from background processes) |
+| [I-61](#i-61) | php | windows.php.net started listing rebuilds as `8.4.27-1`; the index parser rejected the whole index, so no PHP could be installed | ✅ (rebuild suffix accepted) |
 
 ---
 
@@ -531,8 +532,11 @@ commits and PRs.
 - **Fix:** the body timeout is now 1 hour (`kiln_fetch::BODY_TIMEOUT`), enough for the 512 MB
   cap on a slow line. The retry downloaded the file in about 5 minutes. Connect (20 s) and
   response-header (60 s) timeouts are unchanged.
-- **Open:** there's no stall detection, so a dead connection can wait out the hour. Ctrl+C is
-  safe, because a partial file never enters the cache. Add an idle watchdog if users hit it.
+- **Stall detection added (2026-10-26):** `Fetcher::fetch` reads the body on a helper thread
+  and gives up when no data arrives for a minute (`kiln_fetch::STALL_TIMEOUT`). It deletes the
+  partial file and says the download stalled.
+  - Small files fetched with `get_text` (release indexes) still rely on the 60 s
+    response-header timeout and the body timeout.
 
 <a id="i-49"></a>
 ### I-49: Renaming the finished PHP folder failed with "Access is denied" ✅
@@ -748,3 +752,19 @@ commits and PRs.
 - **Fix:** `spawn_background` takes `kiln`'s standard handles out of inheritance while it
   starts the process (`kiln_sys::win::keep_std_handles`), then restores them.
 - **Rule:** a process meant to outlive `kiln` gets only the handles it is given.
+
+<a id="i-61"></a>
+### I-61: `kiln php install` failed on every version after windows.php.net listed rebuilds ✅
+- **Found:** the extended Windows VM scenario, 2026-10-26.
+  - Every `kiln php install` stopped with "the PHP release index has an unexpected shape:
+    8.2: odd version \"8.2.35-1\"".
+  - windows.php.net now lists rebuilt packages of 8.2–8.5 as `8.4.27-1`, with archives
+    named `php-8.4.27-1-nts-Win32-vs17-x64.zip`.
+  - The parser required exactly `X.Y.Z` and rejected the whole index over one entry, so no
+    version could be installed.
+- **Fix:** a numeric `-N` suffix is read as a rebuild of the same PHP. The release is still
+  PHP 8.4.27, the version `php -v` reports and Kiln names it by. The archive named in the
+  index is downloaded and checked against its SHA-256 as before. Any other suffix is still
+  refused.
+- **Rule:** an upstream index can change shape at any time; keep a test with its real shape
+  and fail with the entry named, as here.
