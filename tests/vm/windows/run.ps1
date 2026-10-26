@@ -3,8 +3,7 @@
 # Build the binaries first, with the C runtime linked in (a fresh Windows may lack it):
 #   $env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win
 # Copies them and the scripts in over PowerShell Direct, starts scenario.ps1 in the test user's
-# desktop session, answers Windows' certificate dialog through the VM's keyboard, and prints
-# C:\kiln-test\scenario.log. Exit code 0 = passed.
+# desktop session, and prints C:\kiln-test\scenario.log. Exit code 0 = passed.
 param(
     [string] $Name = 'kiln-win11',
     [string] $Bin = (Join-Path $PSScriptRoot '..\..\..\target\vm-win\release'),
@@ -14,6 +13,14 @@ $ErrorActionPreference = 'Stop'
 $cred = Import-Clixml $Credential
 $s = New-PSSession -VMName $Name -Credential $cred
 Invoke-Command -Session $s {
+    # A restored checkpoint keeps the address it had then; the host's virtual switch may have
+    # moved since (after a host reboot), leaving the VM without a network.
+    # Renewing alone keeps the stale lease; release it first.
+    ipconfig /release | Out-Null
+    ipconfig /renew | Out-Null
+    if (-not (Test-NetConnection downloads.php.net -Port 443 -InformationLevel Quiet)) {
+        throw 'The test VM has no internet connection.'
+    }
     New-Item -ItemType Directory -Force C:\kiln-test\bin | Out-Null
     Remove-Item C:\kiln-test\status, C:\kiln-test\scenario.log -ErrorAction SilentlyContinue
 }
@@ -35,24 +42,24 @@ Invoke-Command -Session $s {
     Start-ScheduledTask -TaskName KilnScenario
 } -ArgumentList $cred.UserName
 
-# Follow it; answer the certificate dialog once it is open.
+# Follow it. When Windows' certificate dialog is open, the scenario writes where its Yes button
+# is (screen pixels) to C:\kiln-test\click; click there with the VM's mouse.
 $cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$Name'"
-$kb = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_Keyboard
-$answered = $false
+$mouse = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_SyntheticMouse
 $deadline = (Get-Date).AddMinutes(30)
 do {
     Start-Sleep -Seconds 5
-    $state = Invoke-Command -Session $s { Get-Content C:\kiln-test\status -ErrorAction SilentlyContinue }
-    if ($state -eq 'waiting-trust-dialog' -and -not $answered) {
-        Start-Sleep -Seconds 5   # let the dialog open and take focus
-        & (Join-Path $PSScriptRoot '..\..\..\spikes\windows-dns\vm\screen.ps1') -Name $Name `
-            -Out (Join-Path $env:TEMP 'kiln-trust-dialog.png') | Out-Null
-        # "Do you want to install this certificate?": Alt+Y chooses Yes.
-        Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = 0x12 } | Out-Null
-        Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = 0x59 } | Out-Null
-        Invoke-CimMethod -InputObject $kb -MethodName ReleaseKey -Arguments @{ keyCode = 0x12 } | Out-Null
-        $answered = $true
-        Write-Host "Answered the certificate dialog (screenshot: $env:TEMP\kiln-trust-dialog.png)."
+    $state, $click = Invoke-Command -Session $s {
+        Get-Content C:\kiln-test\status -ErrorAction SilentlyContinue
+        if (Test-Path C:\kiln-test\click) { Get-Content C:\kiln-test\click; Remove-Item C:\kiln-test\click }
+    }
+    if ($click) {
+        $x, $y = $click -split ' '
+        Invoke-CimMethod -InputObject $mouse -MethodName SetAbsolutePosition `
+            -Arguments @{ horizontalPosition = [int32]$x; verticalPosition = [int32]$y } | Out-Null
+        Start-Sleep -Milliseconds 500
+        Invoke-CimMethod -InputObject $mouse -MethodName ClickButton -Arguments @{ buttonIndex = [int32]1 } | Out-Null
+        Write-Host "Clicked Yes in the certificate dialog at $x,$y."
     }
 } until ($state -eq 'done' -or (Get-Date) -gt $deadline)
 

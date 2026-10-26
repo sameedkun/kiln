@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-22 · **Current phase:** **Phase 1 in progress** (14 of 15 tasks done) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-26 · **Current phase:** **Phase 1 tasks done** (15 of 15) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0023 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0024 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -23,6 +23,7 @@
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
 | Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (static builds, SHA-256 pinned in Kiln) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. **Part d done:** `kiln shims install` puts `php`/`composer` shims on PATH through a block in the shell startup files, undone byte for byte. **Linux now matches Windows for Phase 1.** |
+| Integration tests in VMs | **done**: scripted runs in Windows 11 (with Laravel Herd running) and Ubuntu 24.04. A full Kiln session, then `kiln uninstall`, leaves the machine **as it was** in both; Herd's site and settings are untouched, and Kiln survives Herd restarting |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -69,7 +70,7 @@ Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 | P1-12 | `kiln doctor` | **done** 2026-10-22 | [ADR 0017](adr/0017-kiln-doctor.md); see below. Read-only checks with fixes; `--json` |
 | P1-13 | `kiln plan` / `undo` / `uninstall --dry-run` | **done** 2026-10-22 | [ADR 0018](adr/0018-history-undo-uninstall.md); see below. `kiln history`, `kiln undo` (newest), `kiln uninstall` with full plan |
 | P1-14 | Coexistence detection | **done** 2026-10-22 | [ADR 0019](adr/0019-coexistence.md); see below. Herd/XAMPP/Laragon/WampServer detected, free ports picked, shared names warned |
-| P1-15 | Integration test VMs | later | needs a reliable VM build ([I-36](issues.md#i-36)) |
+| P1-15 | Integration test VMs | **done** 2026-10-26 (Linux 10-23) | [ADR 0024](adr/0024-integration-test-vms.md); see below. Both scenarios pass: uninstall leaves the machine as it was, Herd untouched and restartable. Found and fixed [I-59](issues.md#i-59), [I-60](issues.md#i-60); [I-36](issues.md#i-36) fixed |
 
 ### P1-01 delivered (2026-10-21)
 
@@ -876,6 +877,44 @@ terminals).
 - Two `kiln undo`s left `~/.profile` and `~/.bashrc` **byte-identical** to before (SHA-256),
   and `php` was Ubuntu's again.
 
+### P1-15 delivered (2026-10-26)
+
+[ADR 0024](adr/0024-integration-test-vms.md). Each scenario follows the same steps:
+
+1. Snapshot everything Kiln may touch.
+2. Run a full Kiln session.
+3. Run `kiln uninstall --yes`.
+4. Snapshot again and compare.
+
+Plain files are compared byte for byte. Trust stores and the keyring are compared by their
+entries.
+
+- **Ubuntu 24.04** (`tests/vm/ubuntu/run.sh`), passed 2026-10-23: **16 checks; 14 facts
+  identical** after uninstall.
+  - The session covers PHP 8.4, Caddy, the CA in the keyring, NSS and the system store,
+    hosts, PHP-FPM sites over HTTP and HTTPS, and the shell-profile shims.
+  - The polkit prompts are allowed by a test-VM-only rule.
+- **Windows 11 with Laravel Herd running** (`tests/vm/windows/run.ps1`), passed 2026-10-26:
+  **all 20 checks pass; 14 facts identical** after uninstall.
+  - **Port:** Kiln moved off port 80, which Herd holds, and said so. HTTP and HTTPS sites
+    answered at the URLs it printed, and the HTTPS site was trusted.
+  - **Doctor:** `kiln doctor` named Herd.
+  - **Shims:** the `php` shim worked in a new terminal.
+  - **Herd restart:** `herd restart` left Kiln's server running with the same PID
+    ([I-11](issues.md#i-11)), and both tools' sites still answered.
+  - **After uninstall:** Herd's site still answered, and its hosts block and settings were
+    unchanged.
+  - **Prompts:** UAC is set to not prompt (test VM only). Windows' two certificate dialogs
+    (add and delete) are clicked by the host with the VM's mouse, at the Yes position the
+    scenario reports.
+- **Found by these runs:**
+  - [I-59](issues.md#i-59): with a locked keyring, uninstall orphaned the CA key's item.
+  - [I-60](issues.md#i-60): on Windows, reading `kiln web start`'s output waited forever,
+    because the background server inherited `kiln`'s output pipe. Both are fixed.
+- **VM build:** the Windows test VM now builds unattended ([I-36](issues.md#i-36) fixed).
+- **How to run them:** in [dev-setup.md](dev-setup.md#integration-tests-in-vms-p1-15).
+  They are manual, not CI.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -901,7 +940,7 @@ terminals).
 | Download stall detection (idle watchdog) | [I-48](issues.md#i-48) | no |
 | Real-Caddy test in CI (`KILN_TEST_CADDY`) | P1-15 | no |
 | Firefox enterprise-roots / NSS import | [ADR 0010](adr/0010-local-certificate-authority.md) §10–11 | no (with `kiln doctor` / P1-04) |
-| Reliable unattended VM build | [I-36](issues.md#i-36) | blocks P1-15 |
+| Reliable unattended VM build | [I-36](issues.md#i-36) | done 2026-10-23 (P1-15) |
 | Edge DoH matrix + second WireGuard trial | [I-39](issues.md#i-39) | no |
 | OpenVPN, Firefox/Chrome, WordPress and Unicode-path tests | spike results | no (Phase 1 integration suite) |
 | rustup auto-install deprecation | [I-09](issues.md#i-09) | no |
@@ -948,6 +987,8 @@ terminals).
 | 2026-10-23 | **P1-04b rechecked by the user after the I-57 fix**, in the VM's desktop. `kiln ca info` showed the root key in the desktop keyring. `hosts sync` (#1) and `ca trust --system` (#2–#4) each took one polkit dialog. **curl** printed the page. The doctor showed Chrome's database, the Firefox snap profile and the system store all trusting the root. **Firefox** loaded `https://hello.test:8443/` with no warning, and **Chrome** showed "Connection is secure". |
 | 2026-10-23 | **P1-04 part c done:** ADR 0022. Linux PHP: static-php-cli `common` builds of 8.2–8.5 (x86-64) with SHA-256 pinned in Kiln from two agreeing downloads, or the distribution's PHP via `--system`. Served by PHP-FPM masters under the supervisor (SIGTERM stop, parent-death signal), with per-site versions switched live. The `bulk` set was rejected for lacking `pdo_sqlite`. 247 tests on Windows, 218 in the VM. |
 | 2026-10-23 | **P1-04 part d done, so P1-04 is complete:** ADR 0023. Linux shims are copies of `kiln-shim` (role from `argv[0]` first), put on PATH by Kiln's `env` script, sourced from a journaled marked block in each shell startup file (`env.shell_profile`). Verified in the VM: per-folder PHP, Composer, exit codes, one PATH entry, and byte-identical undo. 251 tests on Windows, 222 in the VM. **Linux now matches Windows for Phase 1; only P1-15 is left.** |
+| 2026-10-23 | **P1-15 started** (`0d04c62`, `4103bd3`): ADR 0024. The Ubuntu scenario passed: 16 checks, 14 facts identical after uninstall. Found and fixed I-59 (uninstall with a locked keyring). The Windows test VM built unattended on the first try (I-36 fixed). Laravel Herd was installed in it and a `clean` checkpoint taken. |
+| 2026-10-26 | **P1-15 done, so all 15 Phase 1 tasks are done.** The Windows scenario passed with Herd running: 20 checks, 14 facts identical after uninstall, and Herd restarted without affecting Kiln. Fixed I-60 (Windows: background processes inherited `kiln`'s output pipe). The test harness learned that certificate dialogs open behind focused windows, that a restored VM keeps a stale IP lease, and that the guest's resolution changes between boots. |
 
 ## How to update this file
 

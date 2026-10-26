@@ -125,7 +125,7 @@ mod platform {
     use std::process::{Child, Command};
     use std::time::Duration;
 
-    use crate::win::Process;
+    use crate::win::{Process, keep_std_handles};
 
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -137,8 +137,10 @@ mod platform {
     }
 
     /// No console window, its own process group (so Ctrl+C in the terminal doesn't reach it),
-    /// and out of the caller's job object where that's allowed, so it outlives `kiln`.
+    /// and out of the caller's job object where that's allowed, so it outlives `kiln`. It gets
+    /// none of `kiln`'s own standard handles, only the ones `command` gives it (I-60).
     pub fn spawn_background(command: &mut Command) -> io::Result<Child> {
+        let _own = keep_std_handles();
         let flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
         command.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB);
         match command.spawn() {

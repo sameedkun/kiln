@@ -55,18 +55,25 @@ The host can't run both VMs at once.
      asking (`ConsentPromptBehaviorAdmin = 0`; UAC stays on, so Kiln's helper is still
      launched through `runas` as in real use).
    - The scenario that needs a desktop (Windows' certificate dialog) runs in the logged-on
-     session through a scheduled task. The host answers that dialog through the VM's
-     keyboard, after checking a screenshot of it.
+     session through a scheduled task. Windows asks before adding and before deleting a
+     root. Each dialog opens behind whatever window has focus, so keystrokes sent from the
+     host can miss it, and its buttons are panes that UI Automation can't press. The
+     scenario finds the dialog through UI Automation, minimizes the windows that could cover
+     it, and reports where Yes is in screen pixels. The host clicks there with the VM's
+     synthetic mouse; clicks made inside the session by a scheduled task don't reach the
+     dialog.
 
 ### Herd coexistence (Windows)
 
 4. The Windows VM gets Laravel Herd (free edition), installed and running before the first
    snapshot. Its state joins the comparison:
    - Herd's hosts block, byte for byte;
-   - its configuration folder (`~\.config\herd`) and `sites.json`, by hash;
-   - its services answering on 80/443.
+   - its settings (`~\.config\herd\config`: `config.json`, `php.json`, Valet's
+     `config.json`, its nginx configs), by hash;
+   - its server listening on port 80.
 5. During the session the scenario also checks:
-   - Kiln picked 8080/8443 and said Herd holds 80/443;
+   - Kiln moved off the ports Herd holds (80, and 443 once Herd serves a site over HTTPS),
+     said why, and serves its sites at the URLs it printed;
    - `kiln doctor` reports Herd under "Other tools";
    - **Herd restarting** (quit and start) doesn't stop Kiln's server, whose image name
      `kiln-caddy.exe` Herd's `nginx.exe` clean-up doesn't match
@@ -93,7 +100,8 @@ The host can't run both VMs at once.
   covered by the manual checks already done (I-42, P1-04a/b).
 - A run downloads PHP and Caddy again each time (uninstall deletes Kiln's cache), which
   costs a few minutes on slow mirrors.
-- The runs are manual (`tests/vm/run.ps1`), not CI: GitHub's runners can't host these VMs.
+- The runs are manual (`tests/vm/windows/run.ps1`, `tests/vm/ubuntu/run.sh`), not CI:
+  GitHub's runners can't host these VMs.
 
 ## Alternatives considered
 

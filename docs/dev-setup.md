@@ -126,6 +126,36 @@ More VM notes:
   doesn't stop them, resume with `curl -C -`, and compare sizes with the server's
   `Content-Length` before hashing. `dl.static-php.dev` is slow and drops connections.
 
+## Integration tests in VMs (P1-15)
+
+[ADR 0024](adr/0024-integration-test-vms.md): snapshot the machine, run a full Kiln session,
+`kiln uninstall --yes`, snapshot again, compare. Run them by hand before a release; CI can't
+host these VMs.
+
+- **Ubuntu:** `tests/vm/ubuntu/run.sh <vm-address>` from Git Bash. It copies the working
+  tree in, builds it, and runs `scenario.sh`. One-time setup: `setup-test-vm.sh` (a polkit
+  rule for the test user, test VM only).
+- **Windows:** `tests/vm/windows/run.ps1 -Bin <folder>` from an elevated PowerShell (Hyper-V).
+  - Build the binaries first, with the C runtime linked in:
+    `$env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win`.
+  - The VM `kiln-win11` (Windows 11 Pro, user `kiln`, `E:\VMs\kiln-win11`) is built by
+    `new-vm.ps1`. `setup-test-vm.ps1` turns off the UAC prompt for administrators and adds
+    the Herd test site `~\Herd\herdcheck`.
+  - Laravel Herd (free) is installed in it: `Herd-setup.exe /S` as an elevated scheduled
+    task, then its onboarding by keyboard. Choices: no Defender exclusion, firewall prompt
+    cancelled, AI providers and Herd Pro skipped. The `clean` checkpoint is Herd installed
+    and running, with no Kiln.
+  - Reset before each run: `Restore-VMSnapshot -VMName kiln-win11 -Name clean`, then
+    `Start-VM`. If restoring fails with "not enough memory", the checkpoint is applied
+    anyway; `Start-VM` again once ~4 GB is free. The Ubuntu VM can't run at the same time.
+  - PowerShell Direct (`Invoke-Command -VMName kiln-win11 -Credential (Import-Clixml
+    E:\VMs\kiln-win11\vm-credential.xml)`) runs commands in it without a network.
+  - Things that need the desktop run as a scheduled task with an Interactive logon.
+  - The host clicks with the VM's synthetic mouse at positions the guest reports in screen
+    pixels. The guest's resolution changes between boots, so never scale from a screenshot.
+  - Synthetic mouse clicks don't reach Herd's window (Electron), but the keyboard does.
+  - `C:\kiln-test\scenario.log` keeps the report.
+
 ## Running the spikes
 
 Spikes live in `spikes/` (outside the Cargo workspace). Downloads go to each spike's

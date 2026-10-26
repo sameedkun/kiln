@@ -20,7 +20,7 @@ commits and PRs.
 | [I-08](#i-08) | tooling | Git Bash quirks: `C:` in PATH, MSYS `whoami` shadowing Windows `whoami` | ✅ |
 | [I-09](#i-09) | tooling | rustup warns that auto-installing the pinned toolchain is deprecated | 🔶 minor |
 | [I-10](#i-10) | process | CI Node 20 deprecation; push rejected after a Dependabot merge | ✅ |
-| [I-11](#i-11) | coexistence | Herd kills every `nginx.exe` on the machine when it starts | ✅ (Kiln runs `kiln-caddy.exe`; restart test in P1-15) |
+| [I-11](#i-11) | coexistence | Herd kills every `nginx.exe` on the machine when it starts | ✅ (Kiln runs `kiln-caddy.exe`; Herd restart verified in P1-15) |
 | [I-12](#i-12) | TLS | Windows Schannel clients hard-fail revocation checks against a local CA | 📌 |
 | [I-13](#i-13) | benchmark | Laravel file sessions under synthetic load distorted throughput about 10× | ✅ |
 | [I-14](#i-14) | runtime | Synchronized php-cgi recycling plus passive health checks caused a 10 s outage | 📌 (staggered limits + no passive checks in P1-09) |
@@ -45,7 +45,7 @@ commits and PRs.
 | [I-33](#i-33) | testing | Headless Edge prints nothing in session 0 and exits when elevated | ✅ |
 | [I-34](#i-34) | infra | Checkpoint taken mid-setup → reboot → test credentials rejected | ✅ (lesson) |
 | [I-35](#i-35) | infra | Checkpoint restore failed: not enough host memory | ✅ |
-| [I-36](#i-36) | infra | Rebuilt VM installs (~20 GB written) but has no bootable OS | 🔶 |
+| [I-36](#i-36) | infra | Rebuilt VM installs (~20 GB written) but has no bootable OS | ✅ (DVD prompt and boot order fixed in P1-15) |
 | [I-37](#i-37) | DNS | NRPT + stub stops resolving when offline and under a full-tunnel VPN | 📌 (NRPT rejected) |
 | [I-38](#i-38) | code | `ReplaceFileW` needs Win32 FFI, but `unsafe` is forbidden | ✅ (ADR 0008) |
 | [I-39](#i-39) | testing | Edge × DNS-over-HTTPS results unreliable (cold session); recheck pending | 🔶 |
@@ -69,6 +69,7 @@ commits and PRs.
 | [I-57](#i-57) | TLS | After the CA changed, Caddy kept serving site certificates from the old intermediate; browsers rejected the site though every store trusted the new root | ✅ (found in the user's VM check) |
 | [I-58](#i-58) | dependencies | Two advisories during P1-04b: `ctutils` 0.4.3, and zbus 5's `zvariant` crates declared unmaintained | ✅ (ctutils 0.4.5; zbus 6) |
 | [I-59](#i-59) | uninstall | With the keyring locked, `kiln uninstall` deleted the state folder and orphaned the CA key's keyring item | ✅ (state folder kept until the key is removed) |
+| [I-60](#i-60) | web | On Windows, reading `kiln web start`'s output waited until the web server stopped (it inherited the output pipe) | ✅ (std handles kept from background processes) |
 
 ---
 
@@ -299,14 +300,24 @@ commits and PRs.
   on retry (5.4 GB free). Keep test VMs at ≤ 4 GB, or close heavy apps during VM tests.
 
 <a id="i-36"></a>
-### I-36: Rebuilt VM has no bootable OS 🔶
+### I-36: Rebuilt VM has no bootable OS ✅
 - The third and fourth builds wrote ~20 GB, but the firmware reports "boot loader did not load
   an operating system" (diagnosed with `vm/screen.ps1`). The first two builds with the same
   script worked. Suspects: host memory pressure during setup ([I-35](#i-35)), and the
   DVD → PXE → disk boot order (PXE removed in the script).
 - **Impact:** only blocks the optional recheck ([I-39](#i-39)). Spike 02's decision doesn't depend on it.
-- **Next:** one rebuild with the host idle, then inspect Setup logs from the VHDX if it fails
-  again (needs an elevated mount).
+- **Fixed in P1-15** (`tests/vm/windows/new-vm.ps1`, [ADR 0024](adr/0024-integration-test-vms.md) §6):
+  - "Press any key to boot from DVD" is answered only right after power-on.
+  - Both DVDs are ejected once the VM's heartbeat is OK, so later reboots can only come from
+    the disk.
+  - Dynamic memory (2–4 GB).
+  - `kiln-win11` then built unattended on the first try (2026-10-23).
+- **Later lessons from the same VM:**
+  - A restored checkpoint keeps its old IP lease. After a host reboot the Default Switch
+    moves to another subnet, so `run.ps1` releases and renews the lease and checks the
+    connection first.
+  - The guest's resolution changes between boots (1920×1200, then 1024×768). Click
+    positions come from the guest in screen pixels and are never scaled from a screenshot.
 
 <a id="i-37"></a>
 ### I-37: NRPT + stub fails offline and under a full-tunnel VPN 📌
@@ -720,3 +731,20 @@ commits and PRs.
   before that thing is gone.
 - **Left over:** the five orphaned items in the test VM's keyring are removed by hand
   (Passwords and Keys, label "Kiln local CA root key") when someone is at its desktop.
+
+<a id="i-60"></a>
+### I-60: On Windows, reading `kiln web start`'s output waited forever ✅
+- **Found:** the Windows VM scenario hung after `kiln web start`, although `kiln` had exited
+  and the sites answered.
+  - Windows hands a child process every inheritable handle of its parent, not only the
+    three standard handles it is given.
+  - A shell makes `kiln`'s stdout and stderr inheritable, so `kiln-caddy` and
+    `kiln-supervisor` kept `kiln`'s output pipe open after `kiln` exited.
+  - Anything reading that output (`kiln web start | ...`, a script or CI step capturing
+    it) waited until the web server stopped.
+  - Stopping both processes in the VM let the scenario continue at once, which confirmed it.
+  - Linux is unaffected: Rust opens descriptors close-on-exec, and the child's 0–2 are
+    replaced.
+- **Fix:** `spawn_background` takes `kiln`'s standard handles out of inheritance while it
+  starts the process (`kiln_sys::win::keep_std_handles`), then restores them.
+- **Rule:** a process meant to outlive `kiln` gets only the handles it is given.

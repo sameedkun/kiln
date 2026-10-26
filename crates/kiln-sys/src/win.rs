@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     ERROR_CANCELLED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER,
-    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
@@ -33,7 +33,9 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
 };
-use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+use windows_sys::Win32::System::Console::{
+    GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -922,6 +924,52 @@ impl ElevatedProcess {
     }
 }
 
+/// Keeps this process's standard handles out of the children it starts until the returned
+/// guard drops. Windows hands a child every inheritable handle of its parent, not only the
+/// three it is given, and a shell makes `kiln`'s stdout and stderr inheritable: a server
+/// started with them would hold `kiln`'s output pipe open after `kiln` exits, so whatever reads
+/// that output (`kiln web start | ...`, a script capturing it) would wait forever (I-60).
+/// Children given `Stdio::inherit` are unaffected: std duplicates the handle for them.
+pub fn keep_std_handles() -> StdHandlesKept {
+    let mut cleared = Vec::new();
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle takes no pointers and returns a handle this process owns (or
+        // null / INVALID_HANDLE_VALUE, skipped below); nothing is closed.
+        let handle = unsafe { GetStdHandle(id) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE || cleared.contains(&handle) {
+            continue;
+        }
+        if is_inheritable(handle) == Some(true)
+            // SAFETY: a live handle of this process; only its inherit flag changes.
+            && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } != 0
+        {
+            cleared.push(handle);
+        }
+    }
+    StdHandlesKept(cleared)
+}
+
+fn is_inheritable(handle: HANDLE) -> Option<bool> {
+    let mut flags = 0;
+    // SAFETY: `handle` is a live handle of this process and `flags` a u32 to write to.
+    let ok = unsafe { GetHandleInformation(handle, &raw mut flags) } != 0;
+    ok.then_some(flags & HANDLE_FLAG_INHERIT != 0)
+}
+
+/// Restores the standard handles [`keep_std_handles`] took out of inheritance.
+#[derive(Debug)]
+#[must_use = "the handles become inheritable again when this drops"]
+pub struct StdHandlesKept(Vec<HANDLE>);
+
+impl Drop for StdHandlesKept {
+    fn drop(&mut self) {
+        for &handle in &self.0 {
+            // SAFETY: a standard handle of this process, as in `keep_std_handles`.
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1191,6 +1239,21 @@ mod tests {
 
     /// Manual: shows a UAC prompt. Run with
     /// `cargo test -p kiln-sys -- --ignored elevation_runs_and_reports_the_exit_code`.
+    #[test]
+    fn std_handles_are_kept_from_children_while_the_guard_lives() {
+        // SAFETY: no pointers; the handle stays this process's.
+        let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        if stderr.is_null() || stderr == INVALID_HANDLE_VALUE {
+            return; // no stderr to check
+        }
+        // SAFETY: a live handle of this process; makes it inheritable, as a shell would.
+        unsafe { SetHandleInformation(stderr, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        let guard = keep_std_handles();
+        assert_eq!(is_inheritable(stderr), Some(false));
+        drop(guard);
+        assert_eq!(is_inheritable(stderr), Some(true));
+    }
+
     #[test]
     #[ignore = "shows a UAC prompt; run manually"]
     fn elevation_runs_and_reports_the_exit_code() {
