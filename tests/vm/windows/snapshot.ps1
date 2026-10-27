@@ -27,7 +27,7 @@ foreach ($t in $thumbprints) { "  $t" }
 foreach ($d in @("$env:APPDATA\Kiln", "$env:LOCALAPPDATA\Kiln")) {
     if (Test-Path $d) { "dir $d present" } else { "dir $d absent" }
 }
-"kiln processes: $((Get-Process kiln-caddy, kiln-supervisor -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object) -join ' ')"
+"kiln processes: $((Get-Process kiln-caddy, kiln-supervisor, kilnd -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object) -join ' ')"
 # By Kiln's folders, not '*\Kiln\*': the test user is called kiln, so Herd's PHP matches that.
 $kilnPhp = Get-Process php-cgi -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -like "$env:LOCALAPPDATA\Kiln\*" -or $_.Path -like "$env:APPDATA\Kiln\*" }

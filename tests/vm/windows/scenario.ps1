@@ -147,9 +147,10 @@ Check 'the Laravel app over HTTPS (served from public\, PHP 8.4)' {
 Check 'WordPress over HTTPS (its setup page)' {
     $url = SiteUrl 'wp-site.test'
     Expect 'https://' $url
-    # Its setup pages (the first may be a language chooser), not "Requirements Not Met",
-    # which WordPress shows without the mysqli extension (I-62).
-    $page = curl.exe -sSL --ssl-revoke-best-effort $url 2>&1 | Out-String
+    # Its setup page, not "Requirements Not Met", which WordPress shows without the mysqli
+    # extension (I-62). Step 1 directly: step 0, the language chooser, fetches the language
+    # list from api.wordpress.org and fails when that is slow.
+    $page = curl.exe -sSL --ssl-revoke-best-effort "${url}wp-admin/setup-config.php?step=1" 2>&1 | Out-String
     Expect 'Setup Configuration File' $page
     if ($page.Contains('Requirements Not Met')) { throw "WordPress says: Requirements Not Met" }
 }
@@ -177,6 +178,34 @@ Check 'Herd''s site answers again (within a minute of its restart)' {
     until ((Get-Date) -gt $deadline)
     Expect 'herd check' $page
 }
+
+Say '== kilnd (ADR 0026)'
+Check 'daemon start' { Kiln daemon start }
+Check 'daemon status reports the web server running' { Expect 'Web server: running' (Kiln daemon status) }
+Check 'the daemon restarts a web server that died' {
+    $old = (Get-Process kiln-caddy).Id
+    Stop-Process -Id $old -Force
+    $deadline = (Get-Date).AddSeconds(60)
+    do {
+        Start-Sleep -Seconds 3
+        $now = Get-Process kiln-caddy -ErrorAction SilentlyContinue
+    } until (($now -and $now.Id -ne $old) -or (Get-Date) -gt $deadline)
+    if (-not $now -or $now.Id -eq $old) { throw 'kiln-caddy was not restarted' }
+}
+Check 'Kiln''s sites answer after that restart' {
+    $deadline = (Get-Date).AddSeconds(30)
+    do { $page = Get 'http://static-site.test:8080/'; if ($page.Contains('static from kiln')) { break }; Start-Sleep 2 }
+    until ((Get-Date) -gt $deadline)
+    Expect 'static from kiln' $page
+}
+Check 'daemon status counts the restart' { Expect 'Restarts by the daemon: 1' (Kiln daemon status) }
+Check 'daemon call web.status (the API)' { Expect '"running"' (Kiln daemon call web.status) }
+Check 'daemon stop leaves the web server running' {
+    Kiln daemon stop
+    Expect 'static from kiln' (Get 'http://static-site.test:8080/')
+}
+# Running again, so uninstall has to stop it.
+Check 'daemon start (again, for uninstall)' { Kiln daemon start }
 
 Say '== uninstall'
 Status 'waiting-untrust-dialog'

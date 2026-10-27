@@ -861,6 +861,84 @@ pub fn connect_unix(path: &Path) -> io::Result<std::net::TcpStream> {
     Ok(socket.into_stream())
 }
 
+/// A listening Unix domain socket (for `kilnd`'s API, [ADR 0026] §3).
+///
+/// Neither it nor the connections it accepts are inherited by child processes, so a program
+/// the daemon starts can't keep its socket open (as with I-60).
+///
+/// [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
+#[derive(Debug)]
+pub struct UnixListener(SOCKET);
+
+impl UnixListener {
+    /// Binds `path` and listens. The file must not exist yet: remove a stale one first.
+    pub fn bind(path: &Path) -> io::Result<Self> {
+        use windows_sys::Win32::Networking::WinSock::{
+            WSA_FLAG_NO_HANDLE_INHERIT, WSA_FLAG_OVERLAPPED, WSASocketW, bind, listen,
+        };
+        let address = unix_address(path)?;
+        winsock_started()?;
+        // SAFETY: plain call with no protocol info; INVALID_SOCKET is handled below.
+        let raw = unsafe {
+            WSASocketW(
+                i32::from(AF_UNIX),
+                SOCK_STREAM,
+                0,
+                std::ptr::null(),
+                0,
+                WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT,
+            )
+        };
+        if raw == INVALID_SOCKET {
+            return Err(last_wsa_error());
+        }
+        let socket = OwnedSocket(raw);
+        // SAFETY: `socket` is valid and `address` is a fully initialised SOCKADDR_UN of the
+        // size passed with it.
+        let bound = unsafe {
+            bind(
+                socket.0,
+                (&raw const address).cast::<SOCKADDR>(),
+                addr_len(),
+            )
+        };
+        if bound != 0 {
+            return Err(last_wsa_error());
+        }
+        // SAFETY: `socket` is a valid, bound socket.
+        if unsafe { listen(socket.0, 16) } != 0 {
+            return Err(last_wsa_error());
+        }
+        let raw = socket.0;
+        std::mem::forget(socket);
+        Ok(Self(raw))
+    }
+
+    /// Waits for the next connection.
+    pub fn accept(&self) -> io::Result<std::net::TcpStream> {
+        use windows_sys::Win32::Networking::WinSock::accept;
+        // SAFETY: `self.0` is a valid listening socket; null address pointers are allowed.
+        let client = unsafe { accept(self.0, std::ptr::null_mut(), std::ptr::null_mut()) };
+        if client == INVALID_SOCKET {
+            return Err(last_wsa_error());
+        }
+        let client = OwnedSocket(client);
+        // SAFETY: a socket is a kernel handle; only its inherit flag changes.
+        let set = unsafe { SetHandleInformation(client.0 as HANDLE, HANDLE_FLAG_INHERIT, 0) };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(client.into_stream())
+    }
+}
+
+impl Drop for UnixListener {
+    fn drop(&mut self) {
+        // SAFETY: we own this socket and close it exactly once.
+        unsafe { closesocket(self.0) };
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Elevation
 // ---------------------------------------------------------------------------------------------
@@ -1024,34 +1102,21 @@ mod tests {
         let _ = child.wait();
     }
 
-    /// A minimal `AF_UNIX` listener, for tests only: bind, listen, accept one connection.
-    struct TestUnixListener(OwnedSocket);
-
-    impl TestUnixListener {
-        fn bind(path: &Path) -> Self {
-            use windows_sys::Win32::Networking::WinSock::{bind, listen};
-            let address = unix_address(path).unwrap();
-            let socket = OwnedSocket::new().unwrap();
-            // SAFETY: valid socket and fully initialised address of the given size.
-            let bound = unsafe {
-                bind(
-                    socket.0,
-                    (&raw const address).cast::<SOCKADDR>(),
-                    addr_len(),
-                )
-            };
-            assert_eq!(bound, 0, "{}", last_wsa_error());
-            // SAFETY: valid bound socket.
-            assert_eq!(unsafe { listen(socket.0, 1) }, 0, "{}", last_wsa_error());
-            Self(socket)
-        }
-
-        fn accept(&self) -> std::net::TcpStream {
-            use windows_sys::Win32::Networking::WinSock::accept;
-            // SAFETY: valid listening socket; null address pointers are allowed.
-            let client = unsafe { accept(self.0.0, std::ptr::null_mut(), std::ptr::null_mut()) };
-            assert_ne!(client, INVALID_SOCKET, "{}", last_wsa_error());
-            OwnedSocket(client).into_stream()
+    #[test]
+    fn unix_sockets_are_not_inherited() {
+        use std::os::windows::io::AsRawSocket;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("i.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let _client = connect_unix(&path).unwrap();
+        let accepted = listener.accept().unwrap();
+        let accepted = usize::try_from(accepted.as_raw_socket()).unwrap();
+        for socket in [listener.0, accepted] {
+            let mut flags = 0;
+            // SAFETY: a live socket handle of this process and a u32 to write to.
+            let ok = unsafe { GetHandleInformation(socket as HANDLE, &raw mut flags) };
+            assert_ne!(ok, 0);
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
         }
     }
 
@@ -1064,9 +1129,9 @@ mod tests {
             "temp path too long for this test: {}",
             path.display()
         );
-        let listener = TestUnixListener::bind(&path);
+        let listener = UnixListener::bind(&path).unwrap();
         let server = std::thread::spawn(move || {
-            let mut stream = listener.accept();
+            let mut stream = listener.accept().unwrap();
             let mut buf = [0u8; 5];
             stream.read_exact(&mut buf).unwrap();
             stream

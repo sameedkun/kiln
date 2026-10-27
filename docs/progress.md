@@ -935,8 +935,8 @@ its local API and autostart.
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| P2-01 | `kilnd` daemon + versioned local API | next | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |
-| P2-02 | Per-user autostart (journaled) | planned | ADR 0026 §6 |
+| P2-01 | `kilnd` daemon + versioned local API | **done** 2026-10-27 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md); see below. Watchdog, API, `kiln daemon …`, change lock; VM-checked on Windows and Ubuntu |
+| P2-02 | Per-user autostart (journaled) | next | ADR 0026 §6 |
 | P2-03 | Automatic intermediate renewal with live reload | planned | ADR 0026 §2 |
 | P2-04 | `kiln.toml` project config + `herd.yml` import | planned | ADR at start |
 | P2-05 | Node runtimes and shims | planned | ADR at start |
@@ -946,6 +946,51 @@ its local API and autostart.
 | P2-09 | Proxy sites | planned | |
 | P2-10 | Configurable TLD | planned | amends ADR 0010 |
 | P2-11 | VM scenarios for Phase 2 | planned | extends ADR 0024 |
+
+### P2-01 delivered (2026-10-27)
+
+[ADR 0026](adr/0026-kilnd-daemon-and-local-api.md).
+
+- **New crate `kiln-daemon`**, with the `kilnd` binary:
+  - **Protocol:** JSON-RPC 2.0, one message per line, lines capped at 1 MiB.
+  - **Socket:** a per-user Unix socket, `<local data>/kilnd.sock`.
+  - **Server:** a blocking accept loop with one thread per connection.
+  - **Client:** what `kiln daemon …` uses.
+  - **Events:** `events.subscribe`, delivered as notifications on the same connection.
+  - **Methods:** `kiln.hello` (API version 1), `daemon.status`, `daemon.shutdown`,
+    `web.status`.
+  - **One daemon per user:** `<state>/kilnd.lock`.
+  - **Log:** `<local data>/logs/kilnd.log`, rotated at 5 MB with 3 old files kept. On
+    Windows the daemon has no console window.
+- **Watchdog:** every 15 s it reads the web server's and PHP supervisor's PID files.
+  - It repairs only a program that exited without `kiln web stop` (a crash or a reboot): it
+    runs `kiln web start`, or `kiln web restart` if only PHP exited.
+  - It backs off between repairs (0 s up to 10 min) and resets after 10 healthy minutes.
+  - Repairs are logged, counted in `daemon.status` and sent as `web.repaired` events.
+- **`kiln daemon start | stop | status | call <method> [json]`.**
+  - `stop` leaves the web server running.
+  - `kiln uninstall` stops the daemon first.
+- **Change lock:** every `kiln` command that can change state now takes `<state>/kiln.lock`.
+  - A second command waits and says so; read-only commands don't take the lock.
+  - This also closes an older gap where two `kiln` commands could change state at once.
+- **`kiln-sys`:** an `AF_UNIX` listener for Windows. Neither the listener nor the
+  connections it accepts can be inherited, so a program the daemon starts can't hold its
+  socket open (as in I-60).
+- **Tests:** 263 on Windows (new: protocol, repair rules, backoff, log rotation, and socket
+  tests for calls, errors, a too-long line and events). Clippy and the tests also pass on
+  Linux in the VM.
+- **VM scenarios gained a `kilnd` section:**
+  - start the daemon;
+  - force-kill `kiln-caddy` and check the daemon brings it back with a new PID (18 s on
+    Windows), with the sites answering again and the restart counted;
+  - call the API;
+  - check `daemon stop` leaves the web server running;
+  - check `uninstall` stops a running daemon.
+
+  **Windows passed 37 checks, Ubuntu 35**, each leaving the machine as it was.
+- **On the way:** the WordPress checks now open setup step 1 directly. Step 0 fetches the
+  language list from api.wordpress.org, and a slow answer ran past PHP's 30 s limit in the
+  VM ("critical error").
 
 ## Open items carried into Phase 1
 
@@ -1024,6 +1069,7 @@ its local API and autostart.
 | 2026-10-26 | Phase 1 exit criterion reworded: uninstall is verified by scripted VM runs before each release, not by CI VMs (ADR 0024). Fixed I-61: `kiln php install` had failed on every version after windows.php.net started listing rebuilds as `8.4.27-1`. Stalled downloads now give up after a minute (I-48). CI runs the real-Caddy test on Windows and Linux (`a83c527`). |
 | 2026-10-27 | **Phase 1 done.** The VM scenarios gained a real Laravel app, WordPress and a second PHP version. They found I-62: WordPress needs `mysqli`, so it is enabled on Windows. On Linux, no published static build had both `mysqli` and `pdo_sqlite`. ADR 0025: Kiln builds its own static PHP 8.2–8.5 in the new public repo `sameedkun/kiln-php` (release `2026-10-27`, licences included), pinned after two independent downloads and runs. Windows passed 29 checks, Ubuntu 28; uninstall left both machines as they were. |
 | 2026-10-27 | **Phase 2 planned:** exit criteria and 11 tasks (P2-01 to P2-11) in plan.md. ADR 0026: `kilnd`, an optional per-user daemon that keeps the web stack running, renews the intermediate certificate and serves a JSON-RPC API over a per-user Unix socket. Autostart is journaled. Next: P2-01. |
+| 2026-10-27 | **P2-01 done:** new `kiln-daemon` crate and `kilnd` binary (ADR 0026): JSON-RPC API over a per-user socket with `kiln.hello`, `daemon.status/shutdown`, `web.status` and events; a watchdog that restarts a web stack that exited on its own, with backoff; `kiln daemon start/stop/status/call`; a change lock for every changing `kiln` command; a non-inheritable `AF_UNIX` listener on Windows. VM scenarios: Windows 37 checks, Ubuntu 35, including killing Caddy and the daemon bringing it back. |
 
 ## How to update this file
 

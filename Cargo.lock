@@ -693,6 +693,7 @@ dependencies = [
  "clap",
  "kiln-coexist",
  "kiln-core",
+ "kiln-daemon",
  "kiln-doctor",
  "kiln-fetch",
  "kiln-helper",
@@ -726,6 +727,21 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "kiln-daemon"
+version = "0.0.0"
+dependencies = [
+ "kiln-state",
+ "kiln-supervisor",
+ "kiln-sys",
+ "kiln-web",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
 ]
 
 [[package]]

@@ -43,7 +43,7 @@ Invoke-Command -Session $s {
     New-Item -ItemType Directory -Force C:\kiln-test\bin | Out-Null
     Remove-Item C:\kiln-test\status, C:\kiln-test\scenario.log -ErrorAction SilentlyContinue
 }
-foreach ($exe in 'kiln.exe', 'kiln-helper.exe', 'kiln-supervisor.exe', 'kiln-shim.exe') {
+foreach ($exe in 'kiln.exe', 'kiln-helper.exe', 'kiln-supervisor.exe', 'kiln-shim.exe', 'kilnd.exe') {
     Copy-Item -ToSession $s -Path (Join-Path $Bin $exe) -Destination C:\kiln-test\bin\ -Force
 }
 foreach ($script in 'scenario.ps1', 'snapshot.ps1') {

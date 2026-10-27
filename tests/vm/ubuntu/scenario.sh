@@ -74,7 +74,7 @@ check "a PHP site over HTTPS, trusted through the system store, on its own PHP 8
 check "the Laravel app over HTTPS (served from public/, PHP 8.4)" \
     contains "Laravel" curl -fsS "https://laravel-app.test:$https/"
 check "WordPress over HTTPS (its setup page)" \
-    contains "Setup Configuration File" curl -fsSL "https://wp-site.test:$https/"
+    contains "Setup Configuration File" curl -fsSL "https://wp-site.test:$https/wp-admin/setup-config.php?step=1"
 check "an HTTP request to the secure site redirects to HTTPS" \
     contains "https://php-app.test" curl -sSI "http://php-app.test:$http/"
 shim_php() { sh -c "cd '$1' && bash -ic 'php -r \"echo PHP_VERSION;\"' 2>/dev/null"; }
@@ -82,6 +82,32 @@ check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." s
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
 check "kiln doctor reports no problems" "$K" doctor
 check "kiln history lists the system changes" contains "in effect" "$K" history
+
+echo "== kilnd (ADR 0026)"
+caddy_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-caddy" {print $1}'; }
+restarted() { # restarted <old pid>: waits up to a minute for a new kiln-caddy
+    i=0
+    while [ $i -lt 20 ]; do
+        sleep 3
+        now=$(caddy_pid)
+        [ -n "$now" ] && [ "$now" != "$1" ] && return 0
+        i=$((i + 1))
+    done
+    return 1
+}
+check "daemon start" "$K" daemon start
+check "daemon status reports the web server running" contains "Web server: running" "$K" daemon status
+old=$(caddy_pid)
+kill -9 "$old"
+check "the daemon restarts a web server that died" restarted "$old"
+check "Kiln's sites answer after that restart" \
+    sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln' && exit 0; sleep 2; done; exit 1"
+check "daemon status counts the restart" contains "Restarts by the daemon: 1" "$K" daemon status
+check "daemon call web.status (the API)" contains '"running"' "$K" daemon call web.status
+check "daemon stop leaves the web server running" \
+    sh -c "'$K' daemon stop && curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln'"
+# Running again, so uninstall has to stop it.
+check "daemon start (again, for uninstall)" "$K" daemon start
 
 echo "== uninstall"
 check "kiln uninstall" "$K" uninstall --yes

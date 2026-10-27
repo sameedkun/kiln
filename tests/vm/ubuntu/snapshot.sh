@@ -33,5 +33,5 @@ for d in "$HOME/.local/share/kiln" "$HOME/.local/state/kiln"; do
 done
 
 # Kiln's processes, and anything of this user's listening on a port.
-echo "processes: $(ps -u "$(id -u)" -o comm= | grep -E '^(kiln-caddy|kiln-supervisor|php-fpm)$' | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
+echo "processes: $(ps -u "$(id -u)" -o comm= | grep -E '^(kiln-caddy|kiln-supervisor|kilnd|php-fpm)$' | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
 echo "listening: $(ss -ltnpH 2>/dev/null | grep 'users:' | awk '{print $4}' | sort | tr '\n' ' ')"

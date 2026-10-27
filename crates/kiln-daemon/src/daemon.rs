@@ -1,0 +1,455 @@
+//! What `kilnd` does ([ADR 0026] §2, §5): answers the API, keeps the web stack running, and
+//! logs to a rotating file. Changes are made by running the `kiln` program next to it, so
+//! there is one implementation of each operation and the CLI's change lock applies.
+//!
+//! [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
+
+use kiln_sys::background::ProcStatus;
+use serde_json::{Value, json};
+
+use crate::proto::{API_VERSION, Hello, RpcError};
+use crate::server::{Events, Handler};
+
+/// Rotate the log at this size, keeping this many old files.
+const LOG_LIMIT: u64 = 5 * 1024 * 1024;
+const LOG_KEEP: u32 = 3;
+
+/// Where the daemon's files are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Paths {
+    /// Kiln's local data folder (`%LOCALAPPDATA%\Kiln`, `~/.local/share/kiln`).
+    pub local: PathBuf,
+    /// The API socket.
+    pub socket: PathBuf,
+    /// Held while a daemon runs, so there is only ever one.
+    pub lock: PathBuf,
+    pub log: PathBuf,
+}
+
+impl Paths {
+    #[must_use]
+    pub fn new(local: &Path, state: &Path) -> Self {
+        Self {
+            local: local.to_path_buf(),
+            socket: local.join("kilnd.sock"),
+            lock: state.join("kilnd.lock"),
+            log: local.join("logs").join("kilnd.log"),
+        }
+    }
+
+    /// The user's real folders, or `None` without a home directory.
+    #[must_use]
+    pub fn for_user() -> Option<Self> {
+        Some(Self::new(
+            &kiln_state::default_local_dir()?,
+            &kiln_state::default_state_dir()?,
+        ))
+    }
+}
+
+/// The daemon's program file next to `kiln` (`kilnd.exe` on Windows).
+pub const EXE_NAME: &str = if cfg!(windows) { "kilnd.exe" } else { "kilnd" };
+const KILN_EXE: &str = if cfg!(windows) { "kiln.exe" } else { "kiln" };
+
+/// An append-only log that rotates at [`LOG_LIMIT`].
+#[derive(Debug)]
+pub struct Log {
+    path: PathBuf,
+    file: Mutex<Option<File>>,
+}
+
+impl Log {
+    #[must_use]
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            file: Mutex::new(None),
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Appends a timestamped line. Logging never fails the daemon.
+    pub fn line(&self, text: &str) {
+        let mut slot = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() || fs::metadata(&self.path).is_ok_and(|m| m.len() > LOG_LIMIT) {
+            *slot = None;
+            self.rotate();
+            *slot = self.open().ok();
+        }
+        if let Some(file) = slot.as_mut() {
+            let now = time::OffsetDateTime::now_utc();
+            let _ = writeln!(file, "{now} {text}");
+        }
+    }
+
+    fn open(&self) -> io::Result<File> {
+        if let Some(dir) = self.path.parent() {
+            kiln_sys::background::create_private_dir(dir)?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+    }
+
+    fn rotate(&self) {
+        if !fs::metadata(&self.path).is_ok_and(|m| m.len() > LOG_LIMIT) {
+            return;
+        }
+        let numbered = |n: u32| self.path.with_extension(format!("log.{n}"));
+        let _ = fs::remove_file(numbered(LOG_KEEP));
+        for n in (1..LOG_KEEP).rev() {
+            let _ = kiln_sys::rename_replace(&numbered(n), &numbered(n + 1));
+        }
+        let _ = kiln_sys::rename_replace(&self.path, &numbered(1));
+    }
+}
+
+/// What the watchdog does about the web stack's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repair {
+    Nothing,
+    /// Caddy exited without `kiln web stop` (a crash or a reboot): `kiln web start`.
+    Start,
+    /// Caddy runs but the PHP supervisor exited: `kiln web restart`.
+    Restart,
+}
+
+/// A PID file whose process has gone means it didn't stop through Kiln; a clean stop removes
+/// the PID file. Only those are repaired, so a stopped server stays stopped.
+#[must_use]
+pub fn repair_for(caddy: &ProcStatus, supervisor: &ProcStatus) -> Repair {
+    match (caddy, supervisor) {
+        (ProcStatus::Stale { .. }, _) => Repair::Start,
+        (ProcStatus::Running { .. }, ProcStatus::Stale { .. }) => Repair::Restart,
+        _ => Repair::Nothing,
+    }
+}
+
+/// Waits between repairs: none for the first, then longer each time, reset after a healthy
+/// stretch, so a server that crashes at once doesn't restart in a tight loop.
+#[derive(Debug, Default)]
+pub struct Backoff {
+    attempts: usize,
+    next: Option<Instant>,
+    healthy_since: Option<Instant>,
+}
+
+const DELAYS: [u64; 6] = [0, 30, 60, 120, 300, 600];
+const HEALTHY_RESET: Duration = Duration::from_mins(10);
+
+impl Backoff {
+    /// Whether a repair may run at `now`; if so, it counts as an attempt.
+    pub fn try_repair(&mut self, now: Instant) -> bool {
+        if self.next.is_some_and(|next| now < next) {
+            return false;
+        }
+        self.healthy_since = None;
+        let delay = DELAYS[(self.attempts + 1).min(DELAYS.len() - 1)];
+        self.attempts += 1;
+        self.next = Some(now + Duration::from_secs(delay));
+        true
+    }
+
+    /// Records a healthy check; after [`HEALTHY_RESET`] of them the delays start over.
+    pub fn healthy(&mut self, now: Instant) {
+        let since = *self.healthy_since.get_or_insert(now);
+        if now.duration_since(since) >= HEALTHY_RESET {
+            self.attempts = 0;
+            self.next = None;
+        }
+    }
+
+    #[must_use]
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+}
+
+/// The running daemon: its API methods and its watchdog.
+#[derive(Debug)]
+pub struct Daemon {
+    paths: Paths,
+    log: Arc<Log>,
+    events: Arc<Events>,
+    started: SystemTime,
+    shutdown: Mutex<Option<Sender<()>>>,
+    repairs: Mutex<Vec<Value>>,
+}
+
+impl Daemon {
+    #[must_use]
+    pub fn new(paths: Paths, log: Arc<Log>, events: Arc<Events>, shutdown: Sender<()>) -> Self {
+        Self {
+            paths,
+            log,
+            events,
+            started: SystemTime::now(),
+            shutdown: Mutex::new(Some(shutdown)),
+            repairs: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The methods [`Handler::call`] answers, besides `events.subscribe`.
+    pub const METHODS: &[&str] = &[
+        "kiln.hello",
+        "daemon.status",
+        "daemon.shutdown",
+        "web.status",
+        "events.subscribe",
+    ];
+
+    fn web_server(&self) -> kiln_web::WebServer {
+        kiln_web::WebServer::new(
+            self.paths.local.join("bin").join(kiln_web::EXE_NAME),
+            self.paths.local.join("caddy"),
+        )
+    }
+
+    fn supervisor(&self) -> io::Result<kiln_supervisor::SupervisorHandle> {
+        Ok(kiln_supervisor::SupervisorHandle::new(
+            kiln_supervisor::handle::default_exe()?,
+            self.paths.local.join("supervisor"),
+        ))
+    }
+
+    /// The web server's and the PHP supervisor's state.
+    pub fn web_states(&self) -> Result<(ProcStatus, ProcStatus), String> {
+        let caddy = self.web_server().status().map_err(|e| e.to_string())?;
+        let supervisor = self
+            .supervisor()
+            .and_then(|s| s.status())
+            .map_err(|e| e.to_string())?;
+        Ok((caddy, supervisor))
+    }
+
+    /// One watchdog pass: repairs the web stack if it exited on its own.
+    pub fn watch(&self, backoff: &mut Backoff, now: Instant) {
+        let (caddy, supervisor) = match self.web_states() {
+            Ok(states) => states,
+            Err(e) => {
+                self.log.line(&format!(
+                    "watchdog: cannot read the web server's state: {e}"
+                ));
+                return;
+            }
+        };
+        let repair = repair_for(&caddy, &supervisor);
+        if repair == Repair::Nothing {
+            backoff.healthy(now);
+            return;
+        }
+        if !backoff.try_repair(now) {
+            return;
+        }
+        let args: &[&str] = match repair {
+            Repair::Start => &["web", "start"],
+            Repair::Restart => &["web", "restart"],
+            Repair::Nothing => return,
+        };
+        self.log.line(&format!(
+            "watchdog: {} (web server {caddy:?}, PHP supervisor {supervisor:?}); running `kiln {}` (attempt {})",
+            match repair {
+                Repair::Start => "the web server exited on its own",
+                _ => "the PHP supervisor exited on its own",
+            },
+            args.join(" "),
+            backoff.attempts()
+        ));
+        let outcome = run_kiln(args);
+        let ok = outcome.is_ok();
+        match &outcome {
+            Ok(output) | Err(output) => {
+                for line in output.lines() {
+                    self.log.line(&format!("  {line}"));
+                }
+            }
+        }
+        let record = json!({
+            "at": time::OffsetDateTime::now_utc().to_string(),
+            "command": format!("kiln {}", args.join(" ")),
+            "ok": ok,
+        });
+        self.repairs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record.clone());
+        self.events.publish("web.repaired", record);
+    }
+
+    fn status(&self) -> Value {
+        let uptime = self.started.elapsed().map_or(0, |d| d.as_secs());
+        let started = time::OffsetDateTime::from(self.started).to_string();
+        let repairs = self
+            .repairs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        json!({
+            "pid": std::process::id(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "started": started,
+            "uptime_secs": uptime,
+            "log": self.log.path(),
+            "socket": self.paths.socket,
+            "repairs": repairs,
+        })
+    }
+}
+
+/// Runs `kiln <args>` from the daemon's own folder; `Ok` if it succeeded. Either way the text
+/// is what it printed.
+fn run_kiln(args: &[&str]) -> Result<String, String> {
+    let exe = std::env::current_exe()
+        .map(|me| me.with_file_name(KILN_EXE))
+        .map_err(|e| e.to_string())?;
+    let mut command = Command::new(&exe);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
+        Ok(text)
+    } else {
+        Err(text)
+    }
+}
+
+fn state_json(status: &ProcStatus) -> Value {
+    match status {
+        ProcStatus::Running { pid } => json!({"state": "running", "pid": pid}),
+        ProcStatus::Stale { pid } => json!({"state": "exited", "pid": pid}),
+        ProcStatus::Stopped => json!({"state": "stopped"}),
+    }
+}
+
+impl Handler for Daemon {
+    fn call(&self, method: &str, _params: &Value) -> Result<Value, RpcError> {
+        match method {
+            "kiln.hello" => serde_json::to_value(Hello {
+                api: API_VERSION,
+                version: env!("CARGO_PKG_VERSION").into(),
+                methods: Self::METHODS.iter().map(|m| (*m).to_owned()).collect(),
+            })
+            .map_err(|e| RpcError::kiln(e.to_string())),
+            "daemon.status" => Ok(self.status()),
+            "daemon.shutdown" => {
+                self.log.line("stopping: asked through the API");
+                if let Some(shutdown) = self
+                    .shutdown
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = shutdown.send(());
+                }
+                Ok(json!({"stopping": true}))
+            }
+            "web.status" => {
+                let (caddy, supervisor) = self.web_states().map_err(RpcError::kiln)?;
+                Ok(json!({"server": state_json(&caddy), "php_supervisor": state_json(&supervisor)}))
+            }
+            other => Err(RpcError::method_not_found(other)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUNNING: ProcStatus = ProcStatus::Running { pid: 1 };
+    const EXITED: ProcStatus = ProcStatus::Stale { pid: 1 };
+    const STOPPED: ProcStatus = ProcStatus::Stopped;
+
+    #[test]
+    fn only_a_stack_that_exited_on_its_own_is_repaired() {
+        assert_eq!(
+            repair_for(&EXITED, &EXITED),
+            Repair::Start,
+            "crash or reboot"
+        );
+        assert_eq!(repair_for(&EXITED, &STOPPED), Repair::Start);
+        assert_eq!(repair_for(&RUNNING, &EXITED), Repair::Restart);
+        assert_eq!(repair_for(&RUNNING, &RUNNING), Repair::Nothing);
+        assert_eq!(
+            repair_for(&RUNNING, &STOPPED),
+            Repair::Nothing,
+            "static sites only"
+        );
+        assert_eq!(
+            repair_for(&STOPPED, &STOPPED),
+            Repair::Nothing,
+            "stopped by `kiln web stop`"
+        );
+        assert_eq!(repair_for(&STOPPED, &EXITED), Repair::Nothing);
+    }
+
+    #[test]
+    fn repairs_back_off_and_reset_after_a_healthy_stretch() {
+        let start = Instant::now();
+        let mut backoff = Backoff::default();
+        assert!(backoff.try_repair(start), "the first repair runs at once");
+        assert!(!backoff.try_repair(start + Duration::from_secs(10)));
+        assert!(backoff.try_repair(start + Duration::from_secs(31)));
+        assert!(
+            !backoff.try_repair(start + Duration::from_secs(60)),
+            "now 60 s apart"
+        );
+        assert!(backoff.try_repair(start + Duration::from_secs(92)));
+        backoff.healthy(start + Duration::from_secs(100));
+        backoff.healthy(start + Duration::from_secs(100) + HEALTHY_RESET);
+        assert_eq!(backoff.attempts(), 0);
+        assert!(backoff.try_repair(start + Duration::from_secs(101) + HEALTHY_RESET));
+    }
+
+    #[test]
+    fn the_log_rotates_and_keeps_three_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs").join("kilnd.log");
+        let log = Log::new(path.clone());
+        log.line("first");
+        assert!(fs::read_to_string(&path).unwrap().contains("first"));
+        for n in 0..5 {
+            fs::write(&path, vec![b'x'; usize::try_from(LOG_LIMIT).unwrap() + 1]).unwrap();
+            log.line(&format!("after rotation {n}"));
+        }
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("after rotation 4")
+        );
+        for n in 1..=LOG_KEEP {
+            assert!(path.with_extension(format!("log.{n}")).exists(), "log.{n}");
+        }
+        assert!(
+            !path
+                .with_extension(format!("log.{}", LOG_KEEP + 1))
+                .exists()
+        );
+    }
+}

@@ -32,17 +32,27 @@ Constraints:
 
 1. **`kilnd` is a separate per-user binary and is optional.**
    - Every CLI command keeps working without it, as in Phase 1.
-   - The CLI stays the authority for changes and never needs the daemon. The daemon calls
-     the same library functions in its own process. There is one implementation of each
+   - The CLI stays the authority for changes and never needs the daemon. To change
+     something, such as restarting the web stack, the daemon runs the `kiln` program next to
+     it (`kiln web start`) and logs what it printed. There is one implementation of each
      operation, not a CLI path and a daemon path.
-   - Concurrency is handled where it is today: the state store (SQLite) and the operation
-     engine's journal, under a per-user lock file (`<state>/kiln.lock`) that serializes
-     changes from any process.
+   - Read-only answers (`web.status`, …) come from the library crates in the daemon's own
+     process.
+   - **One change at a time:** every `kiln` command that can change state takes a per-user
+     lock file, `<state>/kiln.lock` (OS file locks via `File::lock`).
+     - A second command waits and says so, whether it comes from the user or the daemon.
+     - Read-only commands don't take the lock.
+     - Neither does `kiln uninstall`: it stops the daemon first and then deletes the
+       folder the lock file is in.
 2. **What it does:**
-   - **Keeps the web stack running.** It adopts Caddy and `kiln-supervisor` if they already
-     run, recorded by their PID files with the image checks of
-     [ADR 0011](0011-caddy-integration.md) §12, or starts them. If either exits unexpectedly,
-     it restarts it with backoff.
+   - **Keeps the web stack running.** Every 15 s it reads Caddy's and `kiln-supervisor`'s
+     PID files, with the image checks of [ADR 0011](0011-caddy-integration.md) §12.
+     - A PID file whose process has gone means the program exited without `kiln web stop`,
+       such as after a crash or a reboot, because a clean stop removes the PID file.
+     - Only then does it repair: `kiln web start` if Caddy exited, `kiln web restart` if
+       only the supervisor did. A server the user stopped stays stopped.
+     - Repairs back off (0, 30, 60, 120, 300 and then 600 s apart), and the delays reset
+       after 10 healthy minutes.
    - **Runs timers:** intermediate renewal (P2-03; daily check, renew when under 10 days
      left, then a live Caddy reload). Later: PHP update checks.
    - **Serves the local API** (§3).

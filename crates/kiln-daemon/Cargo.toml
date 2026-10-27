@@ -1,0 +1,28 @@
+[package]
+name = "kiln-daemon"
+description = "kilnd: Kiln's optional per-user daemon and its JSON-RPC API (ADR 0026)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kilnd"
+path = "src/main.rs"
+
+[dependencies]
+kiln-state.workspace = true
+kiln-supervisor.workspace = true
+kiln-sys.workspace = true
+kiln-web.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

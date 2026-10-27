@@ -228,7 +228,10 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
         return Ok(());
     }
 
-    // 1. Stop.
+    // 1. Stop: the daemon first, so it doesn't restart what is stopped next.
+    if crate::daemon::stop_quietly()? {
+        println!("Stopped Kiln's daemon.");
+    }
     if let Some(pid) = crate::web::server()?.stop().map_err(|e| e.to_string())? {
         println!("Stopped the web server (PID {pid}).");
     }

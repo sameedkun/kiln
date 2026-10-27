@@ -11,6 +11,7 @@ use kiln_platform::hosts;
 
 mod apply;
 mod coexist;
+mod daemon;
 mod doctor;
 mod history;
 mod php;
@@ -112,6 +113,11 @@ enum Command {
         #[command(subcommand)]
         action: WebAction,
     },
+    /// Kiln's optional background daemon (kilnd): keeps the web server running.
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// List what Kiln changed on this machine (newest first) and what is still in effect.
     History {
         /// Include operations that were undone or rolled back.
@@ -141,6 +147,23 @@ enum Command {
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonAction {
+    /// Start the daemon for this user (it runs until stopped or you log out).
+    Start,
+    /// Stop the daemon. The web server keeps running.
+    Stop,
+    /// Show whether the daemon runs and what it watches.
+    Status,
+    /// Make one call to the daemon's API and print the JSON result.
+    Call {
+        /// The method, e.g. `web.status`.
+        method: String,
+        /// Its parameters as JSON.
+        params: Option<String>,
     },
 }
 
@@ -362,6 +385,59 @@ fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), 
     Ok(())
 }
 
+/// Whether `command` may change Kiln's state or the machine, and so takes the change lock.
+/// `uninstall` doesn't: it stops the daemon and deletes the folder the lock file is in.
+fn changes_state(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Plan { .. }
+            | Command::State { .. }
+            | Command::Sites
+            | Command::Which { .. }
+            | Command::History { .. }
+            | Command::Doctor { .. }
+            | Command::Uninstall { .. }
+            | Command::Daemon { .. }
+            | Command::Ca {
+                action: CaAction::Info
+            }
+            | Command::Php {
+                action: PhpAction::Available | PhpAction::List
+            }
+            | Command::Web {
+                action: WebAction::Status | WebAction::Config
+            }
+    )
+}
+
+/// Takes `<state>/kiln.lock`, waiting (and saying so) while another change holds it.
+fn change_lock() -> Result<Option<std::fs::File>, String> {
+    use std::fs::TryLockError;
+    let Some(dir) = kiln_state::default_state_dir() else {
+        return Ok(None);
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let path = dir.join("kiln.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            eprintln!("Waiting for another kiln command (or Kiln's daemon) to finish…");
+            file.lock()
+                .map_err(|e| format!("cannot lock {}: {e}", path.display()))?;
+        }
+        Err(TryLockError::Error(e)) => {
+            return Err(format!("cannot lock {}: {e}", path.display()));
+        }
+    }
+    Ok(Some(file))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Doctor { json } = cli.command {
@@ -371,8 +447,24 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    let result = match cli.command {
-        Command::Doctor { .. } => unreachable!("handled above"),
+    // One change at a time, whether from another `kiln` or from the daemon (ADR 0026 §1).
+    let result = if changes_state(&cli.command) {
+        change_lock().and_then(|_lock| run(cli.command))
+    } else {
+        run(cli.command)
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(command: Command) -> Result<(), String> {
+    match command {
+        Command::Doctor { .. } => unreachable!("handled in main"),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, &tld, file),
@@ -446,13 +538,12 @@ fn main() -> ExitCode {
             WebAction::Status => web::status(),
             WebAction::Config => web::print_config(),
         },
+        Command::Daemon { action } => match action {
+            DaemonAction::Start => daemon::start(),
+            DaemonAction::Stop => daemon::stop(),
+            DaemonAction::Status => daemon::status(),
+            DaemonAction::Call { method, params } => daemon::call(&method, params.as_deref()),
+        },
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("error: {message}");
-            ExitCode::FAILURE
-        }
     }
 }
