@@ -47,11 +47,12 @@ fn site(dir: &Path, name: &str, secure: bool) -> SiteSpec {
 
 /// Status code, headers and body of `GET /` with `Host: host`, over `stream`.
 fn get(mut stream: impl Read + Write, host: &str) -> (u16, String) {
-    write!(
+    // A connection reset before the request is sent comes back as an empty response, which
+    // the callers' assertions report.
+    let _ = write!(
         stream,
         "GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
+    );
     let mut response = Vec::new();
     // TLS peers may close without close_notify; what was read so far is what matters.
     let _ = stream.read_to_end(&mut response);
@@ -185,7 +186,12 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
             std::thread::spawn(move || {
                 let (mut ok, mut failed) = (0u32, Vec::new());
                 while !stop_load.load(std::sync::atomic::Ordering::Relaxed) {
-                    let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, http_port)).unwrap();
+                    // On Linux a connection queued on the old listener at a handoff can be
+                    // reset before it completes: the same event as an empty close (I-47).
+                    let Ok(stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, http_port)) else {
+                        failed.push((0, String::new()));
+                        continue;
+                    };
                     stream
                         .set_read_timeout(Some(Duration::from_secs(10)))
                         .unwrap();

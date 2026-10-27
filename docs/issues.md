@@ -520,8 +520,13 @@ commits and PRs.
 - **Decision:** accepted for a local dev server. Reloads only happen when the user changes a
   site, so a person rarely hits it, and refreshing the page fixes it.
   - The end-to-end test allows at most one empty close per reload and nothing else.
-- **Next:** measure on Linux (SO_REUSEPORT listener sharing) with P1-04, and recheck on newer
-  Caddy releases. Report upstream if it still happens.
+- **Linux (2026-10-27, GitHub's Ubuntu runner):** the same event appeared there as a
+  connection reset while connecting, which the test hadn't expected: a connection queued on
+  the old listener at the handoff is reset. It passed in the two CI runs before.
+  - The test now counts a failed connect or send like an empty close, within the same limit
+    of one per reload.
+- **Next:** measure the Linux rate, and recheck on newer Caddy releases. Report upstream if
+  it still happens.
 
 ## P1-08: downloads and PHP runtimes
 
