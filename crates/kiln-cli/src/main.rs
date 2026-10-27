@@ -158,6 +158,18 @@ enum DaemonAction {
     Stop,
     /// Show whether the daemon runs and what it watches.
     Status,
+    /// Start the daemon whenever you log in (and now). Undo with `disable` or `kiln undo`.
+    Enable {
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Stop starting the daemon at login. A running daemon keeps running.
+    Disable {
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Make one call to the daemon's API and print the JSON result.
     Call {
         /// The method, e.g. `web.status`.
@@ -397,7 +409,12 @@ fn changes_state(command: &Command) -> bool {
             | Command::History { .. }
             | Command::Doctor { .. }
             | Command::Uninstall { .. }
-            | Command::Daemon { .. }
+            | Command::Daemon {
+                action: DaemonAction::Start
+                    | DaemonAction::Stop
+                    | DaemonAction::Status
+                    | DaemonAction::Call { .. }
+            }
             | Command::Ca {
                 action: CaAction::Info
             }
@@ -438,7 +455,33 @@ fn change_lock() -> Result<Option<std::fs::File>, String> {
     Ok(Some(file))
 }
 
+/// Exit code when the output's reader went away (128 + SIGPIPE, as for Unix tools).
+const CLOSED_OUTPUT: i32 = 141;
+
+/// Ends quietly when the program reading kiln's output has stopped (`kiln … | head`), as
+/// Unix tools do, instead of panicking at the next `println!` (I-63). Other panics are
+/// reported as before.
+fn quiet_on_closed_output() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        // Unix: EPIPE "Broken pipe" (32). Windows: "The pipe is being closed" (232).
+        if message.starts_with("failed printing to std")
+            && (message.contains("os error 32)") || message.contains("os error 232)"))
+        {
+            std::process::exit(CLOSED_OUTPUT);
+        }
+        default(info);
+    }));
+}
+
 fn main() -> ExitCode {
+    quiet_on_closed_output();
     let cli = Cli::parse();
     if let Command::Doctor { json } = cli.command {
         return if doctor::run(json) {
@@ -542,6 +585,8 @@ fn run(command: Command) -> Result<(), String> {
             DaemonAction::Start => daemon::start(),
             DaemonAction::Stop => daemon::stop(),
             DaemonAction::Status => daemon::status(),
+            DaemonAction::Enable { yes } => daemon::enable(yes),
+            DaemonAction::Disable { yes } => daemon::disable(yes),
             DaemonAction::Call { method, params } => daemon::call(&method, params.as_deref()),
         },
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),

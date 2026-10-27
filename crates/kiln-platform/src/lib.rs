@@ -4,6 +4,7 @@
 //! system directly. Per-OS implementations arrive in Phase 1 and must pass the shared contract
 //! tests (apply → verify → revert → original state).
 
+pub mod autostart;
 pub mod describe;
 pub mod hosts;
 pub mod hosts_op;

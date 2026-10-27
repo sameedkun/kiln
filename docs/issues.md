@@ -72,6 +72,8 @@ commits and PRs.
 | [I-60](#i-60) | web | On Windows, reading `kiln web start`'s output waited until the web server stopped (it inherited the output pipe) | ✅ (std handles kept from background processes) |
 | [I-61](#i-61) | php | windows.php.net started listing rebuilds as `8.4.27-1`; the index parser rejected the whole index, so no PHP could be installed | ✅ (rebuild suffix accepted) |
 | [I-62](#i-62) | php | WordPress needs `mysqli`: not enabled on Windows, missing from the static Linux builds | ✅ (enabled on Windows; Kiln's own Linux builds, ADR 0025) |
+| [I-63](#i-63) | cli | Piping `kiln` into `head` panicked with "Broken pipe" once the reader exited | ✅ (quiet exit 141) |
+| [I-64](#i-64) | durability | A registry value written just before a hard reset was lost (Windows writes the registry lazily) | ✅ (`RegFlushKey` after each write) |
 
 ---
 
@@ -796,3 +798,33 @@ commits and PRs.
     - The Ubuntu scenario then passed with WordPress, Laravel and PHP 8.3 (2026-10-27, 28
       checks).
 - **Rule:** a check that a page works must look for something only the working page shows.
+
+## P2-02: autostart
+
+<a id="i-63"></a>
+### I-63: `kiln … | head` panicked with "failed printing to stdout: Broken pipe" ✅
+- **Found:** the Ubuntu autostart test piped `kiln web start` into `head -2`.
+  - Once `head` exited, kiln's next `println!` panicked and printed a Rust backtrace hint.
+  - The work was already done, so it only looked broken.
+  - Rust ignores SIGPIPE and panics on a failed print instead. Windows reports the same
+    case as "The pipe is being closed" (os error 232).
+- **Fix:** a panic hook in `kiln` turns exactly that panic (a failed print to stdout or
+  stderr with error 32 or 232) into a quiet exit with code 141 (128 + SIGPIPE), as Unix
+  tools do. Other panics are reported as before.
+- **Checked:** 20 runs of `kiln php available | true` in the Ubuntu VM: no panic, exit
+  code 141. Not yet seen on Windows.
+
+<a id="i-64"></a>
+### I-64: A registry value written just before a hard reset was lost ✅
+- **Found:** the first Windows autostart test hard-reset the VM seconds after
+  `kiln daemon enable`.
+  - Files survived, but the `Run` value didn't: Windows writes registry changes to disk
+    lazily.
+  - After a crash or power loss, the journal would say autostart was on while it wasn't.
+    The user PATH (`kiln shims install`) had the same exposure.
+- **Fix:** `kiln-sys` flushes the `HKCU` key (`RegFlushKey`) after every value it writes
+  or deletes.
+  - The autostart test then passed with a hard reset (`autostart.ps1 -HardReset`) as well
+    as with a normal reboot.
+- **Rule:** a journaled change is durable before the journal says it is applied: files
+  are fsynced, and registry keys are flushed.

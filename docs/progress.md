@@ -936,8 +936,8 @@ its local API and autostart.
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | P2-01 | `kilnd` daemon + versioned local API | **done** 2026-10-27 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md); see below. Watchdog, API, `kiln daemon …`, change lock; VM-checked on Windows and Ubuntu |
-| P2-02 | Per-user autostart (journaled) | next | ADR 0026 §6 |
-| P2-03 | Automatic intermediate renewal with live reload | planned | ADR 0026 §2 |
+| P2-02 | Per-user autostart (journaled) | **done** 2026-10-27 | ADR 0026 §6 (amended: XDG entry on Linux); see below. Checked across real reboots on Windows and Ubuntu |
+| P2-03 | Automatic intermediate renewal with live reload | next | ADR 0026 §2 |
 | P2-04 | `kiln.toml` project config + `herd.yml` import | planned | ADR at start |
 | P2-05 | Node runtimes and shims | planned | ADR at start |
 | P2-06 | PHP patch updates with rollback | planned | |
@@ -991,6 +991,45 @@ its local API and autostart.
 - **On the way:** the WordPress checks now open setup step 1 directly. Step 0 fetches the
   language list from api.wordpress.org, and a slow answer ran past PHP's 30 s limit in the
   VM ("critical error").
+
+### P2-02 delivered (2026-10-27)
+
+[ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) §6, amended.
+
+- **`kiln daemon enable`:** a journaled `daemon.autostart` operation, which starts the
+  daemon now too.
+  - **Windows:** the `Kiln` value under `HKCU\…\CurrentVersion\Run`.
+  - **Linux:** `~/.config/autostart/kiln-kilnd.desktop`.
+  - **Undo:** `kiln daemon disable`, `kiln undo` and `kiln uninstall` restore exactly what
+    was there. That means an entry Kiln replaced, or nothing. The `autostart` folder goes
+    too if Kiln created it and it's empty, and an entry edited by hand since is left alone
+    unless forced.
+  - `kiln daemon status` shows "Starts at login".
+- **Linux uses an XDG autostart entry, not a systemd user unit** (ADR amended).
+  - The desktop session starts it after login, when the keyring that renewal (P2-03)
+    needs is unlocked.
+  - It's one file with an exact undo.
+- **No special startup mode:** after a reboot, the web server's PID files are stale, so
+  `kilnd`'s first watchdog pass runs `kiln web start`. A server the user had stopped stays
+  stopped.
+- **Found on the way:**
+  - [I-64](issues.md#i-64): a hard reset right after enabling lost the `Run` value. Windows
+    writes the registry lazily. `kiln-sys` now flushes `HKCU` keys after each write or
+    delete, which covers the user PATH too.
+  - [I-63](issues.md#i-63): piping `kiln` into `head` panicked with "Broken pipe". It now
+    exits quietly with code 141.
+- **Tests:** the operation against an in-memory login item and a real file (replace and
+  restore, hand edits, the folder Kiln created); registry value delete.
+- **Checked in the VMs:**
+  - Scenarios: `enable`, `disable`, `enable` again, then uninstall. The snapshots list the
+    `Run` values and the `autostart` folder. **Windows 39 checks, Ubuntu 37**, each leaving
+    the machine as it was.
+  - **Real reboots** (`tests/vm/windows/autostart.ps1`, `tests/vm/ubuntu/autostart.sh`): a
+    site served, `kiln daemon enable`, reboot with automatic login. Each time, `kilnd` was
+    running again, had restarted the web server within seconds of login, and the site
+    answered.
+  - That held on Windows after a graceful reboot and after a hard reset (`-HardReset`), and
+    on Ubuntu after a reboot.
 
 ## Open items carried into Phase 1
 
@@ -1070,6 +1109,7 @@ its local API and autostart.
 | 2026-10-27 | **Phase 1 done.** The VM scenarios gained a real Laravel app, WordPress and a second PHP version. They found I-62: WordPress needs `mysqli`, so it is enabled on Windows. On Linux, no published static build had both `mysqli` and `pdo_sqlite`. ADR 0025: Kiln builds its own static PHP 8.2–8.5 in the new public repo `sameedkun/kiln-php` (release `2026-10-27`, licences included), pinned after two independent downloads and runs. Windows passed 29 checks, Ubuntu 28; uninstall left both machines as they were. |
 | 2026-10-27 | **Phase 2 planned:** exit criteria and 11 tasks (P2-01 to P2-11) in plan.md. ADR 0026: `kilnd`, an optional per-user daemon that keeps the web stack running, renews the intermediate certificate and serves a JSON-RPC API over a per-user Unix socket. Autostart is journaled. Next: P2-01. |
 | 2026-10-27 | **P2-01 done:** new `kiln-daemon` crate and `kilnd` binary (ADR 0026): JSON-RPC API over a per-user socket with `kiln.hello`, `daemon.status/shutdown`, `web.status` and events; a watchdog that restarts a web stack that exited on its own, with backoff; `kiln daemon start/stop/status/call`; a change lock for every changing `kiln` command; a non-inheritable `AF_UNIX` listener on Windows. VM scenarios: Windows 37 checks, Ubuntu 35, including killing Caddy and the daemon bringing it back. |
+| 2026-10-27 | **P2-02 done:** `kiln daemon enable/disable`, a journaled autostart (Windows `Run` value, Linux XDG autostart entry; ADR 0026 §6 amended). Checked across real reboots in both VMs, Windows also after a hard reset. Fixed I-64 (flush `HKCU` after registry writes) and I-63 (piping `kiln` into `head` exits quietly). Scenarios: Windows 39 checks, Ubuntu 37. |
 
 ## How to update this file
 

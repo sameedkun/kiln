@@ -49,8 +49,9 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
-    RegDeleteTreeW, RegGetValueW, RegSetKeyValueW,
+    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND,
+    RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey, RegDeleteKeyValueW, RegDeleteTreeW,
+    RegFlushKey, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
@@ -636,7 +637,61 @@ pub fn write_user_reg_string(subkey: &str, name: &str, value: &RegString) -> io:
             i32::try_from(status).unwrap_or(-1),
         ));
     }
+    flush_user_key(subkey)
+}
+
+/// Writes `HKCU\<subkey>` to disk now. Windows otherwise writes registry changes lazily, so
+/// a value set just before a crash or power loss can be gone afterwards, while the journal
+/// says it was applied (found with the Run value in P2-02).
+fn flush_user_key(subkey: &str) -> io::Result<()> {
+    let subkey_w = wide(OsStr::new(subkey));
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: valid NUL-terminated string and a valid out pointer for the key handle.
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey_w.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &raw mut key,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    // SAFETY: `key` is the open key from above.
+    let flushed = unsafe { RegFlushKey(key) };
+    // SAFETY: `key` is open and closed exactly once.
+    unsafe { RegCloseKey(key) };
+    if flushed != 0 {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(flushed).unwrap_or(-1),
+        ));
+    }
     Ok(())
+}
+
+/// Programs started at the user's login (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+pub const USER_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// Deletes the value `HKCU\<subkey>\<name>`. A missing key or value is not an error.
+pub fn delete_user_reg_value(subkey: &str, name: &str) -> io::Result<()> {
+    let subkey_w = wide(OsStr::new(subkey));
+    let name_w = wide(OsStr::new(name));
+    // SAFETY: valid NUL-terminated strings.
+    let status =
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey_w.as_ptr(), name_w.as_ptr()) };
+    if status != 0 && status != ERROR_FILE_NOT_FOUND {
+        return Err(io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(-1),
+        ));
+    }
+    flush_user_key(subkey)
 }
 
 /// Deletes `HKCU\<subkey>` and everything under it. Only for test keys Kiln created.
@@ -1209,6 +1264,13 @@ mod tests {
         };
         write_user_reg_string(&key, "Other", &plain).unwrap();
         assert_eq!(read_user_reg_string(&key, "Other").unwrap(), Some(plain));
+        delete_user_reg_value(&key, "Other").unwrap();
+        assert_eq!(read_user_reg_string(&key, "Other").unwrap(), None);
+        assert!(
+            read_user_reg_string(&key, "Path").unwrap().is_some(),
+            "only that value"
+        );
+        delete_user_reg_value(&key, "Other").unwrap(); // already gone: fine
         delete_user_reg_tree(&key).unwrap();
         assert_eq!(
             read_user_reg_string(&key, "Path").unwrap(),

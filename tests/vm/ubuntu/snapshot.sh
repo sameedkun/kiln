@@ -28,6 +28,14 @@ done
 echo "keyring: $(busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
     org.freedesktop.Secret.Service SearchItems 'a{ss}' 1 application kiln 2>&1)"
 
+# Login items (P2-02): the autostart folder and what is in it.
+autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+if [ -d "$autostart" ]; then
+    echo "autostart: $(ls -A "$autostart" | tr '\n' ' ')"
+else
+    echo "autostart: no folder"
+fi
+
 for d in "$HOME/.local/share/kiln" "$HOME/.local/state/kiln"; do
     if [ -e "$d" ]; then echo "dir $d present"; else echo "dir $d absent"; fi
 done

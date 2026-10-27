@@ -106,8 +106,13 @@ check "daemon status counts the restart" contains "Restarts by the daemon: 1" "$
 check "daemon call web.status (the API)" contains '"running"' "$K" daemon call web.status
 check "daemon stop leaves the web server running" \
     sh -c "'$K' daemon stop && curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln'"
-# Running again, so uninstall has to stop it.
-check "daemon start (again, for uninstall)" "$K" daemon start
+entry="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/kiln-kilnd.desktop"
+check "daemon enable: an XDG autostart entry starts kilnd at login (P2-02)" \
+    sh -c "'$K' daemon enable --yes && grep -q '^Exec=.*kilnd' '$entry' && '$K' daemon status | grep -q 'Starts at login: yes'"
+check "daemon disable removes the autostart entry" \
+    sh -c "'$K' daemon disable --yes && [ ! -e '$entry' ]"
+# On again, and running, so uninstall has to stop it and remove the entry.
+check "daemon enable (again, for uninstall)" "$K" daemon enable --yes
 
 echo "== uninstall"
 check "kiln uninstall" "$K" uninstall --yes

@@ -127,10 +127,45 @@ pub fn stop() -> Result<(), String> {
     Ok(())
 }
 
+/// `kiln daemon enable`: start at login (journaled), and now if it isn't running.
+pub fn enable(yes: bool) -> Result<(), String> {
+    let exe = exe()?;
+    crate::apply::autostart_enable(&exe, yes)?;
+    if autostart_on(&exe) {
+        start()?;
+    }
+    Ok(())
+}
+
+/// `kiln daemon disable`: no longer start at login. A running daemon keeps running.
+pub fn disable(yes: bool) -> Result<(), String> {
+    crate::apply::autostart_disable(yes)
+}
+
+/// Whether this platform's login item starts the `kilnd` at `exe`.
+fn autostart_on(exe: &std::path::Path) -> bool {
+    kiln_platform::autostart::platform_item()
+        .and_then(|item| item.read().ok().flatten())
+        .is_some_and(|content| content == kiln_platform::autostart::content_for(exe))
+}
+
+fn print_autostart() {
+    let on = exe().is_ok_and(|exe| autostart_on(&exe));
+    println!(
+        "  Starts at login: {}",
+        if on {
+            "yes (`kiln daemon disable` turns it off)"
+        } else {
+            "no (`kiln daemon enable` turns it on)"
+        }
+    );
+}
+
 pub fn status() -> Result<(), String> {
     let paths = paths()?;
     let Some(mut client) = connect(&paths)? else {
         println!("Kiln's daemon isn't running. `kiln daemon start` starts it.");
+        print_autostart();
         return Ok(());
     };
     let call = |client: &mut Client, method: &str| {
@@ -159,6 +194,7 @@ pub fn status() -> Result<(), String> {
     if repairs > 0 {
         println!("  Restarts by the daemon: {repairs}");
     }
+    print_autostart();
     println!("  Log: {}", paths.log.display());
     Ok(())
 }

@@ -5,11 +5,13 @@
 # Copies them and the scripts in over PowerShell Direct, starts scenario.ps1 in the test user's
 # desktop session, and prints C:\kiln-test\scenario.log. Exit code 0 = passed.
 #   -Reset first returns the VM to its `clean` checkpoint (ADR 0024 §7) and starts it.
+#   -SetupOnly stops after copying the binaries in (for other checks, such as autostart.ps1).
 param(
     [string] $Name = 'kiln-win11',
     [string] $Bin = (Join-Path $PSScriptRoot '..\..\..\target\vm-win\release'),
     [string] $Credential = 'E:\VMs\kiln-win11\vm-credential.xml',
-    [switch] $Reset
+    [switch] $Reset,
+    [switch] $SetupOnly
 )
 $ErrorActionPreference = 'Stop'
 $cred = Import-Clixml $Credential
@@ -48,6 +50,10 @@ foreach ($exe in 'kiln.exe', 'kiln-helper.exe', 'kiln-supervisor.exe', 'kiln-shi
 }
 foreach ($script in 'scenario.ps1', 'snapshot.ps1') {
     Copy-Item -ToSession $s -Path (Join-Path $PSScriptRoot $script) -Destination C:\kiln-test\ -Force
+}
+if ($SetupOnly) {
+    Remove-PSSession $s
+    return
 }
 
 # Start it in the logged-on user's desktop session (not elevated), where UAC and Windows'

@@ -114,6 +114,9 @@ mod system {
         let writer: Rc<dyn PrivilegedHosts> = session.clone();
         let mut registry = Registry::default();
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
+        if let Some(item) = kiln_platform::autostart::platform_item() {
+            kiln_platform::autostart::register_autostart(&mut registry, item);
+        }
         #[cfg(windows)]
         {
             register_trust_ca(&mut registry);
@@ -219,6 +222,63 @@ mod system {
         ctx.session.finish().map_err(|e| e.to_string())?;
         println!("Undone.");
         report_elevation(&ctx.session);
+        Ok(())
+    }
+
+    /// `kiln daemon enable` ([ADR 0026] §6): starts `exe` at login, as a journaled operation.
+    /// `Ok(true)` if it was turned on now.
+    ///
+    /// [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
+    pub fn autostart_enable(exe: &std::path::Path, yes: bool) -> Result<bool, String> {
+        use kiln_platform::autostart::{AutostartOp, content_for, platform_item};
+        let item = platform_item().ok_or("cannot tell where login items go (no home folder)")?;
+        let content = content_for(exe);
+        if item.read().map_err(|e| e.to_string())?.as_deref() == Some(content.as_str()) {
+            println!("Kiln's daemon already starts when you log in.");
+            return Ok(false);
+        }
+        let mut ctx = open()?;
+        let op: Box<dyn Operation> = Box::new(AutostartOp::new(content, item));
+        print_preview(&op.preview().map_err(|e| e.to_string())?, "(none)");
+        if !yes
+            && !confirm("Start Kiln's daemon when you log in? (`kiln daemon disable` turns it off)")
+        {
+            println!("Nothing was changed.");
+            return Ok(false);
+        }
+        ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        println!("Kiln's daemon now starts when you log in.");
+        Ok(true)
+    }
+
+    /// `kiln daemon disable`: undoes every autostart entry Kiln made, newest first.
+    pub fn autostart_disable(yes: bool) -> Result<(), String> {
+        use kiln_platform::autostart::AUTOSTART_KIND;
+        let mut ctx = open()?;
+        let entries =
+            kiln_ops::Journal::entries(ctx.engine.journal()).map_err(|e| e.to_string())?;
+        let ids: Vec<u64> = entries
+            .iter()
+            .rev()
+            .filter(|e| e.kind == AUTOSTART_KIND && e.state == kiln_ops::OpState::Applied)
+            .map(|e| e.id)
+            .collect();
+        if ids.is_empty() {
+            println!("Kiln's daemon doesn't start at login.");
+            return Ok(());
+        }
+        if !yes && !confirm("Stop starting Kiln's daemon at login?") {
+            println!("Nothing was changed.");
+            return Ok(());
+        }
+        for id in ids {
+            ctx.engine.revert(id, false).map_err(|e| e.to_string())?;
+        }
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        println!(
+            "Kiln's daemon no longer starts at login. It keeps running until you log out or run `kiln daemon stop`."
+        );
         Ok(())
     }
 
@@ -672,7 +732,9 @@ pub fn ca_info() -> Result<(), String> {
     Ok(())
 }
 
-pub use system::{ca_trust, hosts_set, shims_install, undo, undo_all};
+pub use system::{
+    autostart_disable, autostart_enable, ca_trust, hosts_set, shims_install, undo, undo_all,
+};
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.
 #[cfg(windows)]

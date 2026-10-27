@@ -6,6 +6,7 @@
 
 use serde_json::Value;
 
+use crate::autostart::AUTOSTART_KIND;
 use crate::hosts_op::HOSTS_BLOCK_KIND;
 use crate::shell_profile::SHELL_PROFILE_KIND;
 use crate::trust_nss::NSS_TRUST_KIND;
@@ -49,6 +50,10 @@ pub fn describe(kind: &str, params: &Value) -> String {
             params["file"].as_str().unwrap_or("a shell startup file")
         ),
         SYSTEM_TRUST_KIND => "Kiln's root CA trusted machine-wide (system store)".to_owned(),
+        AUTOSTART_KIND => format!(
+            "Kiln's daemon starts at login ({})",
+            params["location"].as_str().unwrap_or("login items")
+        ),
         other => other.to_owned(),
     }
 }

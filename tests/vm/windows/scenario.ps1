@@ -204,8 +204,19 @@ Check 'daemon stop leaves the web server running' {
     Kiln daemon stop
     Expect 'static from kiln' (Get 'http://static-site.test:8080/')
 }
-# Running again, so uninstall has to stop it.
-Check 'daemon start (again, for uninstall)' { Kiln daemon start }
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+function RunValue { (Get-ItemProperty $runKey -Name Kiln -ErrorAction SilentlyContinue).Kiln }
+Check 'daemon enable: a Run value starts kilnd at login (P2-02)' {
+    Kiln daemon enable --yes
+    Expect 'kilnd.exe' "$(RunValue)"
+    Expect 'Starts at login: yes' (Kiln daemon status)
+}
+Check 'daemon disable removes the Run value' {
+    Kiln daemon disable --yes
+    if (RunValue) { throw "Run value still there: $(RunValue)" }
+}
+# On again, and running, so uninstall has to stop it and remove the Run value.
+Check 'daemon enable (again, for uninstall)' { Kiln daemon enable --yes }
 
 Say '== uninstall'
 Status 'waiting-untrust-dialog'

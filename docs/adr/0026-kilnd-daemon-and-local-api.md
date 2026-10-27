@@ -90,14 +90,25 @@ Constraints:
 6. **Autostart (P2-02) is a journaled operation,** off until the user turns it on with
    `kiln daemon enable`:
    - **Windows:** the value `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Kiln` set to
-     `"<path>\kilnd.exe" --background`. No admin rights, and it shows in Task Manager's
-     startup apps, where users expect it.
-   - **Linux:** a systemd user unit `~/.config/systemd/user/kilnd.service`
-     (`Restart=on-failure`), enabled with `systemctl --user enable --now`. If the session
-     has no systemd user instance, an XDG autostart entry
-     `~/.config/autostart/kiln-kilnd.desktop` is used instead.
+     `"<path>\kilnd.exe"`. No admin rights, and it shows in Task Manager's startup apps,
+     where users expect it.
+   - **Linux:** an XDG autostart entry, `~/.config/autostart/kiln-kilnd.desktop`, which the
+     desktop session starts after login. *Amended during P2-02:* this replaces the planned
+     systemd user unit, for two reasons.
+     - **Keyring:** certificate renewal (P2-03) needs the desktop keyring, which is unlocked
+       only in the logged-in session. A systemd user service can start before that.
+     - **Clean undo:** one file whose undo is exact. Enabling a unit also creates `*.wants`
+       directories that `disable` leaves behind.
+     - The daemon's own watchdog already does what `Restart=` would.
+   - **No special startup mode is needed.** After a reboot, the web server's PID files are
+     left over from processes the OS ended, so the watchdog's first pass runs
+     `kiln web start`. A server the user stopped with `kiln web stop` has no PID file and
+     stays stopped.
    - `kiln daemon disable`, `kiln undo` and `kiln uninstall` remove exactly what was added,
      byte for byte, like every other operation.
+     - Undo restores an entry that Kiln replaced, and removes the `autostart` folder if
+       Kiln created it and it is empty.
+     - An entry edited by hand since is left alone unless `--force` is given.
 
 ## Consequences
 
