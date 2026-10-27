@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-10-27 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · next: Phase 2 · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-27 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 planned** (11 tasks, ADR 0026) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -926,6 +926,27 @@ entries.
 - **How to run them:** in [dev-setup.md](dev-setup.md#integration-tests-in-vms-p1-15).
   They are manual, not CI.
 
+<a id="phase-2"></a>
+## Phase 2: developer tooling (in progress)
+
+Tasks and exit criteria are in [plan.md](plan.md#phase-2-developer-tooling-windows--linux).
+Planned 2026-10-27, with [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) for the daemon,
+its local API and autostart.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| P2-01 | `kilnd` daemon + versioned local API | next | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |
+| P2-02 | Per-user autostart (journaled) | planned | ADR 0026 §6 |
+| P2-03 | Automatic intermediate renewal with live reload | planned | ADR 0026 §2 |
+| P2-04 | `kiln.toml` project config + `herd.yml` import | planned | ADR at start |
+| P2-05 | Node runtimes and shims | planned | ADR at start |
+| P2-06 | PHP patch updates with rollback | planned | |
+| P2-07 | PHP extension toggles | planned | |
+| P2-08 | `kiln new` (Laravel) | planned | |
+| P2-09 | Proxy sites | planned | |
+| P2-10 | Configurable TLD | planned | amends ADR 0010 |
+| P2-11 | VM scenarios for Phase 2 | planned | extends ADR 0024 |
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1002,6 +1023,7 @@ entries.
 | 2026-10-26 | **P1-15 done, so all 15 Phase 1 tasks are done.** The Windows scenario passed with Herd running: 20 checks, 14 facts identical after uninstall, and Herd restarted without affecting Kiln. Fixed I-60 (Windows: background processes inherited `kiln`'s output pipe). The test harness learned that certificate dialogs open behind focused windows, that a restored VM keeps a stale IP lease, and that the guest's resolution changes between boots. |
 | 2026-10-26 | Phase 1 exit criterion reworded: uninstall is verified by scripted VM runs before each release, not by CI VMs (ADR 0024). Fixed I-61: `kiln php install` had failed on every version after windows.php.net started listing rebuilds as `8.4.27-1`. Stalled downloads now give up after a minute (I-48). CI runs the real-Caddy test on Windows and Linux (`a83c527`). |
 | 2026-10-27 | **Phase 1 done.** The VM scenarios gained a real Laravel app, WordPress and a second PHP version. They found I-62: WordPress needs `mysqli`, so it is enabled on Windows. On Linux, no published static build had both `mysqli` and `pdo_sqlite`. ADR 0025: Kiln builds its own static PHP 8.2–8.5 in the new public repo `sameedkun/kiln-php` (release `2026-10-27`, licences included), pinned after two independent downloads and runs. Windows passed 29 checks, Ubuntu 28; uninstall left both machines as they were. |
+| 2026-10-27 | **Phase 2 planned:** exit criteria and 11 tasks (P2-01 to P2-11) in plan.md. ADR 0026: `kilnd`, an optional per-user daemon that keeps the web stack running, renews the intermediate certificate and serves a JSON-RPC API over a per-user Unix socket. Autostart is journaled. Next: P2-01. |
 
 ## How to update this file
 
