@@ -40,6 +40,7 @@ working name). Start here.
 | [0022](adr/0022-linux-php-runtimes-and-fpm.md) | Linux PHP: static-php-cli `common` builds (8.2–8.5, x86-64) with SHA-256 pinned in Kiln (the source publishes none; two agreeing downloads per pin), or the distribution's PHP linked in with `--system`; one PHP-FPM master per version under the supervisor (SIGTERM stop, `PR_SET_PDEATHSIG`) | accepted, implemented (P1-04 part c) |
 | [0023](adr/0023-linux-shims-and-path.md) | Linux shims: copies of `kiln-shim` as `php`/`composer` (role from `argv[0]`), put first on PATH by Kiln's `env` script sourced from a journaled marked block at the end of `~/.profile`, `~/.bashrc`, `~/.zshrc` and fish's `conf.d`; byte-exact undo | accepted, implemented (P1-04 part d) |
 | [0024](adr/0024-integration-test-vms.md) | Integration tests in Hyper-V VMs (Windows 11, Ubuntu 24.04): snapshot, full Kiln session, `kiln uninstall`, snapshot, compare (files byte for byte, trust stores logically); Laravel Herd running alongside on Windows, including a Herd restart; test-VM-only settings answer privilege prompts | accepted, implemented (P1-15) |
+| [0025](adr/0025-own-static-linux-php-builds.md) | Kiln builds its own static Linux PHP (static-php-cli `common` plus `mysqli`, `intl`, `sodium`, `opcache`, pinned tool commit, no UPX), published with licences from the public `sameedkun/kiln-php` repo; Kiln pins each archive's SHA-256 | accepted, implemented (release 2026-10-27) |
 
 ## Conventions
 

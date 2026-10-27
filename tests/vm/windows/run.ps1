@@ -65,7 +65,7 @@ Invoke-Command -Session $s {
 # is (screen pixels) to C:\kiln-test\click; click there with the VM's mouse.
 $cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$Name'"
 $mouse = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_SyntheticMouse
-$deadline = (Get-Date).AddMinutes(30)
+$deadline = (Get-Date).AddMinutes(60)   # downloads plus Composer; slower while Windows Update runs
 do {
     Start-Sleep -Seconds 5
     $state, $click = Invoke-Command -Session $s {

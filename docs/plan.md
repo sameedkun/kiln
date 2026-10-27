@@ -23,7 +23,7 @@ previewed and undone.
 | Phase | Goal | Platforms | Estimate | Status |
 |---|---|---|---|---|
 | **0** | Foundations: repo, CI, operation engine, key decisions via spikes | all (CI) | 2–3 weeks | **done** (one optional recheck open) |
-| **1** | MVP CLI: serve PHP sites over trusted HTTPS, per-site PHP, clean uninstall | Windows, Linux | 6–8 weeks | **next** |
+| **1** | MVP CLI: serve PHP sites over trusted HTTPS, per-site PHP, clean uninstall | Windows, Linux | 6–8 weeks | **done** 2026-10-27: exit criteria met in both VMs |
 | 2 | Developer tooling: Node, Composer, Laravel installer, `kiln.toml`, daemon + local API | Windows, Linux | 4–5 weeks | later |
 | 3 | Services (MySQL, MariaDB, PostgreSQL, Valkey, Mailpit) + macOS bring-up | + macOS | 6–8 weeks | later |
 | 4 | Tauri GUI, log viewer, dev processes, Xdebug on demand, dump capture | all | 6–8 weeks | later |
@@ -69,7 +69,7 @@ Details in [progress.md](progress.md#phase-0).
 | P1-12 | `kiln doctor`: ports with owning process, DNS, trust, runtimes, journal consistency, Schannel revocation hint | P1-03..P1-09 | **done** 2026-10-22 ([ADR 0017](adr/0017-kiln-doctor.md)) |
 | P1-13 | `kiln plan` / `kiln undo` / `kiln uninstall --dry-run` | P1-01 | **done** 2026-10-22 ([ADR 0018](adr/0018-history-undo-uninstall.md)) |
 | P1-14 | Coexistence detection (Herd, XAMPP, Laragon, system nginx/PHP) | P1-12 | **done** 2026-10-22 ([ADR 0019](adr/0019-coexistence.md)) |
-| P1-15 | Integration test VMs (Windows 11, Ubuntu 24.04): byte-identical uninstall, Herd coexistence ([ADR 0024](adr/0024-integration-test-vms.md)) | all | **done** 2026-10-26: both scenarios pass; lessons [I-34](issues.md#i-34)–[I-36](issues.md#i-36) |
+| P1-15 | Integration test VMs (Windows 11, Ubuntu 24.04): byte-identical uninstall, Herd coexistence ([ADR 0024](adr/0024-integration-test-vms.md)) | all | **done** 2026-10-26: both scenarios pass, with a real Laravel app, WordPress and a second PHP version (2026-10-27); lessons [I-34](issues.md#i-34)–[I-36](issues.md#i-36) |
 
 **Suggested order:** P1-01 → P1-02 → P1-03 → P1-05 → P1-06/07 → P1-08/09 → P1-10/11 →
 P1-13 → P1-12/14 → P1-15. Linux tasks (P1-04, the Linux half of P1-08) run in parallel.

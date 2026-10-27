@@ -71,6 +71,7 @@ commits and PRs.
 | [I-59](#i-59) | uninstall | With the keyring locked, `kiln uninstall` deleted the state folder and orphaned the CA key's keyring item | ✅ (state folder kept until the key is removed) |
 | [I-60](#i-60) | web | On Windows, reading `kiln web start`'s output waited until the web server stopped (it inherited the output pipe) | ✅ (std handles kept from background processes) |
 | [I-61](#i-61) | php | windows.php.net started listing rebuilds as `8.4.27-1`; the index parser rejected the whole index, so no PHP could be installed | ✅ (rebuild suffix accepted) |
+| [I-62](#i-62) | php | WordPress needs `mysqli`: not enabled on Windows, missing from the static Linux builds | ✅ (enabled on Windows; Kiln's own Linux builds, ADR 0025) |
 
 ---
 
@@ -768,3 +769,25 @@ commits and PRs.
   refused.
 - **Rule:** an upstream index can change shape at any time; keep a test with its real shape
   and fail with the entry named, as here.
+
+<a id="i-62"></a>
+### I-62: WordPress couldn't run on Kiln's PHP (no `mysqli`) ✅
+- **Found:** the extended P1-15 scenarios, 2026-10-26. WordPress answered "Requirements Not
+  Met: missing the MySQL extension".
+  - **Linux:** the static-php-cli `common` set has `mysqlnd` and `pdo_mysql` but no `mysqli`.
+    No published set has both `mysqli` and `pdo_sqlite` (`bulk` lacks the second).
+  - **Windows:** the build ships `php_mysqli.dll`, but Kiln's default `php.ini` didn't
+    enable it.
+  - The Windows scenario's first check looked only for "WordPress", which the error page
+    also contains. It now looks for the setup pages and fails on "Requirements Not Met".
+- **Fix:**
+  - **Windows:** `mysqli` is in `kiln_php::ini::DEFAULT_EXTENSIONS` (2026-10-26). The
+    Windows scenario then passed with WordPress's real setup page (2026-10-27, 29 checks).
+  - **Linux:** Kiln builds its own static PHP with `mysqli`, `intl`, `sodium` and `opcache`
+    added to `common`. The builds are published from the public `sameedkun/kiln-php`
+    repository, release `2026-10-27` ([ADR 0025](adr/0025-own-static-linux-php-builds.md)).
+    - They are PHP 8.2.35, 8.3.36, 8.4.27 and 8.5.12, pinned after the release's
+      checksums, two independent downloads and runs in the VM agreed.
+    - The Ubuntu scenario then passed with WordPress, Laravel and PHP 8.3 (2026-10-27, 28
+      checks).
+- **Rule:** a check that a page works must look for something only the working page shows.

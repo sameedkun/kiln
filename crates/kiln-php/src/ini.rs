@@ -13,6 +13,8 @@ pub const DEFAULT_EXTENSIONS: &[&str] = &[
     "intl",
     "mbstring",
     "exif",
+    // WordPress refuses to run without it (I-62).
+    "mysqli",
     "openssl",
     "pdo_mysql",
     "pdo_pgsql",

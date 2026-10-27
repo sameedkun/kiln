@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-10-26 · **Current phase:** **Phase 1 tasks done** (15 of 15) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-27 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · next: Phase 2 · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -22,7 +22,7 @@
 | PHP runtimes (`kiln-php`, `kiln-fetch`) | **done** (Windows): `kiln php available/install/list/remove`; verified downloads from windows.php.net; real install of 8.4.27 checked |
 | Serving a PHP site end to end | **works** (Windows): linked or parked projects run PHP through supervised php-cgi workers behind Caddy, with the framework's document root detected (Laravel, Symfony, Drupal, Craft, WordPress, …) |
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
-| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (static builds, SHA-256 pinned in Kiln) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. **Part d done:** `kiln shims install` puts `php`/`composer` shims on PATH through a block in the shell startup files, undone byte for byte. **Linux now matches Windows for Phase 1.** |
+| Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (Kiln's own static builds from `sameedkun/kiln-php`, SHA-256 pinned in Kiln, ADR 0025) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. **Part d done:** `kiln shims install` puts `php`/`composer` shims on PATH through a block in the shell startup files, undone byte for byte. **Linux now matches Windows for Phase 1.** |
 | Integration tests in VMs | **done**: scripted runs in Windows 11 (with Laravel Herd running) and Ubuntu 24.04. A full Kiln session, then `kiln uninstall`, leaves the machine **as it was** in both; Herd's site and settings are untouched, and Kiln survives Herd restarting |
 | GUI | **not started** (Phase 4) |
 
@@ -50,7 +50,7 @@ were caught before release ([I-01](issues.md#i-01), [I-02](issues.md#i-02),
 **Gate:** ADRs accepted ✓ · operation-engine property tests ✓ · CI green ✓.
 
 <a id="phase-1"></a>
-## Phase 1: MVP on Windows + Linux (in progress)
+## Phase 1: MVP on Windows + Linux (done)
 
 Tasks are defined in [plan.md](plan.md#phase-1-mvp-on-windows--linux).
 
@@ -911,6 +911,17 @@ entries.
   - [I-59](issues.md#i-59): with a locked keyring, uninstall orphaned the CA key's item.
   - [I-60](issues.md#i-60): on Windows, reading `kiln web start`'s output waited forever,
     because the background server inherited `kiln`'s output pipe. Both are fixed.
+- **Extended 2026-10-27 to Phase 1's full exit criteria** (plan.md). Both scenarios now
+  also cover a new Laravel project made with Kiln's `composer` shim, WordPress, and a site
+  pinned to PHP 8.3 next to 8.4. They passed: **Windows 29 checks, Ubuntu 28**, each with
+  the machine as it was after uninstall.
+  - [I-61](issues.md#i-61): windows.php.net's new `8.4.27-1` rebuild names had broken every
+    `kiln php install`.
+  - [I-62](issues.md#i-62): WordPress needs `mysqli`. It is now enabled on Windows. On Linux
+    it led to Kiln's own static PHP builds ([ADR 0025](adr/0025-own-static-linux-php-builds.md),
+    `sameedkun/kiln-php`).
+  - Stall detection for downloads ([I-48](issues.md#i-48)) and the real-Caddy test in CI
+    were added on the way.
 - **VM build:** the Windows test VM now builds unattended ([I-36](issues.md#i-36) fixed).
 - **How to run them:** in [dev-setup.md](dev-setup.md#integration-tests-in-vms-p1-15).
   They are manual, not CI.
@@ -989,6 +1000,8 @@ entries.
 | 2026-10-23 | **P1-04 part d done, so P1-04 is complete:** ADR 0023. Linux shims are copies of `kiln-shim` (role from `argv[0]` first), put on PATH by Kiln's `env` script, sourced from a journaled marked block in each shell startup file (`env.shell_profile`). Verified in the VM: per-folder PHP, Composer, exit codes, one PATH entry, and byte-identical undo. 251 tests on Windows, 222 in the VM. **Linux now matches Windows for Phase 1; only P1-15 is left.** |
 | 2026-10-23 | **P1-15 started** (`0d04c62`, `4103bd3`): ADR 0024. The Ubuntu scenario passed: 16 checks, 14 facts identical after uninstall. Found and fixed I-59 (uninstall with a locked keyring). The Windows test VM built unattended on the first try (I-36 fixed). Laravel Herd was installed in it and a `clean` checkpoint taken. |
 | 2026-10-26 | **P1-15 done, so all 15 Phase 1 tasks are done.** The Windows scenario passed with Herd running: 20 checks, 14 facts identical after uninstall, and Herd restarted without affecting Kiln. Fixed I-60 (Windows: background processes inherited `kiln`'s output pipe). The test harness learned that certificate dialogs open behind focused windows, that a restored VM keeps a stale IP lease, and that the guest's resolution changes between boots. |
+| 2026-10-26 | Phase 1 exit criterion reworded: uninstall is verified by scripted VM runs before each release, not by CI VMs (ADR 0024). Fixed I-61: `kiln php install` had failed on every version after windows.php.net started listing rebuilds as `8.4.27-1`. Stalled downloads now give up after a minute (I-48). CI runs the real-Caddy test on Windows and Linux (`a83c527`). |
+| 2026-10-27 | **Phase 1 done.** The VM scenarios gained a real Laravel app, WordPress and a second PHP version. They found I-62: WordPress needs `mysqli`, so it is enabled on Windows. On Linux, no published static build had both `mysqli` and `pdo_sqlite`. ADR 0025: Kiln builds its own static PHP 8.2–8.5 in the new public repo `sameedkun/kiln-php` (release `2026-10-27`, licences included), pinned after two independent downloads and runs. Windows passed 29 checks, Ubuntu 28; uninstall left both machines as they were. |
 
 ## How to update this file
 

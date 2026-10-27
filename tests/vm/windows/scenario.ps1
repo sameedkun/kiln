@@ -15,12 +15,14 @@ $script:failed = $false
 function Say($text) { Add-Content $log $text -Encoding utf8 }
 function Status($text) { Set-Content $status $text -Encoding ascii }
 function Check($desc, [scriptblock] $test) {
+    Say "     ... $(Get-Date -Format HH:mm:ss) $desc"   # shows which step a stuck run is in
+    $started = Get-Date
     try {
         $out = & $test 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { throw "exit code $LASTEXITCODE`n$out" }
-        Say "PASS $desc"
+        Say "PASS $desc ($([int]((Get-Date) - $started).TotalSeconds) s)"
     } catch {
-        Say "FAIL $desc"
+        Say "FAIL $desc ($([int]((Get-Date) - $started).TotalSeconds) s)"
         ($_ | Out-String).Trim().Split("`n") | Select-Object -Last 8 | ForEach-Object { Say "     $_" }
         $script:failed = $true
     }
@@ -67,7 +69,7 @@ Check 'a new Laravel project, made with Kiln''s composer shim' {
 }
 Check 'WordPress, from wordpress.org' {
     $archive = Join-Path $dir 'wordpress.tar.gz'
-    curl.exe -fsSL -o $archive https://wordpress.org/latest.tar.gz
+    curl.exe -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o $archive https://wordpress.org/latest.tar.gz
     if ($LASTEXITCODE -ne 0) { throw "download failed ($LASTEXITCODE)" }
     tar.exe -xzf $archive -C $sites
     if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
@@ -145,7 +147,11 @@ Check 'the Laravel app over HTTPS (served from public\, PHP 8.4)' {
 Check 'WordPress over HTTPS (its setup page)' {
     $url = SiteUrl 'wp-site.test'
     Expect 'https://' $url
-    Expect 'WordPress' (curl.exe -sSL --ssl-revoke-best-effort $url 2>&1 | Out-String)
+    # Its setup pages (the first may be a language chooser), not "Requirements Not Met",
+    # which WordPress shows without the mysqli extension (I-62).
+    $page = curl.exe -sSL --ssl-revoke-best-effort $url 2>&1 | Out-String
+    Expect 'Setup Configuration File' $page
+    if ($page.Contains('Requirements Not Met')) { throw "WordPress says: Requirements Not Met" }
 }
 Check 'kiln doctor reports Herd under Other tools' {
     $doctor = & $Kiln doctor 2>&1 | Out-String
@@ -165,7 +171,12 @@ Check 'herd restart' { & (Join-Path $env:USERPROFILE '.config\herd\bin\herd.bat'
 Start-Sleep -Seconds 5
 Check 'Kiln''s server survived it (same PID)' { if ((Get-Process kiln-caddy).Id -ne $caddy) { throw 'kiln-caddy restarted or died' } }
 Check 'Kiln''s sites still answer' { Expect 'static from kiln' (Get 'http://static-site.test:8080/') }
-Check 'Herd''s site answers' { Expect 'herd check' (Get 'http://herdcheck.test/') }
+Check 'Herd''s site answers again (within a minute of its restart)' {
+    $deadline = (Get-Date).AddMinutes(1)
+    do { $page = Get 'http://herdcheck.test/'; if ($page.Contains('herd check')) { break }; Start-Sleep -Seconds 3 }
+    until ((Get-Date) -gt $deadline)
+    Expect 'herd check' $page
+}
 
 Say '== uninstall'
 Status 'waiting-untrust-dialog'

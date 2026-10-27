@@ -19,12 +19,13 @@ use crate::install::{INCOMPLETE_MARKER, InstallError, Installed, MAX_EXTRACTED};
 pub const PHP_BIN: &str = "php";
 /// The PHP-FPM binary in a Linux install.
 pub const PHP_FPM_BIN: &str = "php-fpm";
-/// Where the pinned builds live: static-php-cli's `common` set. It has `pdo_sqlite` and
-/// `pdo_pgsql`, which the `bulk` set lacks (a new Laravel app uses SQLite through PDO), but
-/// not intl, opcache or sodium ([ADR 0022] §1).
+/// Where the pinned builds live: Kiln's own static-php-cli builds, released from the public
+/// `sameedkun/kiln-php` repository ([ADR 0025]). They have static-php-cli's `common` set
+/// (`pdo_sqlite` for a new Laravel app) plus `mysqli` (which `WordPress` requires), `intl`,
+/// `sodium` and `opcache`, as on Windows. No published set has both `mysqli` and `pdo_sqlite`.
 ///
-/// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
-pub const STATIC_BASE: &str = "https://dl.static-php.dev/static-php-cli/common/";
+/// [ADR 0025]: ../../../docs/adr/0025-own-static-linux-php-builds.md
+pub const STATIC_BASE: &str = "https://github.com/sameedkun/kiln-php/releases/download/2026-10-27/";
 /// What `php_versions.archive` records for a system PHP.
 pub const SYSTEM_ARCHIVE: &str = "system";
 
@@ -54,65 +55,69 @@ impl StaticBuild {
     }
 }
 
-/// Pinned builds ([ADR 0022] §1). static-php-cli publishes no checksums, so each SHA-256 was
-/// recorded from an HTTPS download that was then run and checked (`php -v`, `php -m`,
-/// `php-fpm -t`). Add a pin only the same way, and note it in docs/progress.md.
+/// Pinned builds ([ADR 0022] §1, [ADR 0025] §3). Each SHA-256 matches the release's own
+/// `.sha256` file and two independent HTTPS downloads, and the build was run and checked
+/// (`php -v`, `php -m`, `php-fpm -t`) before it was pinned. Add a pin only the same way, and
+/// note it in docs/progress.md.
 ///
 /// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
+/// [ADR 0025]: ../../../docs/adr/0025-own-static-linux-php-builds.md
 pub const STATIC_BUILDS: &[StaticBuild] = &[
-    // Recorded 2026-10-23 in the Ubuntu 24.04 test VM and again from a separate download on
-    // Windows; each build ran (`php -v`, `php -m`, `php-fpm -t`) before it was pinned.
+    // Release 2026-10-27 of sameedkun/kiln-php (static-php-cli 7bc4586). Checked 2026-10-27:
+    // the release's `.sha256` files, a download on Windows and one in the Ubuntu 24.04 test VM
+    // agree; each build ran there (`php -v`, `php -m` with mysqli, pdo_sqlite, intl, sodium
+    // and OPcache, `php-fpm -t`).
     StaticBuild {
-        version: "8.2.32",
+        version: "8.2.35",
         arch: "x86_64",
         cli: Pin {
-            archive: "php-8.2.32-cli-linux-x86_64.tar.gz",
-            sha256: "2e609bb88bae88661dbd447e409531f7c36931adff480d8a0a74e812b889d1be",
+            archive: "php-8.2.35-cli-linux-x86_64.tar.gz",
+            sha256: "1bbe01a6af1fab907fe96e0b281b0847358f06cd985d30cd0b0b705c394522e9",
         },
         fpm: Pin {
-            archive: "php-8.2.32-fpm-linux-x86_64.tar.gz",
-            sha256: "6e14e116836f9eab42451619fb4d68117ecea4bc4b1efd7011aaee914033f800",
+            archive: "php-8.2.35-fpm-linux-x86_64.tar.gz",
+            sha256: "f98bd4fc2d28db4515df2026d09dc15f81e398e530671e20da51fe459f618317",
         },
     },
     StaticBuild {
-        version: "8.3.32",
+        version: "8.3.36",
         arch: "x86_64",
         cli: Pin {
-            archive: "php-8.3.32-cli-linux-x86_64.tar.gz",
-            sha256: "d7ff2bc40846f4efed2757e5929f7469c96f672fbf33eb4bb80cd695534750fe",
+            archive: "php-8.3.36-cli-linux-x86_64.tar.gz",
+            sha256: "440e205b25090a2667fe697f26f630790b72e7568b5832e53b9a1fd436e8bad1",
         },
         fpm: Pin {
-            archive: "php-8.3.32-fpm-linux-x86_64.tar.gz",
-            sha256: "78d9ac9d52fedacc33d428196d0e5e9ace8ac010091c334daae85a669370f861",
+            archive: "php-8.3.36-fpm-linux-x86_64.tar.gz",
+            sha256: "322bd1c16c73efee61b77277558d0e3b666d30533b527b735f9b5cfc570d0944",
         },
     },
     StaticBuild {
-        version: "8.4.23",
+        version: "8.4.27",
         arch: "x86_64",
         cli: Pin {
-            archive: "php-8.4.23-cli-linux-x86_64.tar.gz",
-            sha256: "1aeed5bc7967977ca5b1da7163acd91bf9ba3ac56037045d4e91ee2ff2712bb7",
+            archive: "php-8.4.27-cli-linux-x86_64.tar.gz",
+            sha256: "9bcff154f36ec6d961c2c33109484cc5380ba0fa31de14c34ee65d1bf072c446",
         },
         fpm: Pin {
-            archive: "php-8.4.23-fpm-linux-x86_64.tar.gz",
-            sha256: "baa5ddcf2f9aabff78848cb6851bb104a4c0873347b8ee65eb9bcf4760a4d31a",
+            archive: "php-8.4.27-fpm-linux-x86_64.tar.gz",
+            sha256: "ee8f78a44487ce33ac71a8042bf1217a09952c79b9d106bce7105baf9452324d",
         },
     },
     StaticBuild {
-        version: "8.5.8",
+        version: "8.5.12",
         arch: "x86_64",
         cli: Pin {
-            archive: "php-8.5.8-cli-linux-x86_64.tar.gz",
-            sha256: "517a18e0f0874de35669fe134eb3c52508e128a6d1da5bf890760cb800ada410",
+            archive: "php-8.5.12-cli-linux-x86_64.tar.gz",
+            sha256: "8b07a7dd2213165628cc29b229aa439cd897222b5a0bb5f2af1c9325188ee28b",
         },
         fpm: Pin {
-            archive: "php-8.5.8-fpm-linux-x86_64.tar.gz",
-            sha256: "836412ac76432e9f8e49a88c440c381acb2d262cc6dab4ba0a80468ab568a239",
+            archive: "php-8.5.12-fpm-linux-x86_64.tar.gz",
+            sha256: "43dc0dbd0d2e08b128ca74aa29ff4685bbaf2bd1c2d31055a930d2a17675b7d7",
         },
     },
 ];
 
-/// The pinned build for `spec` (`8.4` or `8.4.23`) on `arch`.
+/// The pinned build for `spec` (`8.4` or `8.4.27`) on `arch`.
 pub fn resolve_static(spec: &str, arch: &str) -> Result<&'static StaticBuild, IndexError> {
     let spec = spec.trim();
     let parts: Vec<&str> = spec.split('.').collect();

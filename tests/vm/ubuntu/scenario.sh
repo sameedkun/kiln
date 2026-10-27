@@ -51,7 +51,7 @@ export COMPOSER_HOME="$WORK/composer-home" COMPOSER_CACHE_DIR="$WORK/composer-ca
 check "a new Laravel project, made with Kiln's composer shim" \
     sh -c "cd '$SITES' && bash -ic 'composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist' 2>&1"
 check "WordPress, from wordpress.org" \
-    sh -c "curl -fsSL https://wordpress.org/latest.tar.gz | tar -xz -C '$SITES' && mv '$SITES/wordpress' '$SITES/wp-site'"
+    sh -c "curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://wordpress.org/latest.tar.gz | tar -xz -C '$SITES' && mv '$SITES/wordpress' '$SITES/wp-site'"
 
 check "ca init" "$K" ca init
 check "park the sites folder" "$K" park "$SITES"
@@ -74,7 +74,7 @@ check "a PHP site over HTTPS, trusted through the system store, on its own PHP 8
 check "the Laravel app over HTTPS (served from public/, PHP 8.4)" \
     contains "Laravel" curl -fsS "https://laravel-app.test:$https/"
 check "WordPress over HTTPS (its setup page)" \
-    contains "WordPress" curl -fsSL "https://wp-site.test:$https/"
+    contains "Setup Configuration File" curl -fsSL "https://wp-site.test:$https/"
 check "an HTTP request to the secure site redirects to HTTPS" \
     contains "https://php-app.test" curl -sSI "http://php-app.test:$http/"
 shim_php() { sh -c "cd '$1' && bash -ic 'php -r \"echo PHP_VERSION;\"' 2>/dev/null"; }
