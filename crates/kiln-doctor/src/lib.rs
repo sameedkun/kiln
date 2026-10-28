@@ -239,6 +239,12 @@ pub struct ShimFacts {
     pub shims_dir: PathBuf,
     /// Where `php` resolves on this terminal's PATH.
     pub php_on_path: Option<PathBuf>,
+    /// Kiln has installed a Node (ADR 0028), so the Node shims choose a version.
+    pub kiln_node: bool,
+    /// The `node` shim is there (shims written before P2-05 lack it).
+    pub node_shim: bool,
+    /// Where `node` resolves on this terminal's PATH.
+    pub node_on_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -816,15 +822,13 @@ fn shims(facts: &ShimFacts) -> Vec<Finding> {
             "kiln shims install",
         )];
     }
-    match &facts.php_on_path {
-        Some(php) if php.starts_with(&facts.shims_dir) => {
-            vec![finding(
-                area,
-                Status::Ok,
-                "`php` on this terminal's PATH is Kiln's shim",
-            )]
-        }
-        Some(php) => vec![with_fix(
+    let mut out = vec![match &facts.php_on_path {
+        Some(php) if php.starts_with(&facts.shims_dir) => finding(
+            area,
+            Status::Ok,
+            "`php` on this terminal's PATH is Kiln's shim",
+        ),
+        Some(php) => with_fix(
             finding(
                 area,
                 Status::Warn,
@@ -834,16 +838,62 @@ fn shims(facts: &ShimFacts) -> Vec<Finding> {
                 ),
             ),
             "open a new terminal; if it persists: kiln shims install",
-        )],
-        None => vec![with_fix(
+        ),
+        None => with_fix(
             finding(
                 area,
                 Status::Warn,
                 "the shims are installed but `php` isn't on this terminal's PATH",
             ),
             "open a new terminal; if it persists: kiln shims install",
-        )],
+        ),
+    }];
+    // Node (ADR 0028 §6): only once Kiln has a Node does it matter which `node` runs.
+    if !facts.kiln_node {
+        return out;
     }
+    if !facts.node_shim {
+        out.push(with_fix(
+            finding(
+                area,
+                Status::Info,
+                "Kiln has a Node, but the node/npm/npx/corepack shims aren't installed",
+            ),
+            "kiln shims install",
+        ));
+        return out;
+    }
+    out.push(match &facts.node_on_path {
+        Some(node) if node.starts_with(&facts.shims_dir) => finding(
+            area,
+            Status::Ok,
+            "`node` on this terminal's PATH is Kiln's shim",
+        ),
+        Some(node) => with_fix(
+            finding(
+                area,
+                Status::Warn,
+                format!(
+                    "`node` on this terminal's PATH is {}, which comes before Kiln's shim",
+                    node.display()
+                ),
+            ),
+            if cfg!(windows) {
+                "open a new terminal; if it persists, that Node is on the machine PATH, which Windows puts first: remove its folder there to use Kiln's (Kiln doesn't change the machine PATH)"
+            } else {
+                "open a new terminal; if it persists, something puts that Node before Kiln's shims on PATH (such as nvm in a shell startup file)"
+            },
+        ),
+        None => with_fix(
+            finding(
+                area,
+                Status::Warn,
+                "the shims are installed but `node` isn't on this terminal's PATH",
+            ),
+            "open a new terminal; if it persists: kiln shims install",
+        ),
+    });
+    out
 }
 
 /// Never a failure: other tools are fine to have. Only a shared site name is a warning, since
@@ -1312,11 +1362,44 @@ mod tests {
             installed: true,
             shims_dir: shims_dir.clone(),
             php_on_path: Some(PathBuf::from("herd").join("bin").join("php.bat")),
+            ..ShimFacts::default()
         };
         let report = diagnose(&facts);
         assert_eq!(of(&report, Area::Shims)[0].status, Status::Warn);
         facts.shims.php_on_path = Some(shims_dir.join("php.exe"));
         assert_eq!(of(&diagnose(&facts), Area::Shims)[0].status, Status::Ok);
+        assert_eq!(
+            of(&diagnose(&facts), Area::Shims).len(),
+            1,
+            "no Node, no Node finding"
+        );
+    }
+
+    #[test]
+    fn shims_report_a_node_that_comes_first() {
+        let mut facts = base();
+        let shims_dir = PathBuf::from("kiln").join("bin").join("shims");
+        facts.shims = ShimFacts {
+            installed: true,
+            shims_dir: shims_dir.clone(),
+            php_on_path: Some(shims_dir.join("php.exe")),
+            kiln_node: true,
+            node_shim: false,
+            node_on_path: None,
+        };
+        let node = |facts: &Facts| of(&diagnose(facts), Area::Shims)[1].clone();
+        assert_eq!(node(&facts).fix.as_deref(), Some("kiln shims install"));
+        facts.shims.node_shim = true;
+        facts.shims.node_on_path = Some(PathBuf::from("nodejs").join("node.exe"));
+        let found = node(&facts);
+        assert_eq!(found.status, Status::Warn);
+        assert!(
+            found.message.contains("comes before Kiln's shim"),
+            "{}",
+            found.message
+        );
+        facts.shims.node_on_path = Some(shims_dir.join("node.exe"));
+        assert_eq!(node(&facts).status, Status::Ok);
     }
 
     #[test]

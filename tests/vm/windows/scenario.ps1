@@ -51,7 +51,9 @@ Set-Content "$sites\php-app\index.php" '<?php echo "php ", PHP_VERSION, " via ",
 # alias, and a project elsewhere with a Laravel Herd herd.yml to import.
 New-Item -ItemType Directory -Force "$sites\toml-app" | Out-Null
 Set-Content "$sites\toml-app\index.php" '<?php echo "toml ", PHP_VERSION;'
-Set-Content "$sites\toml-app\kiln.toml" "[site]`naliases = [`"toml-alias`"]`n[php]`nversion = `"8.3`"`n"
+Set-Content "$sites\toml-app\kiln.toml" "[site]`naliases = [`"toml-alias`"]`n[php]`nversion = `"8.3`"`n[node]`nversion = `"20`"`n"
+# Node (P2-05, ADR 0028): php-app asks for an LTS line by name in .nvmrc.
+Set-Content "$sites\php-app\.nvmrc" "lts/iron"
 $herdApp = Join-Path $dir 'herd-app'
 Remove-Item -Recurse -Force $herdApp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $herdApp | Out-Null
@@ -61,7 +63,11 @@ Set-Content "$herdApp\herd.yml" "name: herd-demo`nphp: '8.3'`nsecured: true`nali
 Check 'php install 8.4' { Kiln php install 8.4 }
 Check 'php install 8.3 (a second version, for per-site PHP)' { Kiln php install 8.3 }
 Check 'composer install' { Kiln composer install }
-Check 'shims install' { Kiln shims install --yes }
+# Herd's Node (nvm) is on the machine PATH, which Windows puts before the user's: Kiln says that
+# `node` stays Herd's in new terminals (ADR 0028 §6).
+Check 'shims install (it says Herd''s Node on the machine PATH stays first)' {
+    Expect 'machine PATH' (Kiln shims install --yes)
+}
 Check 'web install' { Kiln web install }
 
 # Real apps (plan.md, Phase 1 exit criteria): a new Laravel project made with Kiln's Composer,
@@ -198,6 +204,52 @@ Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app and 
     Expect '8.3.' (ShimPhp "$sites\php-app")
     Expect '8.3.' (ShimPhp "$sites\toml-app")
     Expect '8.4.' (ShimPhp "$sites\laravel-app")
+}
+
+Say '== Node (P2-05, ADR 0028)'
+# Kiln's shims are run by their full path: in new terminals Herd's Node comes first (above).
+# npm's cache goes under C:\kiln-test, so the run leaves nothing of npm's own behind either.
+$env:npm_config_cache = Join-Path $dir 'npm-cache'
+$shims = Join-Path $env:LOCALAPPDATA 'Kiln\bin\shims'
+function ShimNode($folder) {
+    Push-Location $folder
+    try { & "$shims\node.exe" -v 2>&1 | Out-String } finally { Pop-Location }
+}
+Check 'node install 22 and lts/iron (signature-checked SHASUMS)' {
+    Expect 'Checked SHASUMS256.txt''s signature' (Kiln node install 22)
+    Expect 'Node 20.' (Kiln node install lts/iron)
+}
+Check 'the node shim follows kiln.toml (20), .nvmrc (lts/iron) and the default elsewhere (22)' {
+    Expect 'v20.' (ShimNode "$sites\toml-app")
+    Expect 'v20.' (ShimNode "$sites\php-app")
+    Expect 'v22.' (ShimNode "$sites\laravel-app")
+}
+Check 'kiln which names the .nvmrc' {
+    Push-Location "$sites\php-app"
+    try { Expect '.nvmrc asks for lts/iron' (Kiln which) } finally { Pop-Location }
+}
+Check 'npm install and npm run build in the Laravel app, with Kiln''s Node' {
+    Push-Location "$sites\laravel-app"
+    try {
+        # One retry: a dropped download is the network, not Kiln.
+        foreach ($attempt in 1, 2) {
+            $out = & "$shims\npm.exe" install --no-audit --no-fund 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) { break }
+        }
+        if ($LASTEXITCODE -ne 0) { throw "npm install failed ($LASTEXITCODE):`n$out" }
+        $out = & "$shims\npm.exe" run build 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed ($LASTEXITCODE):`n$out" }
+        if (-not (Test-Path 'public\build\manifest.json')) { throw "no public\build\manifest.json:`n$out" }
+    } finally { Pop-Location }
+}
+Check 'Herd''s Node keeps its place: a new terminal''s node is still Herd''s' {
+    $herd = & 'C:\Program Files\nodejs\node.exe' -v | Out-String
+    # Windows' order: the machine PATH, then the user's.
+    $new = powershell -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); node -v" | Out-String
+    Expect $herd.Trim() $new
+}
+Check 'kiln doctor says the machine-wide Node comes first' {
+    Expect 'comes before Kiln''s shim' (& $Kiln doctor 2>&1 | Out-String)
 }
 
 Say '== Herd restarts while Kiln runs (I-11)'

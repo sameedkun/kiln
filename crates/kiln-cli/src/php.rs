@@ -532,13 +532,45 @@ pub fn which(dir: Option<PathBuf>) -> Result<(), String> {
     } else {
         println!("composer → not installed (`kiln composer install`)");
     }
+    which_node(&store, &dir)?;
     let shims = local_dir()?.join(kiln_runtime::shim::SHIMS_DIR);
-    if !shims
-        .join(kiln_runtime::shim::Tool::Php.file_name())
-        .is_file()
-    {
-        println!("The `php` / `composer` commands use this after `kiln shims install`.");
+    let has = |tool: kiln_runtime::shim::Tool| shims.join(tool.file_name()).is_file();
+    if !has(kiln_runtime::shim::Tool::Php) {
+        println!("The `php`, `composer` and `node` commands use this after `kiln shims install`.");
+    } else if !has(kiln_runtime::shim::Tool::Node) {
+        println!(
+            "Run `kiln shims install` again to add the `node`, `npm`, `npx` and `corepack` shims."
+        );
     }
+    Ok(())
+}
+
+/// The `node` line of `kiln which` ([ADR 0028] §5).
+///
+/// [ADR 0028]: ../../../docs/adr/0028-node-runtimes-and-shims.md
+fn which_node(store: &StateStore, dir: &std::path::Path) -> Result<(), String> {
+    use kiln_runtime::node::{DEFAULT_KEY, NODE_DIR, node_for_dir};
+    let installed = kiln_node::installed(&local_dir()?.join(NODE_DIR));
+    let default = store.setting(DEFAULT_KEY).map_err(|e| e.to_string())?;
+    let here = node_for_dir(&installed, default.as_deref(), dir);
+    let asks = here
+        .wanted
+        .as_ref()
+        .map(|w| format!("{} asks for {}", w.file.display(), w.text));
+    let Some(node) = &here.node else {
+        println!(
+            "node     → none from Kiln, so the shims run the next `node` on PATH (`kiln node install lts`){}",
+            asks.map(|a| format!("; {a}")).unwrap_or_default()
+        );
+        return Ok(());
+    };
+    let why = match (asks, here.fell_back) {
+        (Some(asks), false) => asks,
+        (Some(asks), true) => format!("{asks}, which isn't installed, so the default"),
+        (None, _) => "no kiln.toml, .nvmrc or .node-version asks, so the default".to_owned(),
+    };
+    println!("node     → Node {} ({why})", node.version);
+    println!("           {}", node.node_exe().display());
     Ok(())
 }
 

@@ -10,6 +10,7 @@ use kiln_core::Tld;
 use kiln_sites::{Link, Resolved, Site};
 use kiln_state::{PhpRecord, StateError, StateStore};
 
+pub mod node;
 pub mod shim;
 
 /// The `php.default` setting: the version that serves sites without a pin.

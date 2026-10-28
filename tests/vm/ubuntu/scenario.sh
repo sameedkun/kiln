@@ -42,7 +42,9 @@ echo '<?php echo "php ", PHP_VERSION, " via ", PHP_SAPI;' > "$SITES/php-app/inde
 # alias, and a project elsewhere with a Laravel Herd herd.yml to import.
 mkdir -p "$SITES/toml-app" "$WORK/herd-app"
 echo '<?php echo "toml ", PHP_VERSION;' > "$SITES/toml-app/index.php"
-printf '[site]\naliases = ["toml-alias"]\n[php]\nversion = "8.3"\n' > "$SITES/toml-app/kiln.toml"
+printf '[site]\naliases = ["toml-alias"]\n[php]\nversion = "8.3"\n[node]\nversion = "20"\n' > "$SITES/toml-app/kiln.toml"
+# Node (P2-05, ADR 0028): php-app asks for an LTS line by name in .nvmrc.
+echo lts/iron > "$SITES/php-app/.nvmrc"
 echo '<?php echo "herd-import ", PHP_VERSION;' > "$WORK/herd-app/index.php"
 printf "name: herd-demo\nphp: '8.3'\nsecured: true\naliases:\n  - herd-alias\n" > "$WORK/herd-app/herd.yml"
 check "php install 8.4" "$K" php install 8.4
@@ -62,7 +64,7 @@ check "WordPress, from wordpress.org" \
 
 check "ca init" "$K" ca init
 check "kiln import herd: herd.yml becomes kiln.toml and the folder is linked (P2-04)" \
-    sh -c "'$K' import herd '$WORK/herd-app' | grep -q herd-demo && grep -q 'version = \"8.3\"' '$WORK/herd-app/kiln.toml'"
+    sh -c "'$K' import herd '$WORK/herd-app' > '$WORK/import.txt' && grep -q herd-demo '$WORK/import.txt' && grep -q 'version = \"8.3\"' '$WORK/herd-app/kiln.toml'"
 check "park the sites folder" "$K" park "$SITES"
 check "secure php-app" "$K" secure php-app
 check "secure laravel-app" "$K" secure laravel-app
@@ -98,6 +100,22 @@ shim_php() { sh -c "cd '$1' && bash -ic 'php -r \"echo PHP_VERSION;\"' 2>/dev/nu
 check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." shim_php "$SITES/php-app"
 check "the php shim follows kiln.toml in toml-app" contains "8.3." shim_php "$SITES/toml-app"
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
+
+echo "== Node (P2-05, ADR 0028)"
+# npm's cache stays in $WORK, so the run leaves nothing of npm's own behind either.
+export npm_config_cache="$WORK/npm-cache"
+# The whole output first: `grep -q` stops reading at its match, and Kiln stops (quietly) when
+# its output is closed, mid-install.
+check "node install 22 and lts/iron (signature-checked SHASUMS)" \
+    sh -c "'$K' node install 22 > '$WORK/node.txt' && '$K' node install lts/iron >> '$WORK/node.txt' && grep -q 'Checked SHASUMS256.txt' '$WORK/node.txt' && grep -q 'Installed Node 20\.' '$WORK/node.txt'"
+shim_node() { sh -c "cd '$1' && bash -ic 'node -v' 2>/dev/null"; }
+check "the node shim in a new terminal follows kiln.toml (20) in toml-app" contains "v20." shim_node "$SITES/toml-app"
+check "the node shim follows .nvmrc (lts/iron) in php-app" contains "v20." shim_node "$SITES/php-app"
+check "the node shim uses the default (22) in laravel-app" contains "v22." shim_node "$SITES/laravel-app"
+check "kiln which names the .nvmrc" contains ".nvmrc asks for lts/iron" sh -c "cd '$SITES/php-app' && '$K' which"
+# One retry for npm install: a dropped download is the network, not Kiln.
+check "npm install and npm run build in the Laravel app, in a new terminal, with Kiln's Node" \
+    sh -c "cd '$SITES/laravel-app' && for attempt in 1 2; do bash -ic 'npm install --no-audit --no-fund' && break; done && bash -ic 'npm run build' && test -f public/build/manifest.json"
 check "kiln doctor reports no problems" "$K" doctor
 check "kiln history lists the system changes" contains "in effect" "$K" history
 

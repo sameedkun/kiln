@@ -14,6 +14,7 @@ mod coexist;
 mod daemon;
 mod doctor;
 mod history;
+mod node;
 mod php;
 mod pool;
 mod project;
@@ -92,14 +93,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Show what `php` and `composer` run in a folder (default: the current one), and why.
+    /// Show what `php`, `composer` and `node` run in a folder (default: the current one), and
+    /// why.
     Which { path: Option<PathBuf> },
     /// Composer (verified download from getcomposer.org, run through the `composer` shim).
     Composer {
         #[command(subcommand)]
         action: ComposerAction,
     },
-    /// The `php` and `composer` commands on your PATH that follow each site's PHP version.
+    /// The `php`, `composer`, `node`, `npm`, `npx` and `corepack` commands on your PATH that
+    /// follow each project's PHP and Node versions.
     Shims {
         #[command(subcommand)]
         action: ShimsAction,
@@ -108,6 +111,11 @@ enum Command {
     Php {
         #[command(subcommand)]
         action: PhpAction,
+    },
+    /// Node runtimes from nodejs.org (signature-checked downloads, into Kiln's own folder).
+    Node {
+        #[command(subcommand)]
+        action: NodeAction,
     },
     /// Kiln's web server (Caddy, running as kiln-caddy).
     Web {
@@ -206,7 +214,8 @@ enum ComposerAction {
 
 #[derive(Debug, Subcommand)]
 enum ShimsAction {
-    /// Install `php` and `composer` shims and put them first on your user PATH (asks first; undoable).
+    /// Install the `php`, `composer`, `node`, `npm`, `npx` and `corepack` shims and put them
+    /// first on your user PATH (asks first; undoable).
     Install {
         /// Do not ask for confirmation.
         #[arg(long, short)]
@@ -234,6 +243,20 @@ enum PhpAction {
     Default { version: String },
     /// Set how many PHP workers serve sites per version (1–32, default 4; applied live).
     Workers { count: usize },
+}
+
+#[derive(Debug, Subcommand)]
+enum NodeAction {
+    /// List the newest release of each Node line, with its LTS name.
+    Available,
+    /// Download, check and install a Node version: 22, 22.11.0, lts, lts/jod or latest.
+    Install { version: String },
+    /// List the Node versions Kiln has installed.
+    List,
+    /// Delete an installed Node version (with its global packages).
+    Remove { version: String },
+    /// Choose the Node version used where no project asks for one: 22, lts, ….
+    Default { version: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -447,6 +470,9 @@ fn changes_state(command: &Command) -> bool {
             | Command::Php {
                 action: PhpAction::Available | PhpAction::List
             }
+            | Command::Node {
+                action: NodeAction::Available | NodeAction::List
+            }
             | Command::Web {
                 action: WebAction::Status | WebAction::Config
             }
@@ -596,6 +622,13 @@ fn run(command: Command) -> Result<(), String> {
             PhpAction::Remove { version } => php::remove(&version),
             PhpAction::Default { version } => php::set_default(&version),
             PhpAction::Workers { count } => php::set_workers(count),
+        },
+        Command::Node { action } => match action {
+            NodeAction::Available => node::available(),
+            NodeAction::Install { version } => node::install(&version),
+            NodeAction::List => node::list(),
+            NodeAction::Remove { version } => node::remove(&version),
+            NodeAction::Default { version } => node::set_default(&version),
         },
         Command::Web { action } => match action {
             WebAction::Install { archive } => web::install(archive),

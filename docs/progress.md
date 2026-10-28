@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (4 of 11 tasks done; ADRs 0026–0027) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (5 of 11 tasks done; ADRs 0026–0028) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0027 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0028 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -939,8 +939,8 @@ its local API and autostart.
 | P2-02 | Per-user autostart (journaled) | **done** 2026-10-27 | ADR 0026 §6 (amended: XDG entry on Linux); see below. Checked across real reboots on Windows and Ubuntu |
 | P2-03 | Automatic intermediate renewal | **done** 2026-10-28 | ADR 0026 §2 (amended: a brief restart, not a live reload); see below. VM-checked on Windows and Ubuntu |
 | P2-04 | `kiln.toml` project config + `herd.yml` import | **done** 2026-10-28 | [ADR 0027](adr/0027-project-config-kiln-toml.md); see below. VM-checked on Windows and Ubuntu |
-| P2-05 | Node runtimes and shims | next | ADR at start |
-| P2-06 | PHP patch updates with rollback | planned | |
+| P2-05 | Node runtimes and shims | **done** 2026-10-28 | [ADR 0028](adr/0028-node-runtimes-and-shims.md); see below. Signature-checked installs; VM-checked on Windows (next to Herd's Node) and Ubuntu |
+| P2-06 | PHP patch updates with rollback | next | |
 | P2-07 | PHP extension toggles | planned | |
 | P2-08 | `kiln new` (Laravel) | planned | |
 | P2-09 | Proxy sites | planned | |
@@ -1113,6 +1113,62 @@ its local API and autostart.
     (noted in ADR 0026).
   - A Windows run timed out when Composer's downloads stalled in the VM; the rerun passed.
 
+### P2-05 delivered (2026-10-28)
+
+[ADR 0028](adr/0028-node-runtimes-and-shims.md).
+
+- **`kiln node available | install | list | remove | default`:**
+  - Builds come from nodejs.org: `win-x64.zip`, `linux-x64` / `linux-arm64.tar.gz`. Node 18
+    and later.
+  - Specs: `22`, `22.11`, `22.11.0` (with or without `v`), `lts`, `lts/jod`, `latest`.
+  - Installs go to `<local data>/node/<version>/`, with an in-progress marker until
+    `node --version` checks out, as for PHP.
+- **Signature-checked:**
+  - `SHASUMS256.txt.sig` is verified against Node's release keys, copied verbatim from
+    `nodejs/release-keys` into `crates/kiln-node/keys/` (29 files, current and former
+    releasers). Only then is the archive's SHA-256 taken from it.
+  - A small OpenPGP reader in the new `kiln-node` crate handles v4 RSA and Ed25519 keys,
+    subkeys included. `ring`, already in the tree, does the arithmetic: no new crates.
+  - A key Kiln doesn't know is refused, with its fingerprint and "update Kiln".
+- **Which Node runs in a folder:** the nearest `kiln.toml` `[node] version`, `.nvmrc` or
+  `.node-version` up the tree, else `kiln node default`, else the newest installed. A missing
+  version falls back to the default, with a note on stderr. `kiln which` shows the line and
+  why.
+- **Shims: `node`, `npm`, `npx`, `corepack`** are more copies of `kiln-shim`.
+  - npm, npx and corepack run `node <bundled script>`, with no `.cmd` file and no
+    `cmd.exe`. The chosen version's folder goes first on the child's `PATH`.
+  - **While Kiln has no Node, they step aside** to the next `node` on `PATH`, so
+    `kiln shims install` never breaks an existing Node.
+  - **Windows:** a Node on the machine `PATH` stays first. `kiln shims install` and
+    `kiln doctor` say so, and Kiln doesn't change the machine `PATH`.
+- **`kiln-fetch`** gained `get_bytes`, for the binary signature.
+- **Tests:**
+  - Real release signatures: RSA (v20.20.2), Ed25519 (v22.23.4) and an Ed25519 subkey
+    (v24.12.0). Tampered data and signatures fail; garbage is refused without panics.
+  - Every key file parses to the fingerprint in its name.
+  - Spec parsing; the index; zip and tar extraction, refusing escaping links; the
+    version-file search; the shims' commands and `PATH` search; doctor's Node findings.
+
+  301 on Windows.
+- **Checked by hand** in an isolated folder: real installs of 22 and 20 from nodejs.org,
+  and the shims, including the step-aside to an existing Node.
+- **VM scenarios:**
+  - Node 22 and `lts/iron` installed and signature-checked.
+  - `node` follows `kiln.toml` (20), `.nvmrc` (`lts/iron`) and the default (22).
+  - `kiln which` names the `.nvmrc`.
+  - `npm install` and `npm run build` build the new Laravel app's assets with Kiln's Node.
+  - **Windows, next to Herd:** Herd's Node is on the machine `PATH`, and stays first in new
+    terminals; `kiln shims install` and `kiln doctor` say so. Kiln's shims, run directly,
+    choose the versions above.
+
+  **Windows passed 52 checks, Ubuntu 53**, each leaving the machine as it was.
+- **On the way:**
+  - The first Windows run lost DNS for nodejs.org for a moment ("No such host is known");
+    the rerun passed.
+  - The Ubuntu scenario piped `kiln node install` into `grep -q`, which stops reading at its
+    match. Kiln then stopped, by design (I-63), before installing. The scenario now reads the
+    whole output first, and the `kiln import herd` check too.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1194,6 +1250,7 @@ its local API and autostart.
 | 2026-10-27 | **P2-02 done:** `kiln daemon enable/disable`, a journaled autostart (Windows `Run` value, Linux XDG autostart entry; ADR 0026 §6 amended). Checked across real reboots in both VMs, Windows also after a hard reset. Fixed I-64 (flush `HKCU` after registry writes) and I-63 (piping `kiln` into `head` exits quietly). Scenarios: Windows 39 checks, Ubuntu 37. |
 | 2026-10-28 | **P2-03 done:** `kiln ca renew [--force]`; `kilnd` checks the intermediate every 6 hours and renews it when fewer than 10 days are left. A running server restarts briefly to use it (ADR 0026 §2 amended: Caddy keeps old site certificates across a reload, I-57). API: `ca.status`, `ca.renew`; events `ca.renewed` and `ca.renewal_failed`. A renewal forced through the API passed in both VMs: Windows 42 checks, Ubuntu 40. |
 | 2026-10-28 | **P2-04 done:** ADR 0027. A project's `kiln.toml` sets its name, HTTPS, aliases and PHP (and later Node) version, read live; an isolate pin still wins. `kiln import herd` turns Laravel Herd's `herd.yml` into `kiln.toml` and links the folder. Fixed I-65 (PHP limits now 512 MB, 60 s, 64 MB uploads on both systems). Scenarios: Windows 46 checks, Ubuntu 47. |
+| 2026-10-28 | **P2-05 done:** ADR 0028. `kiln node available/install/list/remove/default` from nodejs.org, with `SHASUMS256.txt`'s OpenPGP signature checked against Node's release keys (new `kiln-node` crate; `ring` does the arithmetic, no new crates). `node`/`npm`/`npx`/`corepack` shims follow the nearest `kiln.toml`, `.nvmrc` or `.node-version`, and step aside to an existing Node while Kiln has none. Scenarios: Windows 52 checks (Herd's machine-wide Node stays first, as documented), Ubuntu 53, both building the Laravel app with `npm run build`. |
 
 ## How to update this file
 

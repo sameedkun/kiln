@@ -703,6 +703,7 @@ dependencies = [
  "kiln-doctor",
  "kiln-fetch",
  "kiln-helper",
+ "kiln-node",
  "kiln-ops",
  "kiln-php",
  "kiln-pki",
@@ -792,6 +793,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln-node"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "kiln-fetch",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "zip",
+]
+
+[[package]]
 name = "kiln-ops"
 version = "0.0.0"
 dependencies = [
@@ -858,6 +877,7 @@ name = "kiln-runtime"
 version = "0.0.0"
 dependencies = [
  "kiln-core",
+ "kiln-node",
  "kiln-php",
  "kiln-sites",
  "kiln-state",

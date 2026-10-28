@@ -226,12 +226,21 @@ impl Fetcher {
 
     /// A small text document (up to `limit` bytes), e.g. a release index.
     pub fn get_text(&self, url: &str, limit: u64) -> Result<String, FetchError> {
+        let bytes = self.get_bytes(url, limit)?;
+        String::from_utf8(bytes).map_err(|_| FetchError::Http {
+            url: url.to_owned(),
+            detail: "the document isn't UTF-8 text".to_owned(),
+        })
+    }
+
+    /// A small document (up to `limit` bytes) as raw bytes, e.g. a detached signature.
+    pub fn get_bytes(&self, url: &str, limit: u64) -> Result<Vec<u8>, FetchError> {
         let mut response = self.get(url)?;
         response
             .body_mut()
             .with_config()
             .limit(limit)
-            .read_to_string()
+            .read_to_vec()
             .map_err(|e| match e {
                 ureq::Error::BodyExceedsLimit(_) => FetchError::TooLarge {
                     url: url.to_owned(),

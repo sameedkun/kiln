@@ -295,11 +295,13 @@ mod system {
     }
 
     #[cfg(windows)]
-    /// `kiln shims install` ([ADR 0016] §8, §11): copies `kiln-shim` in as `php.exe` and
-    /// `composer.exe`, then puts their folder first on the user PATH as a journaled, undoable
-    /// operation, after showing which `php` new terminals get now and after.
+    /// `kiln shims install` ([ADR 0016] §8, §11, [ADR 0028] §6): copies `kiln-shim` in as
+    /// `php.exe`, `composer.exe` and the Node commands, then puts their folder first on the user
+    /// PATH as a journaled, undoable operation, after showing what new terminals get now and
+    /// after.
     ///
     /// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+    /// [ADR 0028]: ../../../docs/adr/0028-node-runtimes-and-shims.md
     pub fn shims_install(yes: bool) -> Result<(), String> {
         use kiln_runtime::shim::{SHIMS_DIR, Tool};
         let local = kiln_state::default_local_dir()
@@ -315,7 +317,7 @@ mod system {
             ));
         }
         std::fs::create_dir_all(&shims).map_err(|e| e.to_string())?;
-        for tool in [Tool::Php, Tool::Composer] {
+        for tool in Tool::ALL {
             let target = shims.join(tool.file_name());
             std::fs::copy(&source, &target).map_err(|e| {
                 format!(
@@ -327,21 +329,7 @@ mod system {
         }
         println!("Shims written to {}.", shims.display());
 
-        let path_now = std::env::var("PATH").unwrap_or_default();
-        for tool in [Tool::Php, Tool::Composer] {
-            match super::which_on(&path_now, tool.name()) {
-                Some(found) if found.starts_with(&shims) => {}
-                Some(found) => println!(
-                    "`{}` in new terminals: now {}; after this, Kiln's shim (it follows each site's PHP).",
-                    tool.name(),
-                    found.display()
-                ),
-                None => println!(
-                    "`{}` in new terminals: now not found; after this, Kiln's shim.",
-                    tool.name()
-                ),
-            }
-        }
+        super::say_what_shims_change(&std::env::var("PATH").unwrap_or_default(), &shims);
 
         let mut ctx = open()?;
         let op: Box<dyn Operation> = Box::new(UserPathOp::new(&shims, Rc::new(RegistryPath)));
@@ -433,7 +421,7 @@ mod system {
             ));
         }
         std::fs::create_dir_all(&shims).map_err(|e| e.to_string())?;
-        for tool in [Tool::Php, Tool::Composer] {
+        for tool in Tool::ALL {
             install_executable(&source, &shims.join(tool.file_name()))?;
         }
         println!("Shims written to {}.", shims.display());
@@ -486,20 +474,7 @@ mod system {
             )));
         }
 
-        for tool in [Tool::Php, Tool::Composer] {
-            match super::which_on(&path_now, tool.name()) {
-                Some(found) if found.starts_with(&shims) => {}
-                Some(found) => println!(
-                    "`{}` in new terminals: now {}; after this, Kiln's shim (it follows each site's PHP).",
-                    tool.name(),
-                    found.display()
-                ),
-                None => println!(
-                    "`{}` in new terminals: now not found; after this, Kiln's shim.",
-                    tool.name()
-                ),
-            }
-        }
+        super::say_what_shims_change(&path_now, &shims);
         let mut ctx = open()?;
         for op in &ops {
             print_preview(&op.preview().map_err(|e| e.to_string())?, "(no Kiln block)");
@@ -761,6 +736,92 @@ pub(crate) fn which_on(path: &str, name: &str) -> Option<std::path::PathBuf> {
             std::fs::metadata(candidate)
                 .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         })
+}
+
+/// Says what `kiln shims install` changes for each command in new terminals ([ADR 0016] §11,
+/// [ADR 0028] §6).
+///
+/// [ADR 0016]: ../../../docs/adr/0016-per-site-php-and-shims.md
+/// [ADR 0028]: ../../../docs/adr/0028-node-runtimes-and-shims.md
+pub(crate) fn say_what_shims_change(path_now: &str, shims: &std::path::Path) {
+    use kiln_runtime::shim::Tool;
+    let mut not_found = Vec::new();
+    for tool in Tool::ALL {
+        let name = tool.name();
+        let Some(found) = which_on(path_now, name) else {
+            not_found.push(format!("`{name}`"));
+            continue;
+        };
+        if found.starts_with(shims) {
+            continue;
+        }
+        let machine = on_machine_path(&found);
+        let found = found.display();
+        if tool.is_node() && machine {
+            println!(
+                "`{name}` in new terminals: stays {found}. It is on the machine PATH, which Windows puts before your user PATH; to use Kiln's shim, remove that folder from the machine PATH (Kiln doesn't change it)."
+            );
+        } else if tool.is_node() {
+            println!(
+                "`{name}` in new terminals: now {found}; after this, Kiln's shim, which keeps running that one until you install a Node with Kiln."
+            );
+        } else {
+            println!(
+                "`{name}` in new terminals: now {found}; after this, Kiln's shim (it follows each site's PHP)."
+            );
+        }
+    }
+    if !not_found.is_empty() {
+        println!(
+            "{} in new terminals: now not found; after this, Kiln's shims.",
+            not_found.join(", ")
+        );
+    }
+}
+
+/// Whether `exe`'s folder comes from the machine PATH rather than the user's (Windows puts the
+/// machine PATH first, so the user PATH can't override it).
+#[cfg(windows)]
+fn on_machine_path(exe: &std::path::Path) -> bool {
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
+    let normalise = |text: &str| text.trim().trim_end_matches('\\').to_ascii_lowercase();
+    let want = normalise(&dir.to_string_lossy());
+    let user = kiln_sys::win::read_user_reg_string(kiln_sys::win::USER_ENVIRONMENT_KEY, "Path")
+        .ok()
+        .flatten()
+        .map(|path| path.value)
+        .unwrap_or_default();
+    !user
+        .split(';')
+        .any(|entry| normalise(&expand_env(entry)) == want)
+}
+
+#[cfg(not(windows))]
+fn on_machine_path(_exe: &std::path::Path) -> bool {
+    false
+}
+
+/// `%NAME%` replaced by the environment variable's value (as Windows expands PATH entries).
+#[cfg(windows)]
+fn expand_env(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        let Some(len) = rest[start + 1..].find('%') else {
+            break;
+        };
+        let name = &rest[start + 1..start + 1 + len];
+        out.push_str(&rest[..start]);
+        match std::env::var(name) {
+            Ok(value) if !name.is_empty() => out.push_str(&value),
+            _ => out.push_str(&rest[start..=start + 1 + len]),
+        }
+        rest = &rest[start + 2 + len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// How a journal state reads in a sentence.

@@ -466,15 +466,17 @@ fn firefox_profiles() -> usize {
 }
 
 fn shims(php_on_path: Option<PathBuf>) -> ShimFacts {
+    use kiln_runtime::shim::Tool;
     let Some(local) = kiln_state::default_local_dir() else {
         return ShimFacts::default();
     };
     let shims_dir = local.join(kiln_runtime::shim::SHIMS_DIR);
     ShimFacts {
-        installed: shims_dir
-            .join(kiln_runtime::shim::Tool::Php.file_name())
-            .is_file(),
+        installed: shims_dir.join(Tool::Php.file_name()).is_file(),
         php_on_path,
+        kiln_node: !kiln_node::installed(&local.join(kiln_runtime::node::NODE_DIR)).is_empty(),
+        node_shim: shims_dir.join(Tool::Node.file_name()).is_file(),
+        node_on_path: crate::apply::which_on(&std::env::var("PATH").unwrap_or_default(), "node"),
         shims_dir,
     }
 }

@@ -1,0 +1,27 @@
+[package]
+name = "kiln-node"
+description = "Node runtimes for Kiln: the nodejs.org release index, signature-checked downloads, safe extraction (ADR 0028)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-fetch.workspace = true
+base64.workspace = true
+flate2.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

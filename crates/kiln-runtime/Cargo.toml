@@ -1,6 +1,6 @@
 [package]
 name = "kiln-runtime"
-description = "Which PHP runs what: the default version, per-site pins, the version for a folder; and the `kiln-shim` binary behind `php` and `composer` (ADR 0016)."
+description = "Which PHP and Node run what: defaults, per-site pins, the version for a folder; and the `kiln-shim` binary behind `php`, `composer`, `node`, `npm`, `npx` and `corepack` (ADR 0016, ADR 0028)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 kiln-core.workspace = true
+kiln-node.workspace = true
 kiln-php.workspace = true
 kiln-sites.workspace = true
 kiln-state.workspace = true
