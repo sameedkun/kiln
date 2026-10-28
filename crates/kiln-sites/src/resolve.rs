@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use kiln_core::{HostName, Tld};
 
 use crate::driver::{Driver, detect};
+use crate::manifest::Manifest;
 
 /// A linked site, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,8 +33,22 @@ pub struct Site {
     pub project: PathBuf,
     pub driver: Driver,
     pub document_root: PathBuf,
+    /// From Kiln's state, or `secure = true` in the project's `kiln.toml`.
     pub secure: bool,
     pub source: Source,
+    /// The project's `kiln.toml`, if it has a usable one (ADR 0027).
+    pub manifest: Option<Manifest>,
+    /// For a name from `kiln.toml`'s `aliases`: the site it is another name for.
+    pub alias_of: Option<HostName>,
+}
+
+impl Site {
+    /// The site whose settings (such as a `kiln isolate` pin) this one follows: itself, or
+    /// the main site for an alias.
+    #[must_use]
+    pub fn main_host(&self) -> &HostName {
+        self.alias_of.as_ref().unwrap_or(&self.host)
+    }
 }
 
 /// A parked subfolder that isn't served, and why.
@@ -43,11 +58,13 @@ pub struct Skipped {
     pub reason: String,
 }
 
-/// Every site, sorted by host, plus parked subfolders that were left out.
+/// Every site, sorted by host, plus parked subfolders that were left out and problems with
+/// projects' `kiln.toml` files (shown to the user; the sites are still served).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolved {
     pub sites: Vec<Site>,
     pub skipped: Vec<Skipped>,
+    pub warnings: Vec<String>,
 }
 
 fn site(host: HostName, project: PathBuf, secure: bool, source: Source) -> Site {
@@ -59,6 +76,59 @@ fn site(host: HostName, project: PathBuf, secure: bool, source: Source) -> Site 
         driver,
         secure,
         source,
+        manifest: None,
+        alias_of: None,
+    }
+}
+
+/// Reads each site's `kiln.toml` (ADR 0027 §2–4): `secure = true` turns HTTPS on, and each
+/// alias becomes another site for the same folder unless that name is taken.
+fn apply_manifests(by_host: &mut BTreeMap<String, Site>, tld: &Tld, warnings: &mut Vec<String>) {
+    let mut aliases = Vec::new();
+    for site in by_host.values_mut() {
+        let manifest = match crate::manifest::read(&site.project) {
+            Ok(Some(manifest)) => manifest,
+            Ok(None) => continue,
+            Err(e) => {
+                warnings.push(format!("{}: {e} (the file is ignored)", site.host));
+                continue;
+            }
+        };
+        for warning in &manifest.warnings {
+            warnings.push(format!(
+                "{} ({}): {warning}",
+                site.host,
+                crate::manifest::FILE
+            ));
+        }
+        if manifest.secure == Some(true) {
+            site.secure = true;
+        }
+        for alias in &manifest.aliases {
+            let name = alias.to_ascii_lowercase();
+            let fqdn = if name.ends_with(&format!(".{tld}")) {
+                name
+            } else {
+                format!("{name}.{tld}")
+            };
+            match HostName::new(&fqdn, tld) {
+                Ok(host) => aliases.push((host, site.host.clone())),
+                Err(e) => warnings.push(format!("{}: alias {alias:?} skipped: {e}", site.host)),
+            }
+        }
+        site.manifest = Some(manifest);
+    }
+    for (host, main) in aliases {
+        if by_host.contains_key(host.as_str()) {
+            warnings.push(format!(
+                "{main}: alias {host} skipped: that name is already a site"
+            ));
+            continue;
+        }
+        let mut alias = by_host[main.as_str()].clone();
+        alias.host = host.clone();
+        alias.alias_of = Some(main);
+        by_host.insert(host.to_string(), alias);
     }
 }
 
@@ -145,9 +215,12 @@ pub fn resolve(links: &[Link], parked: &[PathBuf], tld: &Tld) -> Resolved {
         }
     }
 
+    let mut warnings = Vec::new();
+    apply_manifests(&mut by_host, tld, &mut warnings);
     Resolved {
         sites: by_host.into_values().collect(),
         skipped,
+        warnings,
     }
 }
 
@@ -256,5 +329,68 @@ mod tests {
         let resolved = resolve(&[], &[dir.path().join("gone")], &Tld::default());
         assert_eq!(resolved.sites, Vec::new());
         assert_eq!(resolved.skipped.len(), 1);
+    }
+
+    #[test]
+    fn kiln_toml_turns_https_on_and_adds_aliases_for_the_same_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(&dir.path().join("shop").join("public").join("index.php"));
+        touch(&dir.path().join("shop").join("artisan"));
+        touch(&dir.path().join("blog").join("index.php"));
+        fs::write(
+            dir.path().join("shop").join("kiln.toml"),
+            "[site]\nsecure = true\naliases = [\"admin\", \"api.test\", \"blog\", \"bad name\"]\n[php]\nversion = \"8.3\"\n",
+        )
+        .unwrap();
+        let resolved = resolve(&[], &[dir.path().to_path_buf()], &Tld::default());
+        let hosts: Vec<&str> = resolved.sites.iter().map(|s| s.host.as_str()).collect();
+        assert_eq!(hosts, ["admin.test", "api.test", "blog.test", "shop.test"]);
+        let shop = resolved
+            .sites
+            .iter()
+            .find(|s| s.host.as_str() == "shop.test")
+            .unwrap();
+        assert!(shop.secure, "secure = true");
+        assert_eq!(shop.manifest.as_ref().unwrap().php.as_deref(), Some("8.3"));
+        let admin = &resolved.sites[0];
+        assert_eq!(
+            admin.alias_of.as_ref().map(HostName::as_str),
+            Some("shop.test")
+        );
+        assert_eq!(admin.main_host().as_str(), "shop.test");
+        assert_eq!(
+            admin.document_root, shop.document_root,
+            "same folder, same driver"
+        );
+        assert!(admin.secure);
+        let blog = resolved
+            .sites
+            .iter()
+            .find(|s| s.host.as_str() == "blog.test")
+            .unwrap();
+        assert_eq!(
+            blog.alias_of, None,
+            "an alias never takes another site's name"
+        );
+        assert_eq!(resolved.warnings.len(), 2, "{:?}", resolved.warnings);
+    }
+
+    #[test]
+    fn a_broken_kiln_toml_is_reported_and_the_site_still_served() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(&dir.path().join("shop").join("index.php"));
+        fs::write(
+            dir.path().join("shop").join("kiln.toml"),
+            "[php]\nversion = 8.3\n",
+        )
+        .unwrap();
+        let resolved = resolve(&[], &[dir.path().to_path_buf()], &Tld::default());
+        assert_eq!(resolved.sites.len(), 1);
+        assert_eq!(resolved.sites[0].manifest, None);
+        assert!(
+            resolved.warnings[0].contains("must be quoted"),
+            "{:?}",
+            resolved.warnings
+        );
     }
 }

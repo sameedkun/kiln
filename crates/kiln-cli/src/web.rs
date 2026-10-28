@@ -286,7 +286,12 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
         return Err(format!("{} is not a folder", root.display()));
     }
     let root = strip_verbatim(root);
-    let name = match name {
+    // A name given here, else `[site] name` in the project's kiln.toml, else the folder's.
+    let from_project = kiln_sites::manifest::read(&root)
+        .ok()
+        .flatten()
+        .and_then(|m| m.name);
+    let name = match name.or(from_project) {
         Some(name) => name,
         None => root
             .file_name()
@@ -406,7 +411,7 @@ pub fn unpark(path: Option<PathBuf>) -> Result<(), String> {
 }
 
 /// `canonicalize` on Windows returns `\\?\C:\...`; Caddy and humans want `C:\...`.
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
@@ -492,9 +497,14 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
         .find(|s| s.host == host)
         .map(|s| config.site_url(s))
         .unwrap_or_default();
+    let still_secure = config.sites.iter().any(|s| s.host == host && s.secure);
     if secure {
         println!("{host} now uses HTTPS: {url} (HTTP redirects there).");
         trust_hint()?;
+    } else if still_secure {
+        println!(
+            "{host} keeps HTTPS: its kiln.toml has `secure = true` (ADR 0027). Change it there to serve plain HTTP."
+        );
     } else {
         println!("{host} is back to plain HTTP: {url}");
     }
@@ -588,13 +598,16 @@ pub fn sites() -> Result<(), String> {
         kiln_runtime::site_versions(&store, &all.sites, &installed).map_err(|e| e.to_string())?;
     for site in &all.sites {
         let url = config.site_url(&spec(site, &BTreeMap::new()));
-        // "8.4.27", "8.1.34 (pinned)", "8.4.27 (pin 8.2 missing)", or "-" for static sites.
+        // "8.4.27", "8.1.34 (pinned)", "8.3.36 (kiln.toml)", "8.4.27 (pin 8.2 missing)",
+        // or "-" for static sites.
         let php = match versions.get(site.host.as_str()) {
             _ if !site.driver.uses_php() => "-".to_owned(),
             Some(v) => {
                 let version = v.php.as_ref().map_or("none", |p| p.version.as_str());
+                let what = if v.from_project { "kiln.toml" } else { "pin" };
                 match (&v.pinned, v.fell_back) {
-                    (Some(pin), true) => format!("{version} (pin {pin} missing)"),
+                    (Some(pin), true) => format!("{version} ({what} {pin} missing)"),
+                    (Some(_), false) if v.from_project => format!("{version} (kiln.toml)"),
                     (Some(_), false) => format!("{version} (pinned)"),
                     (None, _) => version.to_owned(),
                 }
@@ -606,9 +619,10 @@ pub fn sites() -> Result<(), String> {
         } else {
             "  (not in hosts file)"
         };
-        let source = match &site.source {
-            kiln_sites::Source::Link => "link",
-            kiln_sites::Source::Parked(_) => "parked",
+        let source = match (&site.alias_of, &site.source) {
+            (Some(_), _) => "alias",
+            (None, kiln_sites::Source::Link) => "link",
+            (None, kiln_sites::Source::Parked(_)) => "parked",
         };
         println!(
             "{url:<34} {:<17} {php:<17} {source:<6} {}{dns}",
@@ -618,6 +632,9 @@ pub fn sites() -> Result<(), String> {
     }
     for skipped in &all.skipped {
         println!("skipped {}: {}", skipped.folder.display(), skipped.reason);
+    }
+    for warning in &all.warnings {
+        println!("warning: {warning}");
     }
     Ok(())
 }

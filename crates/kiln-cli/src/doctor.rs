@@ -362,6 +362,7 @@ fn sites(resolved: &kiln_sites::Resolved) -> SiteFacts {
             .iter()
             .map(|s| (s.folder.clone(), s.reason.clone()))
             .collect(),
+        project_warnings: resolved.warnings.clone(),
         stale_hosts: in_hosts
             .into_iter()
             .filter(|n| !current.contains(n.as_str()))

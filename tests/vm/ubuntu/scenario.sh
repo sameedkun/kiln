@@ -38,6 +38,13 @@ echo "== session"
 mkdir -p "$SITES/static-site" "$SITES/php-app"
 echo '<h1>static from kiln</h1>' > "$SITES/static-site/index.html"
 echo '<?php echo "php ", PHP_VERSION, " via ", PHP_SAPI;' > "$SITES/php-app/index.php"
+# Project config (P2-04, ADR 0027): a parked project whose kiln.toml asks for PHP 8.3 and an
+# alias, and a project elsewhere with a Laravel Herd herd.yml to import.
+mkdir -p "$SITES/toml-app" "$WORK/herd-app"
+echo '<?php echo "toml ", PHP_VERSION;' > "$SITES/toml-app/index.php"
+printf '[site]\naliases = ["toml-alias"]\n[php]\nversion = "8.3"\n' > "$SITES/toml-app/kiln.toml"
+echo '<?php echo "herd-import ", PHP_VERSION;' > "$WORK/herd-app/index.php"
+printf "name: herd-demo\nphp: '8.3'\nsecured: true\naliases:\n  - herd-alias\n" > "$WORK/herd-app/herd.yml"
 check "php install 8.4" "$K" php install 8.4
 check "php install 8.3 (a second version, for per-site PHP)" "$K" php install 8.3
 check "composer install" "$K" composer install
@@ -54,6 +61,8 @@ check "WordPress, from wordpress.org" \
     sh -c "curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://wordpress.org/latest.tar.gz | tar -xz -C '$SITES' && mv '$SITES/wordpress' '$SITES/wp-site'"
 
 check "ca init" "$K" ca init
+check "kiln import herd: herd.yml becomes kiln.toml and the folder is linked (P2-04)" \
+    sh -c "'$K' import herd '$WORK/herd-app' | grep -q herd-demo && grep -q 'version = \"8.3\"' '$WORK/herd-app/kiln.toml'"
 check "park the sites folder" "$K" park "$SITES"
 check "secure php-app" "$K" secure php-app
 check "secure laravel-app" "$K" secure laravel-app
@@ -75,10 +84,19 @@ check "the Laravel app over HTTPS (served from public/, PHP 8.4)" \
     contains "Laravel" curl -fsS "https://laravel-app.test:$https/"
 check "WordPress over HTTPS (its setup page)" \
     contains "Setup Configuration File" curl -fsSL "https://wp-site.test:$https/wp-admin/setup-config.php?step=1"
+check "kiln.toml: PHP 8.3 for toml-app (P2-04)" \
+    contains "toml 8.3." curl -fsS "http://toml-app.test:$http/"
+check "kiln.toml: and for its alias" contains "toml 8.3." curl -fsS "http://toml-alias.test:$http/"
+check "the project imported from herd.yml: HTTPS and PHP 8.3" \
+    contains "herd-import 8.3." curl -fsS "https://herd-demo.test:$https/"
+check "the imported project's alias" contains "herd-import 8.3." curl -fsS "https://herd-alias.test:$https/"
+check "kiln which names kiln.toml as the source" \
+    contains "kiln.toml" sh -c "cd '$SITES/toml-app' && '$K' which"
 check "an HTTP request to the secure site redirects to HTTPS" \
     contains "https://php-app.test" curl -sSI "http://php-app.test:$http/"
 shim_php() { sh -c "cd '$1' && bash -ic 'php -r \"echo PHP_VERSION;\"' 2>/dev/null"; }
 check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." shim_php "$SITES/php-app"
+check "the php shim follows kiln.toml in toml-app" contains "8.3." shim_php "$SITES/toml-app"
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
 check "kiln doctor reports no problems" "$K" doctor
 check "kiln history lists the system changes" contains "in effect" "$K" history
@@ -113,7 +131,12 @@ renewed() { # a new intermediate, a restarted server, and HTTPS still trusted
     "$K" daemon call ca.renew '{"force":true}' | grep -q '"ok": true' || return 1
     [ "$(intermediate_sha)" != "$before" ] || { echo "the intermediate didn't change"; return 1; }
     [ "$(caddy_pid)" != "$old" ] || { echo "the web server didn't restart"; return 1; }
-    curl -fsS "https://php-app.test:$https/" | grep -q 'via fpm-fcgi'
+    # Caddy issues the sites' certificates in the background right after the restart.
+    for i in $(seq 20); do
+        curl -fsS "https://php-app.test:$https/" 2>/dev/null | grep -q 'via fpm-fcgi' && return 0
+        sleep 1
+    done
+    return 1
 }
 check "renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)" renewed
 check "daemon status counts the renewal" contains "Renewals by the daemon: 1" "$K" daemon status

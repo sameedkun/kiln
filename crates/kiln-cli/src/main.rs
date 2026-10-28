@@ -16,6 +16,7 @@ mod doctor;
 mod history;
 mod php;
 mod pool;
+mod project;
 mod uninstall;
 mod web;
 
@@ -113,6 +114,11 @@ enum Command {
         #[command(subcommand)]
         action: WebAction,
     },
+    /// Bring a project's settings over from another tool.
+    Import {
+        #[command(subcommand)]
+        from: ImportFrom,
+    },
     /// Kiln's optional background daemon (kilnd): keeps the web server running.
     Daemon {
         #[command(subcommand)]
@@ -147,6 +153,19 @@ enum Command {
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ImportFrom {
+    /// Write the folder's kiln.toml from its Laravel Herd herd.yml (name, PHP, HTTPS, aliases),
+    /// and link the folder if it isn't a site yet.
+    Herd {
+        /// The project folder (default: the current one).
+        path: Option<PathBuf>,
+        /// Replace an existing kiln.toml.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -591,6 +610,9 @@ fn run(command: Command) -> Result<(), String> {
             WebAction::Status => web::status(),
             WebAction::Config => web::print_config(),
         },
+        Command::Import {
+            from: ImportFrom::Herd { path, force },
+        } => project::import_herd(path, force),
         Command::Daemon { action } => match action {
             DaemonAction::Start => daemon::start(),
             DaemonAction::Stop => daemon::stop(),

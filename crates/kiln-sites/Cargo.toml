@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 kiln-core.workspace = true
+toml.workspace = true
+yaml-rust2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -26,6 +26,15 @@ pub const DEFAULT_EXTENSIONS: &[&str] = &[
 
 pub const KILN_MARKER: &str = "; ---- Kiln defaults (generated; edit freely) ----";
 
+/// Limits for local development, the same on every platform. PHP's own development defaults
+/// (30 s, 128 MB) are tight for Composer and for a first `WordPress` or Laravel request while
+/// Windows Defender scans every file it loads (I-65). Later lines override earlier ones, so
+/// these win over the bundled `php.ini-development`.
+pub const LIMITS: &str = "memory_limit = 512M\n\
+                          max_execution_time = 60\n\
+                          upload_max_filesize = 64M\n\
+                          post_max_size = 64M\n";
+
 /// Whether `ini` already enables `name` with an uncommented `extension=` line.
 fn enables(ini: &str, name: &str) -> bool {
     ini.lines().any(|line| {
@@ -52,6 +61,7 @@ pub fn render(
     text.push_str("\n\n");
     text.push_str(KILN_MARKER);
     text.push_str("\nextension_dir = \"ext\"\n");
+    text.push_str(LIMITS);
     for &name in DEFAULT_EXTENSIONS {
         if shipped(name) && !enables(development_ini, name) {
             let _ = writeln!(text, "extension={name}");
@@ -74,6 +84,11 @@ mod tests {
         assert!(ini.starts_with("[PHP]\r\n;extension=curl"), "original kept");
         let section = ini.split(KILN_MARKER).nth(1).unwrap();
         assert!(section.starts_with("\nextension_dir = \"ext\"\n"));
+        assert!(
+            section.contains("max_execution_time = 60\n")
+                && section.contains("memory_limit = 512M\n"),
+            "Kiln's limits override the development defaults"
+        );
         assert!(section.contains("extension=curl\n"));
         assert!(!section.contains("extension=intl"), "not shipped");
         assert!(

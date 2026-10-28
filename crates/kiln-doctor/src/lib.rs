@@ -185,6 +185,8 @@ pub struct SiteFacts {
     pub sites: Vec<SiteDns>,
     /// (folder, reason)
     pub skipped: Vec<(PathBuf, String)>,
+    /// Problems with projects' `kiln.toml` files (ADR 0027): the sites are still served.
+    pub project_warnings: Vec<String>,
     /// Names in Kiln's hosts block that are no longer sites.
     pub stale_hosts: Vec<String>,
 }
@@ -524,6 +526,12 @@ fn sites(facts: &SiteFacts) -> Vec<Finding> {
             area,
             Status::Info,
             format!("skipped {}: {reason}", folder.display()),
+        ));
+    }
+    for warning in &facts.project_warnings {
+        out.push(with_fix(
+            finding(area, Status::Warn, warning.clone()),
+            "fix the project's kiln.toml, then kiln web reload",
         ));
     }
     out

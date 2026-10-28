@@ -447,10 +447,20 @@ pub fn isolate(version: &str, site: Option<String>) -> Result<(), String> {
     let mut store = open_store()?;
     let host = site_host(&store, site)?;
     let sites = kiln_runtime::sites(&store).map_err(|e| e.to_string())?;
-    if !sites.sites.iter().any(|s| s.host.as_str() == host) {
+    let Some(site) = sites.sites.iter().find(|s| s.host.as_str() == host) else {
         return Err(format!(
             "{host} isn't a linked or parked site (see `kiln sites`)"
         ));
+    };
+    if let Some(alias_of) = &site.alias_of {
+        return Err(format!(
+            "{host} is an alias of {alias_of} (from its kiln.toml); pin {alias_of} instead"
+        ));
+    }
+    if let Some(wanted) = site.manifest.as_ref().and_then(|m| m.php.as_deref()) {
+        println!(
+            "{host}'s kiln.toml asks for PHP {wanted}; this pin overrides it on this machine (`kiln unisolate` goes back to it)."
+        );
     }
     let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
     let Some(php) = kiln_runtime::pick(&installed, version) else {
@@ -496,10 +506,15 @@ pub fn which(dir: Option<PathBuf>) -> Result<(), String> {
     };
     let store = open_store()?;
     let here = kiln_runtime::php_for_dir(&store, &dir).map_err(|e| e.to_string())?;
+    let asks = if here.php.from_project {
+        "asks in its kiln.toml for"
+    } else {
+        "is pinned to"
+    };
     let why = match (&here.site, &here.php.pinned, here.php.fell_back) {
-        (Some(site), Some(pin), false) => format!("{site} is pinned to {pin}"),
+        (Some(site), Some(pin), false) => format!("{site} {asks} {pin}"),
         (Some(site), Some(pin), true) => {
-            format!("{site} is pinned to {pin}, which isn't installed, so the default")
+            format!("{site} {asks} {pin}, which isn't installed, so the default")
         }
         (Some(site), None, _) => format!("{site} uses the default"),
         (None, _, _) => "not inside a site, so the default".to_owned(),

@@ -42,6 +42,7 @@ working name). Start here.
 | [0024](adr/0024-integration-test-vms.md) | Integration tests in Hyper-V VMs (Windows 11, Ubuntu 24.04): snapshot, full Kiln session, `kiln uninstall`, snapshot, compare (files byte for byte, trust stores logically); Laravel Herd running alongside on Windows, including a Herd restart; test-VM-only settings answer privilege prompts | accepted, implemented (P1-15) |
 | [0025](adr/0025-own-static-linux-php-builds.md) | Kiln builds its own static Linux PHP (static-php-cli `common` plus `mysqli`, `intl`, `sodium`, `opcache`, pinned tool commit, no UPX), published with licences from the public `sameedkun/kiln-php` repo; Kiln pins each archive's SHA-256 | accepted, implemented (release 2026-10-27) |
 | [0026](adr/0026-kilnd-daemon-and-local-api.md) | `kilnd`: optional per-user daemon (keeps Caddy and pools running, renews the intermediate, serves the API); JSON-RPC 2.0 over a per-user Unix socket with `kiln.hello` versioning and event notifications; threads, not async; autostart via the `HKCU` Run key or an XDG autostart entry, journaled | accepted (P2-01–03; §6 amended in P2-02) |
+| [0027](adr/0027-project-config-kiln-toml.md) | Project config: `kiln.toml` in the project folder (`[site]` name, secure, aliases; `[php]` and `[node]` versions), read live and never imported; precedence `kiln isolate` > `kiln.toml` > default; aliases resolve as extra sites; `kiln import herd` writes `kiln.toml` from `herd.yml` | accepted (P2-04) |
 
 ## Conventions
 

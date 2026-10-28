@@ -74,6 +74,7 @@ commits and PRs.
 | [I-62](#i-62) | php | WordPress needs `mysqli`: not enabled on Windows, missing from the static Linux builds | ✅ (enabled on Windows; Kiln's own Linux builds, ADR 0025) |
 | [I-63](#i-63) | cli | Piping `kiln` into `head` panicked with "Broken pipe" once the reader exited | ✅ (quiet exit 141) |
 | [I-64](#i-64) | durability | A registry value written just before a hard reset was lost (Windows writes the registry lazily) | ✅ (`RegFlushKey` after each write) |
+| [I-65](#i-65) | php | Windows PHP kept PHP's 30 s / 128 MB development limits; a first WordPress load under Defender ran past 30 s | ✅ (same 60 s / 512 MB limits as Linux) |
 
 ---
 
@@ -828,3 +829,23 @@ commits and PRs.
     as with a normal reboot.
 - **Rule:** a journaled change is durable before the journal says it is applied: files
   are fsynced, and registry keys are flushed.
+
+## P2-04: project config
+
+<a id="i-65"></a>
+### I-65: Windows PHP kept PHP's 30 s / 128 MB development limits ✅
+- **Found:** WordPress's setup page in the Windows VM scenario took 22–31 s on its first
+  request. When it went past 30 s, WordPress showed "There has been a critical error".
+  - On Windows, Kiln's `php.ini` was PHP's bundled `php.ini-development` (30 s, 128 MB)
+    plus Kiln's extension lines.
+  - On Linux, Kiln's `php.ini` already set 60 s and 512 MB, and the same page was fast.
+  - **Likely cause:** Windows Defender scans each of WordPress's files on its first load.
+    That is the slowdown Herd's installer offers a Defender exclusion for; it was declined
+    in the test VM.
+- **Fix:** one `kiln_php::ini::LIMITS` constant (512 MB, 60 s, 64 MB uploads) used on both
+  platforms. On Windows it is appended to Kiln's section, where it overrides the
+  development defaults.
+  - **Applies to new PHP installs.** An existing `php.ini` is the user's; editing it is for
+    P2-07's extension and setting commands.
+- **Not done:** Kiln doesn't offer a Defender exclusion. That would be an admin-level change
+  to Windows security, a decision for a later ADR, if ever.

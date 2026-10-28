@@ -47,6 +47,16 @@ Remove-Item -Recurse -Force $sites -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$sites\static-site", "$sites\php-app" | Out-Null
 Set-Content "$sites\static-site\index.html" '<h1>static from kiln</h1>'
 Set-Content "$sites\php-app\index.php" '<?php echo "php ", PHP_VERSION, " via ", PHP_SAPI;'
+# Project config (P2-04, ADR 0027): a parked project whose kiln.toml asks for PHP 8.3 and an
+# alias, and a project elsewhere with a Laravel Herd herd.yml to import.
+New-Item -ItemType Directory -Force "$sites\toml-app" | Out-Null
+Set-Content "$sites\toml-app\index.php" '<?php echo "toml ", PHP_VERSION;'
+Set-Content "$sites\toml-app\kiln.toml" "[site]`naliases = [`"toml-alias`"]`n[php]`nversion = `"8.3`"`n"
+$herdApp = Join-Path $dir 'herd-app'
+Remove-Item -Recurse -Force $herdApp -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $herdApp | Out-Null
+Set-Content "$herdApp\index.php" '<?php echo "herd-import ", PHP_VERSION;'
+Set-Content "$herdApp\herd.yml" "name: herd-demo`nphp: '8.3'`nsecured: true`naliases:`n  - herd-alias`n"
 
 Check 'php install 8.4' { Kiln php install 8.4 }
 Check 'php install 8.3 (a second version, for per-site PHP)' { Kiln php install 8.3 }
@@ -81,6 +91,10 @@ Check 'WordPress, from wordpress.org' {
     Rename-Item (Join-Path $sites 'wordpress') 'wp-site'
 }
 Check 'ca init' { Kiln ca init }
+Check 'kiln import herd: herd.yml becomes kiln.toml and the folder is linked (P2-04)' {
+    Expect 'herd-demo' (Kiln import herd $herdApp)
+    Expect 'version = "8.3"' (Get-Content "$herdApp\kiln.toml" -Raw)
+}
 Check 'park the sites folder' { Kiln park $sites }
 Check 'secure php-app' { Kiln secure php-app }
 Check 'secure laravel-app' { Kiln secure laravel-app }
@@ -159,6 +173,20 @@ Check 'WordPress over HTTPS (its setup page)' {
     Expect 'Setup Configuration File' $page
     if ($page.Contains('Requirements Not Met')) { throw "WordPress says: Requirements Not Met" }
 }
+Check 'kiln.toml: PHP 8.3 for toml-app and its alias (P2-04)' {
+    Expect 'toml 8.3.' (Get (SiteUrl 'toml-app.test'))
+    Expect 'toml 8.3.' (Get (SiteUrl 'toml-alias.test'))
+}
+Check 'the project imported from herd.yml: HTTPS, PHP 8.3 and its alias' {
+    $url = SiteUrl 'herd-demo.test'
+    Expect 'https://' $url
+    Expect 'herd-import 8.3.' (Get $url)
+    Expect 'herd-import 8.3.' (Get (SiteUrl 'herd-alias.test'))
+}
+Check 'kiln which names kiln.toml as the source' {
+    Push-Location "$sites\toml-app"
+    try { Expect 'kiln.toml' (Kiln which) } finally { Pop-Location }
+}
 Check 'kiln doctor reports Herd under Other tools' {
     $doctor = & $Kiln doctor 2>&1 | Out-String
     Expect 'Laravel Herd is installed' $doctor
@@ -166,8 +194,9 @@ Check 'kiln doctor reports Herd under Other tools' {
 function ShimPhp($folder) {
     powershell -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine'); Set-Location '$folder'; php -r 'echo PHP_VERSION;'" | Out-String
 }
-Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app, 8.4 in laravel-app)' {
+Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app and toml-app, 8.4 in laravel-app)' {
     Expect '8.3.' (ShimPhp "$sites\php-app")
+    Expect '8.3.' (ShimPhp "$sites\toml-app")
     Expect '8.4.' (ShimPhp "$sites\laravel-app")
 }
 
@@ -213,10 +242,21 @@ Check 'renewal through the daemon: a new intermediate, the server restarts to us
     $before = IntermediateSha
     $oldPid = (Get-Process kiln-caddy).Id
     # Windows PowerShell drops bare double quotes in arguments to programs, hence \".
-    Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}')
+    try { Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}') }
+    catch {
+        # Keep what uninstall would delete, to see why the restart failed.
+        Get-Process kiln-caddy -ErrorAction SilentlyContinue | Format-Table Id, StartTime | Out-String | Say
+        Get-Content "$env:LOCALAPPDATA\Kiln\caddy\caddy.log" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "     caddy: $_" }
+        throw
+    }
     if ((IntermediateSha) -eq $before) { throw "the intermediate didn't change: $before" }
     if ((Get-Process kiln-caddy).Id -eq $oldPid) { throw "the web server didn't restart to use it" }
-    Expect 'via cgi-fcgi' (Get (SiteUrl 'php-app.test'))
+    # Caddy issues the sites' certificates from the new intermediate in the background right
+    # after the restart; a handshake in the first second or two can fail.
+    $deadline = (Get-Date).AddSeconds(20)
+    do { $page = Get (SiteUrl 'php-app.test'); if ($page.Contains('via cgi-fcgi')) { break }; Start-Sleep 1 }
+    until ((Get-Date) -gt $deadline)
+    Expect 'via cgi-fcgi' $page
 }
 Check 'daemon status counts the renewal' { Expect 'Renewals by the daemon: 1' (Kiln daemon status) }
 Check 'daemon stop leaves the web server running' {

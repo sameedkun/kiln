@@ -119,8 +119,13 @@ fn run_inner(tool: Tool, args: Vec<OsString>) -> Result<i32, String> {
     drop(store);
     if here.php.fell_back {
         eprintln!(
-            "kiln {}: this site is pinned to PHP {}, which isn't installed; using {} instead",
+            "kiln {}: this site {} PHP {}, which isn't installed; using {} instead",
             tool.name(),
+            if here.php.from_project {
+                "asks (in kiln.toml) for"
+            } else {
+                "is pinned to"
+            },
             here.php.pinned.as_deref().unwrap_or("?"),
             here.php.php.as_ref().map_or("none", |p| p.version.as_str())
         );
@@ -167,6 +172,7 @@ mod tests {
                     sha256: String::new(),
                 }),
                 pinned: None,
+                from_project: false,
                 fell_back: false,
             },
         }

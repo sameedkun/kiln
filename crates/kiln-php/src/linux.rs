@@ -203,14 +203,12 @@ pub fn default_ini() -> String {
          display_startup_errors = On\n\
          error_reporting = E_ALL\n\
          log_errors = On\n\
-         memory_limit = 512M\n\
-         max_execution_time = 60\n\
-         upload_max_filesize = 64M\n\
-         post_max_size = 64M\n\
+         {}\
          opcache.enable = 1\n\
          opcache.validate_timestamps = 1\n\
          opcache.revalidate_freq = 0\n",
-        crate::ini::KILN_MARKER
+        crate::ini::KILN_MARKER,
+        crate::ini::LIMITS
     )
 }
 

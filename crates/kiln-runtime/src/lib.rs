@@ -83,13 +83,16 @@ pub fn default_php(
 pub struct SitePhp {
     /// `None`: no PHP is installed at all.
     pub php: Option<PhpRecord>,
-    /// The site's pin, if it has one.
+    /// The version the site asks for, if any: its `kiln isolate` pin, else its `kiln.toml`.
     pub pinned: Option<String>,
-    /// The pin can't be met (that version was removed), so the default is used.
+    /// The version comes from the project's `kiln.toml` (ADR 0027), not a pin on this machine.
+    pub from_project: bool,
+    /// That version isn't installed (or was removed), so the default is used.
     pub fell_back: bool,
 }
 
-/// The PHP for each site host, from pins and the default.
+/// The PHP for each site host (ADR 0027 §3): a `kiln isolate` pin on this machine (an alias
+/// follows its main site's), else the project's `kiln.toml`, else the default.
 pub fn site_versions(
     store: &StateStore,
     sites: &[Site],
@@ -100,7 +103,10 @@ pub fn site_versions(
     Ok(sites
         .iter()
         .map(|site| {
-            let pinned = pins.get(site.host.as_str()).cloned();
+            let pin = pins.get(site.main_host().as_str()).cloned();
+            let from_project =
+                pin.is_none() && site.manifest.as_ref().is_some_and(|m| m.php.is_some());
+            let pinned = pin.or_else(|| site.manifest.as_ref().and_then(|m| m.php.clone()));
             let chosen = pinned.as_deref().and_then(|spec| pick(installed, spec));
             let fell_back = pinned.is_some() && chosen.is_none();
             let php = chosen.cloned().or_else(|| default.clone());
@@ -109,6 +115,7 @@ pub fn site_versions(
                 SitePhp {
                     php,
                     pinned,
+                    from_project,
                     fell_back,
                 },
             )
@@ -116,14 +123,15 @@ pub fn site_versions(
         .collect())
 }
 
-/// The site whose project folder contains `dir` (the deepest one, if nested).
+/// The site whose project folder contains `dir` (the deepest one, if nested; the main site
+/// rather than one of its aliases).
 #[must_use]
 pub fn site_for_dir<'a>(sites: &'a [Site], dir: &Path) -> Option<&'a Site> {
     let dir = normalise(dir);
     sites
         .iter()
         .filter(|s| dir.starts_with(normalise(&s.project)))
-        .max_by_key(|s| s.project.components().count())
+        .max_by_key(|s| (s.project.components().count(), s.alias_of.is_none()))
 }
 
 /// Case-insensitive on Windows, as the file system is.
@@ -157,6 +165,7 @@ pub fn php_for_dir(store: &StateStore, dir: &Path) -> Result<DirPhp, StateError>
                 php: versions.remove(site.host.as_str()).unwrap_or(SitePhp {
                     php: None,
                     pinned: None,
+                    from_project: false,
                     fell_back: false,
                 }),
             })
@@ -166,6 +175,7 @@ pub fn php_for_dir(store: &StateStore, dir: &Path) -> Result<DirPhp, StateError>
             php: SitePhp {
                 php: default_php(store, &installed)?,
                 pinned: None,
+                from_project: false,
                 fell_back: false,
             },
         }),
@@ -286,5 +296,61 @@ mod tests {
             default_php(&store, &installed).unwrap().unwrap().version,
             "8.1.34"
         );
+    }
+
+    #[test]
+    fn kiln_toml_sets_the_version_a_local_pin_beats_it_and_aliases_follow_their_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = StateStore::open_in_memory().unwrap();
+        for version in ["8.1.34", "8.3.36", "8.4.27"] {
+            let php = dir.path().join(version);
+            std::fs::create_dir_all(&php).unwrap();
+            std::fs::write(php.join(kiln_php::PHP_EXE), "").unwrap();
+            std::fs::write(php.join(kiln_php::linux::PHP_FPM_BIN), "").unwrap();
+            store
+                .put_php(&PhpRecord {
+                    version: version.into(),
+                    dir: php,
+                    archive: String::new(),
+                    sha256: String::new(),
+                })
+                .unwrap();
+        }
+        let sites_dir = dir.path().join("Sites");
+        for name in ["shop", "blog"] {
+            std::fs::create_dir_all(sites_dir.join(name)).unwrap();
+            std::fs::write(sites_dir.join(name).join("index.php"), "").unwrap();
+            std::fs::write(
+                sites_dir.join(name).join("kiln.toml"),
+                "[site]\naliases = [\"admin-NAME\"]\n[php]\nversion = \"8.3\"\n"
+                    .replace("NAME", name),
+            )
+            .unwrap();
+        }
+        store.park(&sites_dir).unwrap();
+        store.isolate("blog.test", "8.1").unwrap();
+
+        let installed = installed(&store).unwrap();
+        let resolved = sites(&store).unwrap();
+        let versions = site_versions(&store, &resolved.sites, &installed).unwrap();
+        let version = |host: &str| versions[host].php.as_ref().unwrap().version.clone();
+        assert_eq!(version("shop.test"), "8.3.36", "from kiln.toml");
+        assert!(versions["shop.test"].from_project);
+        assert_eq!(version("admin-shop.test"), "8.3.36", "the alias too");
+        assert_eq!(version("blog.test"), "8.1.34", "the local pin wins");
+        assert!(!versions["blog.test"].from_project);
+        assert_eq!(
+            version("admin-blog.test"),
+            "8.1.34",
+            "an alias follows its site's pin"
+        );
+
+        let here = php_for_dir(&store, &sites_dir.join("shop").join("app")).unwrap();
+        assert_eq!(
+            here.site.as_deref(),
+            Some("shop.test"),
+            "the site, not its alias"
+        );
+        assert_eq!(here.php.php.unwrap().version, "8.3.36");
     }
 }

@@ -36,14 +36,14 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-fetch` | Verified HTTPS downloads: expected digest first, streaming hash, OS trust store, cache | forbidden |
 | `kiln-php` | PHP runtimes: windows.php.net index, safe extraction, php.ini defaults, start-up check | forbidden |
 | `kiln-supervisor` | php-cgi supervisor library and `kiln-supervisor` binary: pools, staggered recycling, respawn, CLI handle | forbidden |
-| `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root) | forbidden |
+| `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root), each project's `kiln.toml` (settings, aliases; ADR 0027) and reading a Herd `herd.yml` | forbidden |
 | `kiln-runtime` | Which PHP runs what (default, pins, folder → site); the `kiln-shim` binary (`php`/`composer`) | forbidden |
 | `kiln-doctor` | `kiln doctor` rules: facts → findings (ok/info/warn/fail with fixes), text and JSON reports | forbidden |
 | `kiln-coexist` | Other local PHP tools: installed tools, port owners by program path, names other tools claim in the hosts file, free-port picking (read-only) | forbidden |
 | `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect and listen, user registry strings, console Ctrl+C, TCP listener owners, process parents, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |
 | `kiln-helper` | Privileged helper: protocol, validation, hosts policy, server/client, lazy `HelperSession`, `kiln-helper` binary | forbidden |
 | `kiln-daemon` | `kilnd`, the optional per-user daemon ([ADR 0026](adr/0026-kilnd-daemon-and-local-api.md)): JSON-RPC 2.0 messages, the per-user socket, server, client, web-stack watchdog, rotating log | forbidden |
-| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust/renew`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `isolate`, `unisolate`, `which`, `composer install`, `shims install`, `doctor`, `daemon start/stop/status/call`, `history`, `undo`, `uninstall`, `plan uninstall`) | forbidden |
+| `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust/renew`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers`, `isolate`, `unisolate`, `which`, `composer install`, `shims install`, `doctor`, `daemon start/stop/status/call/enable/disable`, `import herd`, `history`, `undo`, `uninstall`, `plan uninstall`) | forbidden |
 
 ## Everyday commands
 

@@ -60,6 +60,9 @@ Constraints:
      - *Amended in P2-03:* a restart, not a live reload. Caddy keeps the old site
        certificates in memory across a reload ([I-57](../issues.md#i-57)). The restart is
        under a second, about once a month.
+     - After the restart, Caddy issues the sites' certificates from the new intermediate in
+       the background. HTTPS requests in the first second or two can fail their handshake.
+       The VM scenarios retry for up to 20 s.
      - A failure, such as a locked keyring, is logged and sent as `ca.renewal_failed`, and
        retried at the next check.
      - `ca.renew` (optionally forced) and `ca.status` expose it through the API.

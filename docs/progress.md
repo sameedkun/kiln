@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 planned** (11 tasks, ADR 0026) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (4 of 11 tasks done; ADRs 0026–0027) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0024 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0027 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -938,8 +938,8 @@ its local API and autostart.
 | P2-01 | `kilnd` daemon + versioned local API | **done** 2026-10-27 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md); see below. Watchdog, API, `kiln daemon …`, change lock; VM-checked on Windows and Ubuntu |
 | P2-02 | Per-user autostart (journaled) | **done** 2026-10-27 | ADR 0026 §6 (amended: XDG entry on Linux); see below. Checked across real reboots on Windows and Ubuntu |
 | P2-03 | Automatic intermediate renewal | **done** 2026-10-28 | ADR 0026 §2 (amended: a brief restart, not a live reload); see below. VM-checked on Windows and Ubuntu |
-| P2-04 | `kiln.toml` project config + `herd.yml` import | next | ADR at start |
-| P2-05 | Node runtimes and shims | planned | ADR at start |
+| P2-04 | `kiln.toml` project config + `herd.yml` import | **done** 2026-10-28 | [ADR 0027](adr/0027-project-config-kiln-toml.md); see below. VM-checked on Windows and Ubuntu |
+| P2-05 | Node runtimes and shims | next | ADR at start |
 | P2-06 | PHP patch updates with rollback | planned | |
 | P2-07 | PHP extension toggles | planned | |
 | P2-08 | `kiln new` (Laravel) | planned | |
@@ -1066,6 +1066,53 @@ its local API and autostart.
   - A PowerShell mistake in the new check was fixed: `Kiln ca info -split …` passed
     `-split` to `kiln`.
 
+### P2-04 delivered (2026-10-28)
+
+[ADR 0027](adr/0027-project-config-kiln-toml.md).
+
+- **`kiln.toml` in the project folder:**
+  - `[site]` `name`, `secure` and `aliases`; `[php] version`; `[node] version` (used by
+    P2-05).
+  - It is read live each time sites are resolved, never copied into Kiln's state, so
+    editing it and running `kiln web reload` (or any site change) is enough.
+  - Versions must be quoted: an unquoted `8.10` would read as `8.1`, so it is an error.
+    Unknown keys and sections are warnings, not errors.
+- **Precedence:** a `kiln isolate` pin beats `kiln.toml`, which beats the default PHP.
+  `kiln which` and the shims say when the version comes from `kiln.toml`. `kiln isolate`
+  notes when it overrides the file.
+- **`secure = true`** serves the site over HTTPS. `kiln unsecure` says when `kiln.toml`
+  keeps it on.
+- **Aliases** become extra site names served from the same folder, with the same PHP.
+  `kiln sites` lists them as `alias`. A name that is taken or invalid is skipped with a
+  warning.
+- **`kiln link`** takes its default name from `[site] name`.
+- **`kiln doctor`** reports problems in a project's `kiln.toml`: a parse error or a skipped
+  alias, with the fix.
+- **`kiln import herd [path] [--force]`:**
+  - It reads Laravel Herd's `herd.yml` (name, PHP version, `secured`, aliases) and writes
+    `kiln.toml`, which must parse back before it is kept. It won't overwrite an existing
+    `kiln.toml` without `--force`.
+  - It notes what it doesn't import: services, workspaces, an unquoted PHP number.
+  - It links the folder if Kiln doesn't serve it yet, else reloads.
+- **New dependencies:** `toml` 1.x (parse only) and `yaml-rust2` 0.13, both MIT/Apache-2.0.
+- **Fixed I-65:** PHP's limits are now the same on both systems: 512 MB of memory, 60 s per
+  request, 64 MB uploads. Windows had PHP's 30 s default, and WordPress's first page timed
+  out in the VM.
+- **Tests:** the parser (quoting, unknown keys, Node `v` prefix), the `herd.yml` import,
+  aliases and precedence. 279 on Windows, 248 on Linux.
+- **VM scenarios:**
+  - A parked project whose `kiln.toml` asks for PHP 8.3 and an alias: both names get 8.3,
+    `kiln which` names `kiln.toml`, and the `php` shim in that folder runs 8.3.
+  - A project with a `herd.yml`, imported: its name and alias are served over trusted
+    HTTPS on PHP 8.3.
+
+  **Windows passed 46 checks, Ubuntu 47**, each leaving the machine as it was.
+- **On the way:**
+  - Right after a renewal restart, Caddy issues site certificates in the background, and
+    a handshake in the first second or two can fail. The scenarios retry for up to 20 s
+    (noted in ADR 0026).
+  - A Windows run timed out when Composer's downloads stalled in the VM; the rerun passed.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1146,6 +1193,7 @@ its local API and autostart.
 | 2026-10-27 | **P2-01 done:** new `kiln-daemon` crate and `kilnd` binary (ADR 0026): JSON-RPC API over a per-user socket with `kiln.hello`, `daemon.status/shutdown`, `web.status` and events; a watchdog that restarts a web stack that exited on its own, with backoff; `kiln daemon start/stop/status/call`; a change lock for every changing `kiln` command; a non-inheritable `AF_UNIX` listener on Windows. VM scenarios: Windows 37 checks, Ubuntu 35, including killing Caddy and the daemon bringing it back. |
 | 2026-10-27 | **P2-02 done:** `kiln daemon enable/disable`, a journaled autostart (Windows `Run` value, Linux XDG autostart entry; ADR 0026 §6 amended). Checked across real reboots in both VMs, Windows also after a hard reset. Fixed I-64 (flush `HKCU` after registry writes) and I-63 (piping `kiln` into `head` exits quietly). Scenarios: Windows 39 checks, Ubuntu 37. |
 | 2026-10-28 | **P2-03 done:** `kiln ca renew [--force]`; `kilnd` checks the intermediate every 6 hours and renews it when fewer than 10 days are left. A running server restarts briefly to use it (ADR 0026 §2 amended: Caddy keeps old site certificates across a reload, I-57). API: `ca.status`, `ca.renew`; events `ca.renewed` and `ca.renewal_failed`. A renewal forced through the API passed in both VMs: Windows 42 checks, Ubuntu 40. |
+| 2026-10-28 | **P2-04 done:** ADR 0027. A project's `kiln.toml` sets its name, HTTPS, aliases and PHP (and later Node) version, read live; an isolate pin still wins. `kiln import herd` turns Laravel Herd's `herd.yml` into `kiln.toml` and links the folder. Fixed I-65 (PHP limits now 512 MB, 60 s, 64 MB uploads on both systems). Scenarios: Windows 46 checks, Ubuntu 47. |
 
 ## How to update this file
 
