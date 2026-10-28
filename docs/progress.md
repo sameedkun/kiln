@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-10-27 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 planned** (11 tasks, ADR 0026) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 planned** (11 tasks, ADR 0026) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -937,8 +937,8 @@ its local API and autostart.
 |---|---|---|---|
 | P2-01 | `kilnd` daemon + versioned local API | **done** 2026-10-27 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md); see below. Watchdog, API, `kiln daemon …`, change lock; VM-checked on Windows and Ubuntu |
 | P2-02 | Per-user autostart (journaled) | **done** 2026-10-27 | ADR 0026 §6 (amended: XDG entry on Linux); see below. Checked across real reboots on Windows and Ubuntu |
-| P2-03 | Automatic intermediate renewal with live reload | next | ADR 0026 §2 |
-| P2-04 | `kiln.toml` project config + `herd.yml` import | planned | ADR at start |
+| P2-03 | Automatic intermediate renewal | **done** 2026-10-28 | ADR 0026 §2 (amended: a brief restart, not a live reload); see below. VM-checked on Windows and Ubuntu |
+| P2-04 | `kiln.toml` project config + `herd.yml` import | next | ADR at start |
 | P2-05 | Node runtimes and shims | planned | ADR at start |
 | P2-06 | PHP patch updates with rollback | planned | |
 | P2-07 | PHP extension toggles | planned | |
@@ -1031,6 +1031,41 @@ its local API and autostart.
   - That held on Windows after a graceful reboot and after a hard reset (`-HardReset`), and
     on Ubuntu after a reboot.
 
+### P2-03 delivered (2026-10-28)
+
+[ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) §2, amended.
+
+- **`kiln ca renew [--force]`:**
+  - With fewer than 10 days left (or with `--force`), it issues a new intermediate.
+    Otherwise it says how many days are left.
+  - A running server with HTTPS sites then restarts, in under a second, to use it.
+- **Restart, not live reload (ADR amended):** Caddy keeps the old site certificates in
+  memory across a reload ([I-57](issues.md#i-57)), so the server restarts instead. That is
+  about once a month.
+- **`kilnd`:**
+  - It checks the intermediate every 6 hours and once at start, reading the certificate
+    only, so the CA key stays locked until a renewal is due. When one is, it runs
+    `kiln ca renew`.
+  - Its output goes to the log, and it sends `ca.renewed` or `ca.renewal_failed`. A failure,
+    such as a locked keyring, is retried at the next check.
+  - New API methods: `ca.status`, and `ca.renew` with an optional `force`.
+  - `kiln daemon status` shows the days left and the renewals made.
+- **Plan wording:** the Phase 2 exit criterion now says HTTPS keeps working across a renewal
+  "without anything from the user", not "with no restart".
+- **Tests:** the due rule (fewer than 10 days, including none and expired). 269 on Windows.
+- **VM scenarios:**
+  - `daemon status` shows the days left.
+  - A renewal forced through the API gives a new intermediate fingerprint and a restarted
+    server, and the PHP site still answers over trusted HTTPS.
+  - The renewal is counted.
+
+  **Windows passed 42 checks, Ubuntu 40**, each leaving the machine as it was.
+- **On the way:**
+  - `composer create-project` in the scenarios retries once, after a dropped download in
+    the VM (Composer exit code 100).
+  - A PowerShell mistake in the new check was fixed: `Kiln ca info -split …` passed
+    `-split` to `kiln`.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1110,6 +1145,7 @@ its local API and autostart.
 | 2026-10-27 | **Phase 2 planned:** exit criteria and 11 tasks (P2-01 to P2-11) in plan.md. ADR 0026: `kilnd`, an optional per-user daemon that keeps the web stack running, renews the intermediate certificate and serves a JSON-RPC API over a per-user Unix socket. Autostart is journaled. Next: P2-01. |
 | 2026-10-27 | **P2-01 done:** new `kiln-daemon` crate and `kilnd` binary (ADR 0026): JSON-RPC API over a per-user socket with `kiln.hello`, `daemon.status/shutdown`, `web.status` and events; a watchdog that restarts a web stack that exited on its own, with backoff; `kiln daemon start/stop/status/call`; a change lock for every changing `kiln` command; a non-inheritable `AF_UNIX` listener on Windows. VM scenarios: Windows 37 checks, Ubuntu 35, including killing Caddy and the daemon bringing it back. |
 | 2026-10-27 | **P2-02 done:** `kiln daemon enable/disable`, a journaled autostart (Windows `Run` value, Linux XDG autostart entry; ADR 0026 §6 amended). Checked across real reboots in both VMs, Windows also after a hard reset. Fixed I-64 (flush `HKCU` after registry writes) and I-63 (piping `kiln` into `head` exits quietly). Scenarios: Windows 39 checks, Ubuntu 37. |
+| 2026-10-28 | **P2-03 done:** `kiln ca renew [--force]`; `kilnd` checks the intermediate every 6 hours and renews it when fewer than 10 days are left. A running server restarts briefly to use it (ADR 0026 §2 amended: Caddy keeps old site certificates across a reload, I-57). API: `ca.status`, `ca.renew`; events `ca.renewed` and `ca.renewal_failed`. A renewal forced through the API passed in both VMs: Windows 42 checks, Ubuntu 40. |
 
 ## How to update this file
 

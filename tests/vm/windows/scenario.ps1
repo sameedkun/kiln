@@ -63,8 +63,13 @@ $composer = Join-Path $env:LOCALAPPDATA 'Kiln\bin\shims\composer.exe'
 Check 'a new Laravel project, made with Kiln''s composer shim' {
     Push-Location $sites
     try {
-        & $composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) { throw "composer create-project failed ($LASTEXITCODE)" }
+        # One retry: a dropped download (Composer's exit code 100) is the network, not Kiln.
+        foreach ($attempt in 1, 2) {
+            Remove-Item -Recurse -Force laravel-app -ErrorAction SilentlyContinue
+            $out = & $composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) { break }
+        }
+        if ($LASTEXITCODE -ne 0) { throw "composer create-project failed ($LASTEXITCODE):`n$out" }
     } finally { Pop-Location }
 }
 Check 'WordPress, from wordpress.org' {
@@ -200,6 +205,20 @@ Check 'Kiln''s sites answer after that restart' {
 }
 Check 'daemon status counts the restart' { Expect 'Restarts by the daemon: 1' (Kiln daemon status) }
 Check 'daemon call web.status (the API)' { Expect '"running"' (Kiln daemon call web.status) }
+function IntermediateSha { @((Kiln ca info) -split "`n" | Where-Object { $_ -match 'SHA-256' })[1] }
+Check 'daemon status shows the intermediate certificate''s days left (P2-03)' {
+    Expect 'Intermediate certificate:' (Kiln daemon status)
+}
+Check 'renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)' {
+    $before = IntermediateSha
+    $oldPid = (Get-Process kiln-caddy).Id
+    # Windows PowerShell drops bare double quotes in arguments to programs, hence \".
+    Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}')
+    if ((IntermediateSha) -eq $before) { throw "the intermediate didn't change: $before" }
+    if ((Get-Process kiln-caddy).Id -eq $oldPid) { throw "the web server didn't restart to use it" }
+    Expect 'via cgi-fcgi' (Get (SiteUrl 'php-app.test'))
+}
+Check 'daemon status counts the renewal' { Expect 'Renewals by the daemon: 1' (Kiln daemon status) }
 Check 'daemon stop leaves the web server running' {
     Kiln daemon stop
     Expect 'static from kiln' (Get 'http://static-site.test:8080/')

@@ -53,8 +53,16 @@ Constraints:
        only the supervisor did. A server the user stopped stays stopped.
      - Repairs back off (0, 30, 60, 120, 300 and then 600 s apart), and the delays reset
        after 10 healthy minutes.
-   - **Runs timers:** intermediate renewal (P2-03; daily check, renew when under 10 days
-     left, then a live Caddy reload). Later: PHP update checks.
+   - **Runs timers:** intermediate renewal (P2-03). Later: PHP update checks.
+     - It checks every 6 hours and once at start, reading the certificate only.
+     - Under 10 days left, it runs `kiln ca renew`: a new intermediate, then a running server
+       with HTTPS sites restarts to use it.
+     - *Amended in P2-03:* a restart, not a live reload. Caddy keeps the old site
+       certificates in memory across a reload ([I-57](../issues.md#i-57)). The restart is
+       under a second, about once a month.
+     - A failure, such as a locked keyring, is logged and sent as `ca.renewal_failed`, and
+       retried at the next check.
+     - `ca.renew` (optionally forced) and `ca.status` expose it through the API.
    - **Serves the local API** (§3).
    - It never elevates. Anything that needs the helper, such as `hosts sync`, is reported
      to the user through the API, not done silently.

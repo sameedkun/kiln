@@ -271,6 +271,13 @@ enum CaAction {
         #[arg(long)]
         system: bool,
     },
+    /// Issue a new intermediate certificate for the web server if fewer than 10 days are left
+    /// (Kiln's daemon does this by itself). A running server restarts to use it.
+    Renew {
+        /// Renew now, however long the current one is still valid.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -541,6 +548,9 @@ fn run(command: Command) -> Result<(), String> {
         Command::Ca {
             action: CaAction::Trust { yes, system },
         } => apply::ca_trust(yes, system),
+        Command::Ca {
+            action: CaAction::Renew { force },
+        } => web::ca_renew(force),
         Command::Hosts {
             action: HostsAction::Sync { yes },
         } => web::hosts_sync(yes),

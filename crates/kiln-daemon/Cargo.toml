@@ -12,6 +12,7 @@ name = "kilnd"
 path = "src/main.rs"
 
 [dependencies]
+kiln-pki.workspace = true
 kiln-state.workspace = true
 kiln-supervisor.workspace = true
 kiln-sys.workspace = true

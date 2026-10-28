@@ -95,6 +95,40 @@ fn ca_files() -> Result<CaFiles, String> {
     })
 }
 
+/// `kiln ca renew` ([ADR 0026] §2, P2-03): a new intermediate when fewer than
+/// [`INTERMEDIATE_MIN_DAYS`] are left (or `force`), then a running server with HTTPS sites
+/// restarts to use it (a reload would keep old site certificates in Caddy's memory, I-57).
+/// `kilnd` runs this when the intermediate is due.
+///
+/// [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
+pub fn ca_renew(force: bool) -> Result<(), String> {
+    let ca = apply::ca_store()?;
+    if !ca.root_exists() {
+        return Err("Kiln has no CA yet; `kiln ca init` creates one".into());
+    }
+    let days_left = ca
+        .intermediate()
+        .map_err(|e| e.to_string())?
+        .map(|i| (i.not_after - time::OffsetDateTime::now_utc()).whole_days());
+    if let Some(days) = days_left.filter(|&d| !force && d >= INTERMEDIATE_MIN_DAYS) {
+        println!(
+            "The web server's intermediate certificate is valid for {days} more days; it is renewed when fewer than {INTERMEDIATE_MIN_DAYS} are left."
+        );
+        return Ok(());
+    }
+    let issued = ca
+        .issue_intermediate(&Tld::default())
+        .map_err(|e| e.to_string())?;
+    println!(
+        "Issued a new intermediate certificate for the web server (expires {}).",
+        issued.not_after.date()
+    );
+    if is_running()? && restart_if_ca_changed(&open_store()?)? {
+        println!("HTTPS sites now use it.");
+    }
+    Ok(())
+}
+
 /// The current intermediate's SHA-256 if Caddy's stored site certificates were issued from
 /// another one (I-57); `None` without HTTPS sites or when nothing changed.
 fn ca_changed(config: &WebConfig) -> Result<Option<String>, String> {

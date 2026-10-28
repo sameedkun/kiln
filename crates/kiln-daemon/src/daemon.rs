@@ -32,6 +32,8 @@ pub struct Paths {
     /// Held while a daemon runs, so there is only ever one.
     pub lock: PathBuf,
     pub log: PathBuf,
+    /// Kiln's CA (`<state>/ca`).
+    pub ca: PathBuf,
 }
 
 impl Paths {
@@ -42,6 +44,7 @@ impl Paths {
             socket: local.join("kilnd.sock"),
             lock: state.join("kilnd.lock"),
             log: local.join("logs").join("kilnd.log"),
+            ca: state.join("ca"),
         }
     }
 
@@ -117,6 +120,20 @@ impl Log {
     }
 }
 
+/// Renew the intermediate when fewer days than this are left: the rule `kiln ca renew` uses.
+pub const RENEW_BEFORE_DAYS: i64 = 10;
+/// How often the daemon checks the intermediate (and once when it starts).
+pub const CA_CHECK_EVERY: Duration = Duration::from_hours(6);
+
+/// Whether an intermediate with `days_left` is due for renewal ([ADR 0026] §2, P2-03).
+/// Without one there is nothing to renew: `kiln web start` issues the first.
+///
+/// [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
+#[must_use]
+pub fn renewal_due(days_left: Option<i64>) -> bool {
+    days_left.is_some_and(|days| days < RENEW_BEFORE_DAYS)
+}
+
 /// What the watchdog does about the web stack's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repair {
@@ -187,6 +204,9 @@ pub struct Daemon {
     started: SystemTime,
     shutdown: Mutex<Option<Sender<()>>>,
     repairs: Mutex<Vec<Value>>,
+    /// When the intermediate was last checked, and the renewals made since the daemon started.
+    ca_checked: Mutex<Option<Instant>>,
+    renewals: Mutex<Vec<Value>>,
 }
 
 impl Daemon {
@@ -199,6 +219,8 @@ impl Daemon {
             started: SystemTime::now(),
             shutdown: Mutex::new(Some(shutdown)),
             repairs: Mutex::new(Vec::new()),
+            ca_checked: Mutex::new(None),
+            renewals: Mutex::new(Vec::new()),
         }
     }
 
@@ -208,8 +230,97 @@ impl Daemon {
         "daemon.status",
         "daemon.shutdown",
         "web.status",
+        "ca.status",
+        "ca.renew",
         "events.subscribe",
     ];
+
+    /// Days the web server's intermediate certificate has left, or `None` without one.
+    /// Reads the certificate only; the CA's key stays locked.
+    pub fn intermediate_days_left(&self) -> Result<Option<i64>, String> {
+        let ca = kiln_pki::CaStore::new(self.paths.ca.clone(), kiln_pki::default_protector());
+        Ok(ca
+            .intermediate()
+            .map_err(|e| e.to_string())?
+            .map(|i| (i.not_after - time::OffsetDateTime::now_utc()).whole_days()))
+    }
+
+    /// The renewal timer: every [`CA_CHECK_EVERY`] (and on the first pass), renews the
+    /// intermediate through `kiln ca renew` if it is due. A failure, such as a locked keyring,
+    /// is logged and published, and tried again at the next check.
+    pub fn check_ca(&self, now: Instant) {
+        {
+            let mut checked = self
+                .ca_checked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if checked.is_some_and(|at| now.duration_since(at) < CA_CHECK_EVERY) {
+                return;
+            }
+            *checked = Some(now);
+        }
+        match self.intermediate_days_left() {
+            Ok(days) if renewal_due(days) => {
+                self.log.line(&format!(
+                    "renewal: the intermediate certificate has {} day(s) left; running `kiln ca renew`",
+                    days.unwrap_or_default()
+                ));
+                // Logged and published inside; the next check tries again if it failed.
+                let _ = self.renew(false);
+            }
+            Ok(_) => {}
+            Err(e) => self.log.line(&format!(
+                "renewal: cannot read the intermediate certificate: {e}"
+            )),
+        }
+    }
+
+    /// Runs `kiln ca renew` (with `--force` if asked), logs and publishes the outcome.
+    fn renew(&self, force: bool) -> Result<String, String> {
+        let args: &[&str] = if force {
+            &["ca", "renew", "--force"]
+        } else {
+            &["ca", "renew"]
+        };
+        let outcome = run_kiln(args);
+        match &outcome {
+            Ok(output) | Err(output) => {
+                for line in output.lines() {
+                    self.log.line(&format!("  {line}"));
+                }
+            }
+        }
+        let record = json!({
+            "at": time::OffsetDateTime::now_utc().to_string(),
+            "ok": outcome.is_ok(),
+            "days_left": self.intermediate_days_left().ok().flatten(),
+        });
+        self.renewals
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record.clone());
+        let event = if outcome.is_ok() {
+            "ca.renewed"
+        } else {
+            "ca.renewal_failed"
+        };
+        self.events.publish(event, record);
+        outcome
+    }
+
+    fn ca_status(&self) -> Value {
+        let renewals = self
+            .renewals
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        json!({
+            "intermediate_days_left": self.intermediate_days_left().ok().flatten(),
+            "renew_before_days": RENEW_BEFORE_DAYS,
+            "check_every_hours": CA_CHECK_EVERY.as_secs() / 3600,
+            "renewals": renewals,
+        })
+    }
 
     fn web_server(&self) -> kiln_web::WebServer {
         kiln_web::WebServer::new(
@@ -305,6 +416,7 @@ impl Daemon {
             "log": self.log.path(),
             "socket": self.paths.socket,
             "repairs": repairs,
+            "ca": self.ca_status(),
         })
     }
 }
@@ -348,7 +460,7 @@ fn state_json(status: &ProcStatus) -> Value {
 }
 
 impl Handler for Daemon {
-    fn call(&self, method: &str, _params: &Value) -> Result<Value, RpcError> {
+    fn call(&self, method: &str, params: &Value) -> Result<Value, RpcError> {
         match method {
             "kiln.hello" => serde_json::to_value(Hello {
                 api: API_VERSION,
@@ -372,6 +484,17 @@ impl Handler for Daemon {
             "web.status" => {
                 let (caddy, supervisor) = self.web_states().map_err(RpcError::kiln)?;
                 Ok(json!({"server": state_json(&caddy), "php_supervisor": state_json(&supervisor)}))
+            }
+            "ca.status" => Ok(self.ca_status()),
+            "ca.renew" => {
+                let force = params["force"].as_bool().unwrap_or(false);
+                self.log.line(&format!(
+                    "renewal: asked through the API{}",
+                    if force { " (forced)" } else { "" }
+                ));
+                self.renew(force)
+                    .map(|output| json!({"ok": true, "output": output}))
+                    .map_err(RpcError::kiln)
             }
             other => Err(RpcError::method_not_found(other)),
         }
@@ -407,6 +530,19 @@ mod tests {
             "stopped by `kiln web stop`"
         );
         assert_eq!(repair_for(&STOPPED, &EXITED), Repair::Nothing);
+    }
+
+    #[test]
+    fn the_intermediate_is_renewed_with_fewer_than_ten_days_left() {
+        assert!(
+            !renewal_due(None),
+            "no intermediate yet: web start issues one"
+        );
+        assert!(!renewal_due(Some(30)));
+        assert!(!renewal_due(Some(10)));
+        assert!(renewal_due(Some(9)));
+        assert!(renewal_due(Some(0)));
+        assert!(renewal_due(Some(-3)), "already expired");
     }
 
     #[test]

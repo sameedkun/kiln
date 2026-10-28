@@ -82,8 +82,9 @@ P1-13 → P1-12/14 → P1-15. Linux tasks (P1-04, the Linux half of P1-08) run i
   versions from `php`, `node` and `npm` in a new terminal, and in its site. A project with a
   `herd.yml` is imported to the same result.
 - **Daemon.** `kilnd` starts at login, answers its versioned local API, and keeps HTTPS
-  working across an intermediate-certificate renewal with no restart. This is tested with a
-  shortened validity.
+  working across an intermediate-certificate renewal without anything from the user. The
+  web server restarts by itself for under a second ([I-57](issues.md#i-57)). This is tested
+  with a renewal forced through the API.
 - **PHP maintenance.** `kiln php update` followed by `kiln php rollback` round-trips. Turning
   an extension on and off works and is undoable.
 - **New projects and proxies.** `kiln new` produces a Laravel app served over HTTPS. A proxy
@@ -98,7 +99,7 @@ P1-13 → P1-12/14 → P1-15. Linux tasks (P1-04, the Linux half of P1-08) run i
 |---|---|---|---|
 | P2-01 | `kilnd`: per-user daemon and a versioned local API. JSON-RPC over a per-user Unix socket. The CLI keeps working with or without it | Phase 1 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md). The API is what the Phase 4 GUI uses |
 | P2-02 | Per-user autostart for `kilnd`: Windows `HKCU\…\Run` value, Linux systemd user unit. Journaled and undoable (`kiln daemon enable/disable`) | P2-01 | No admin rights; ADR 0026 §6 |
-| P2-03 | Automatic renewal. `kilnd` re-issues the 30-day intermediate before it expires and reloads Caddy live. `kiln doctor` reports the schedule | P2-01 | Today it is renewed only at `kiln web start` ([ADR 0011](adr/0011-caddy-integration.md) §7) |
+| P2-03 | Automatic renewal. `kilnd` re-issues the 30-day intermediate before it expires; a running server restarts to use it. `kiln daemon status` shows the days left | P2-01 | Today it is renewed only at `kiln web start` ([ADR 0011](adr/0011-caddy-integration.md) §7) |
 | P2-04 | Project config: `kiln.toml` (PHP and Node versions, HTTPS, extra names), read by link, park, isolate and the shims; `kiln import herd` for `herd.yml` | — | ADR at start. Precedence over `kiln isolate` pins and `.nvmrc` |
 | P2-05 | Node runtimes: `kiln node install/list/remove` from nodejs.org, checked against its signed SHASUMS. `node`, `npm`, `npx` and `corepack` shims follow `kiln.toml`, `.nvmrc` and `.node-version` | P2-04 | ADR at start. Same shim binary as PHP ([ADR 0016](adr/0016-per-site-php-and-shims.md)) |
 | P2-06 | PHP patch updates with rollback: `kiln php update [minor]` installs the newest patch next to the current one and switches pools live; `kiln php rollback` goes back | — | Windows: latest from the release index. Linux: newest pinned build, so new patches arrive with a kiln-php release and a Kiln update ([ADR 0025](adr/0025-own-static-linux-php-builds.md)) |

@@ -77,7 +77,9 @@ fn main() -> ExitCode {
     std::thread::spawn(move || {
         let mut backoff = Backoff::default();
         loop {
-            watcher.watch(&mut backoff, Instant::now());
+            let now = Instant::now();
+            watcher.watch(&mut backoff, now);
+            watcher.check_ca(now);
             std::thread::sleep(WATCH_EVERY);
         }
     });

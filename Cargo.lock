@@ -733,6 +733,7 @@ dependencies = [
 name = "kiln-daemon"
 version = "0.0.0"
 dependencies = [
+ "kiln-pki",
  "kiln-state",
  "kiln-supervisor",
  "kiln-sys",

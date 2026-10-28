@@ -194,6 +194,17 @@ pub fn status() -> Result<(), String> {
     if repairs > 0 {
         println!("  Restarts by the daemon: {repairs}");
     }
+    let ca = &status["ca"];
+    if let Some(days) = ca["intermediate_days_left"].as_i64() {
+        println!(
+            "  Intermediate certificate: {days} day(s) left; renewed by the daemon when fewer than {} are left",
+            ca["renew_before_days"]
+        );
+    }
+    let renewals = ca["renewals"].as_array().map_or(0, Vec::len);
+    if renewals > 0 {
+        println!("  Renewals by the daemon: {renewals}");
+    }
     print_autostart();
     println!("  Log: {}", paths.log.display());
     Ok(())

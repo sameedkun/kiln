@@ -49,7 +49,7 @@ check "web install" "$K" web install
 # in $WORK, so the run leaves nothing of Composer's own behind either.
 export COMPOSER_HOME="$WORK/composer-home" COMPOSER_CACHE_DIR="$WORK/composer-cache"
 check "a new Laravel project, made with Kiln's composer shim" \
-    sh -c "cd '$SITES' && bash -ic 'composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist' 2>&1"
+    sh -c "cd '$SITES' && for attempt in 1 2; do rm -rf laravel-app; bash -ic 'composer create-project laravel/laravel laravel-app --no-interaction --prefer-dist' 2>&1 && exit 0; done; exit 1"
 check "WordPress, from wordpress.org" \
     sh -c "curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://wordpress.org/latest.tar.gz | tar -xz -C '$SITES' && mv '$SITES/wordpress' '$SITES/wp-site'"
 
@@ -104,6 +104,19 @@ check "Kiln's sites answer after that restart" \
     sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln' && exit 0; sleep 2; done; exit 1"
 check "daemon status counts the restart" contains "Restarts by the daemon: 1" "$K" daemon status
 check "daemon call web.status (the API)" contains '"running"' "$K" daemon call web.status
+intermediate_sha() { "$K" ca info | grep 'SHA-256' | sed -n 2p; }
+check "daemon status shows the intermediate certificate's days left (P2-03)" \
+    contains "Intermediate certificate:" "$K" daemon status
+renewed() { # a new intermediate, a restarted server, and HTTPS still trusted
+    before=$(intermediate_sha)
+    old=$(caddy_pid)
+    "$K" daemon call ca.renew '{"force":true}' | grep -q '"ok": true' || return 1
+    [ "$(intermediate_sha)" != "$before" ] || { echo "the intermediate didn't change"; return 1; }
+    [ "$(caddy_pid)" != "$old" ] || { echo "the web server didn't restart"; return 1; }
+    curl -fsS "https://php-app.test:$https/" | grep -q 'via fpm-fcgi'
+}
+check "renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)" renewed
+check "daemon status counts the renewal" contains "Renewals by the daemon: 1" "$K" daemon status
 check "daemon stop leaves the web server running" \
     sh -c "'$K' daemon stop && curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln'"
 entry="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/kiln-kilnd.desktop"
