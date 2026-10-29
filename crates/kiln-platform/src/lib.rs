@@ -8,6 +8,7 @@ pub mod autostart;
 pub mod describe;
 pub mod hosts;
 pub mod hosts_op;
+pub mod php_ext;
 pub mod shell_profile;
 #[cfg(windows)]
 pub mod trust;

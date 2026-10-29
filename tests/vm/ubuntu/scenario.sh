@@ -106,6 +106,33 @@ check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." s
 check "the php shim follows kiln.toml in toml-app" contains "8.3." shim_php "$SITES/toml-app"
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
 
+echo "== PHP extensions (P2-07, ADR 0030)"
+# Kiln's static builds have every extension compiled in: listed, never toggled.
+ini="$HOME/.local/share/kiln/php/8.4.26/php.ini"
+check "php ext list says a static build's extensions are compiled in" \
+    sh -c "'$K' php ext list > '$WORK/ext.txt' && grep -q 'compiled in' '$WORK/ext.txt' && grep -q 'mbstring' '$WORK/ext.txt'"
+static_refused() { # off is refused and php.ini is left as it was
+    before=$(sha256sum < "$ini")
+    ! "$K" php ext off mbstring > "$WORK/ext-off.txt" 2>&1 &&
+        grep -q "static builds" "$WORK/ext-off.txt" &&
+        [ "$before" = "$(sha256sum < "$ini")" ]
+}
+check "php ext off on a static build is refused, and php.ini is unchanged" static_refused
+# The VM's own php8.3 (from the distribution): its conf.d loads every installed module, which
+# Kiln lists but leaves to phpdismod.
+sysver=$(php8.3 -r 'echo PHP_VERSION;' 2>/dev/null)
+system_php() {
+    [ -n "$sysver" ] || { echo "no php8.3 in this VM"; return 1; }
+    "$K" php install 8.3 --system > "$WORK/sys.txt" 2>&1 &&
+        "$K" php ext list --php "$sysver" > "$WORK/sys-ext.txt" &&
+        grep -q "Loaded by your distribution's configuration" "$WORK/sys-ext.txt" &&
+        grep -q "sqlite3" "$WORK/sys-ext.txt" &&
+        ! "$K" php ext off sqlite3 --php "$sysver" > "$WORK/sys-off.txt" 2>&1 &&
+        grep -q "sudo phpdismod -v 8.3 sqlite3" "$WORK/sys-off.txt" &&
+        "$K" php remove "$sysver" > /dev/null
+}
+check "a system PHP's extensions are listed as the distribution's, and left to phpdismod" system_php
+
 echo "== PHP update and rollback (P2-06, ADR 0029)"
 ver_page() { curl -fsS "http://ver-app.test:$http/"; }
 check "before: ver-app runs the default PHP, 8.4.26" contains "ver 8.4.26" ver_page

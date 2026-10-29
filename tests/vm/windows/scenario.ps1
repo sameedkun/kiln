@@ -56,7 +56,7 @@ Set-Content "$sites\toml-app\kiln.toml" "[site]`naliases = [`"toml-alias`"]`n[ph
 Set-Content "$sites\php-app\.nvmrc" "lts/iron"
 # PHP updates (P2-06, ADR 0029): a site on the default PHP that shows which patch serves it.
 New-Item -ItemType Directory -Force "$sites\ver-app" | Out-Null
-Set-Content "$sites\ver-app\index.php" '<?php echo "ver ", PHP_VERSION;'
+Set-Content "$sites\ver-app\index.php" '<?php echo "ver ", PHP_VERSION, " xsl=", extension_loaded("xsl") ? "yes" : "no", " curl=", extension_loaded("curl") ? "yes" : "no";'
 $herdApp = Join-Path $dir 'herd-app'
 Remove-Item -Recurse -Force $herdApp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $herdApp | Out-Null
@@ -212,6 +212,44 @@ Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app and 
     Expect '8.4.' (ShimPhp "$sites\laravel-app")
 }
 
+Say '== PHP extensions (P2-07, ADR 0030)'
+$ini = Join-Path $env:LOCALAPPDATA 'Kiln\php\8.4.26\php.ini'
+$iniHash = (Get-FileHash $ini).Hash
+$xslOp = ''
+function ShimPhpM($folder) {
+    Push-Location $folder
+    try { & (Join-Path $env:LOCALAPPDATA 'Kiln\bin\shims\php.exe') -m 2>&1 | Out-String } finally { Pop-Location }
+}
+Check 'php ext list shows xsl off, curl on and the built-in ones' {
+    $out = Kiln php ext list
+    if ($out -notmatch '(?m)^\s+xsl\s+off') { throw "xsl isn't listed as off:`n$out" }
+    if ($out -notmatch '(?m)^\s+curl\s+on') { throw "curl isn't listed as on:`n$out" }
+    Expect 'Built in, always on' $out
+}
+Check 'php ext on xsl: journaled, and live in the site and the php shim' {
+    $out = Kiln php ext on xsl
+    $script:xslOp = [regex]::Match($out, 'kiln undo (\d+)').Groups[1].Value
+    if (-not $script:xslOp) { throw "no operation number in:`n$out" }
+    Expect 'xsl=yes' (Get (SiteUrl 'ver-app.test'))
+    if ((ShimPhpM "$sites\ver-app") -notmatch '(?m)^xsl\s*$') { throw 'the php shim has no xsl' }
+}
+Check 'php ext off curl takes it out of the site; kiln undo puts it back' {
+    Expect 'curl is now off' (Kiln php ext off curl)
+    Expect 'curl=no' (Get (SiteUrl 'ver-app.test'))
+    Expect 'PHP 8.4.26: curl turned off' (Kiln history)
+    Expect 'Undone' (Kiln undo --yes)
+    Expect 'curl=yes' (Get (SiteUrl 'ver-app.test'))
+}
+Check 'an unknown or built-in extension is refused' {
+    $out = & $Kiln php ext on nosuchext 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'no extension `nosuchext`' $out
+    $out = & $Kiln php ext off date 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'built into PHP 8.4.26' $out
+    $global:LASTEXITCODE = 0
+}
+
 Say '== PHP update and rollback (P2-06, ADR 0029)'
 $phpRoot = Join-Path $env:LOCALAPPDATA 'Kiln\php'
 $newest = ''
@@ -222,7 +260,8 @@ Check 'php update 8.4 installs the newest patch beside 8.4.26 and switches to it
     $script:newest = [regex]::Match($out, '8\.4\.26\s+\S+\s+(8\.4\.\d+)').Groups[1].Value
     if (-not $script:newest) { throw "no new patch named in:`n$out" }
     Expect 'kept for `kiln php rollback 8.4`' $out
-    Expect "ver $script:newest" (Get (SiteUrl 'ver-app.test'))
+    Expect 'Extensions carried over from PHP 8.4.26: xsl on' $out
+    Expect "ver $script:newest xsl=yes" (Get (SiteUrl 'ver-app.test'))
     if (-not (Test-Path "$phpRoot\8.4.26\php.exe")) { throw '8.4.26 was not kept' }
 }
 Check 'php rollback goes back to 8.4.26 live and removes the newer patch' {
@@ -238,6 +277,13 @@ Check 'a second rollback has nothing to do' {
     if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
     Expect 'nothing to roll back' $out
     $global:LASTEXITCODE = 0
+}
+Check 'after the rollback 8.4.26 still has xsl; undoing it restores php.ini byte for byte' {
+    Expect 'ver 8.4.26 xsl=yes' (Get (SiteUrl 'ver-app.test'))
+    if ((Kiln history).Contains("PHP $($script:newest): xsl")) { throw 'the removed patch''s toggle is still in effect' }
+    Expect 'Undone' (Kiln undo $script:xslOp --yes)
+    Expect 'xsl=no' (Get (SiteUrl 'ver-app.test'))
+    if ((Get-FileHash $ini).Hash -ne $iniHash) { throw 'php.ini differs from before the toggles' }
 }
 
 Say '== Node (P2-05, ADR 0028)'

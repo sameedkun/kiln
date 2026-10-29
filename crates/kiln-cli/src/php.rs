@@ -364,6 +364,7 @@ pub fn remove(version: &str) -> Result<(), String> {
             php_root.display()
         ));
     }
+    crate::ext::forget(&record)?;
     match std::fs::remove_dir_all(&record.dir) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             return Err(format!(
@@ -472,6 +473,13 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
         println!("PHP {minor}: {current} → {newest}");
         install(newest, false)?;
         let mut store = open_store()?;
+        let now = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+        if let (Some(old), Some(new)) = (
+            installed.iter().find(|r| r.version == current),
+            now.iter().find(|r| r.version == *newest),
+        ) {
+            crate::ext::carry_over(old, new)?;
+        }
         store
             .set_setting(&rollback_key(minor), &current)
             .map_err(|e| e.to_string())?;
@@ -620,6 +628,7 @@ pub fn rollback(minor: Option<&str>) -> Result<(), String> {
         .remove_setting(&rollback_key(&minor))
         .map_err(|e| e.to_string())?;
     crate::web::apply_site_change(&store)?;
+    crate::ext::forget(&current)?;
     remove_build_dir(&current.dir);
     println!(
         "Rolled back to PHP {previous}. The {} download stays cached: `kiln php update {minor}` installs it again.",

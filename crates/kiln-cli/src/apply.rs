@@ -114,6 +114,7 @@ mod system {
         let writer: Rc<dyn PrivilegedHosts> = session.clone();
         let mut registry = Registry::default();
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
+        kiln_platform::php_ext::register_php_ext(&mut registry);
         if let Some(item) = kiln_platform::autostart::platform_item() {
             kiln_platform::autostart::register_autostart(&mut registry, item);
         }
@@ -221,8 +222,30 @@ mod system {
         ctx.engine.revert(id, force).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
         println!("Undone.");
+        if entry.kind == kiln_platform::php_ext::PHP_EXT_KIND {
+            let version = entry.params["version"].as_str().unwrap_or_default();
+            return crate::web::restart_php(&crate::web::open_store()?, version);
+        }
         report_elevation(&ctx.session);
         Ok(())
+    }
+
+    /// Applies `ops` as one journaled batch without asking: changes to Kiln's own files,
+    /// shown to the user afterwards with how to undo them. Returns their operation numbers.
+    pub fn apply_quietly(ops: &[Box<dyn Operation>]) -> Result<Vec<u64>, String> {
+        let mut ctx = open()?;
+        let report = ctx.engine.apply(ops).map_err(|e| e.to_string())?;
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        Ok(report.entry_ids)
+    }
+
+    /// Undoes the operations `ids`, in that order, without asking.
+    pub fn revert_quietly(ids: &[u64]) -> Result<(), String> {
+        let mut ctx = open()?;
+        for &id in ids {
+            ctx.engine.revert(id, false).map_err(|e| e.to_string())?;
+        }
+        ctx.session.finish().map_err(|e| e.to_string())
     }
 
     /// `kiln daemon enable` ([ADR 0026] §6): starts `exe` at login, as a journaled operation.
@@ -708,7 +731,8 @@ pub fn ca_info() -> Result<(), String> {
 }
 
 pub use system::{
-    autostart_disable, autostart_enable, ca_trust, hosts_set, shims_install, undo, undo_all,
+    apply_quietly, autostart_disable, autostart_enable, ca_trust, hosts_set, revert_quietly,
+    shims_install, undo, undo_all,
 };
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.

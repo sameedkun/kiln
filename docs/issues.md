@@ -845,7 +845,8 @@ commits and PRs.
 - **Fix:** one `kiln_php::ini::LIMITS` constant (512 MB, 60 s, 64 MB uploads) used on both
   platforms. On Windows it is appended to Kiln's section, where it overrides the
   development defaults.
-  - **Applies to new PHP installs.** An existing `php.ini` is the user's; editing it is for
-    P2-07's extension and setting commands.
+  - **Applies to new PHP installs.** An existing `php.ini` is the user's. P2-07 added
+    extension toggles only ([ADR 0030](adr/0030-php-extension-toggles.md) §7); limits stay
+    hand edits, at the path `kiln php ext list` prints.
 - **Not done:** Kiln doesn't offer a Defender exclusion. That would be an admin-level change
   to Windows security, a decision for a later ADR, if ever.

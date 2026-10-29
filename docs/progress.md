@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (6 of 11 tasks done; ADRs 0026–0029) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-29 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (7 of 11 tasks done; ADRs 0026–0030) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0029 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0030 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -941,8 +941,8 @@ its local API and autostart.
 | P2-04 | `kiln.toml` project config + `herd.yml` import | **done** 2026-10-28 | [ADR 0027](adr/0027-project-config-kiln-toml.md); see below. VM-checked on Windows and Ubuntu |
 | P2-05 | Node runtimes and shims | **done** 2026-10-28 | [ADR 0028](adr/0028-node-runtimes-and-shims.md); see below. Signature-checked installs; VM-checked on Windows (next to Herd's Node) and Ubuntu |
 | P2-06 | PHP patch updates with rollback | **done** 2026-10-29 | [ADR 0029](adr/0029-php-patch-updates-and-rollback.md); see below. A real update and rollback round-trip in both VMs |
-| P2-07 | PHP extension toggles | next | |
-| P2-08 | `kiln new` (Laravel) | planned | |
+| P2-07 | PHP extension toggles | **done** 2026-10-29 | [ADR 0030](adr/0030-php-extension-toggles.md); see below. Journaled one-line toggles, live and undoable; VM-checked on Windows and Ubuntu |
+| P2-08 | `kiln new` (Laravel) | next | |
 | P2-09 | Proxy sites | planned | |
 | P2-10 | Configurable TLD | planned | amends ADR 0010 |
 | P2-11 | VM scenarios for Phase 2 | planned | extends ADR 0024 |
@@ -1217,6 +1217,66 @@ its local API and autostart.
   - The Ubuntu VM's address changed after a reboot. Its host key matched before the new
     address was trusted.
 
+### P2-07 delivered (2026-10-29)
+
+[ADR 0030](adr/0030-php-extension-toggles.md).
+
+- **`kiln php ext list|on|off [--php X]`:**
+  - It works on the default PHP, or on the build `--php` names.
+  - **What's loaded:** PHP itself says, with `php -c <its php.ini> -m`.
+  - **What `list` shows:** the extensions that can be turned on or off, those built in, and
+    those a distribution's PHP loads from `/etc`. It also prints the `php.ini` path.
+  - **Names:** any case; `php_xsl.dll` and `xsl.so` both mean `xsl`.
+- **One journaled line per toggle** (`php.ini.extension`, new `PhpExtOp` in
+  `kiln-platform`):
+  - **On** appends `extension=` (`zend_extension=` for OPcache and Xdebug).
+  - **Off** marks every active line as `;[kiln off] …`.
+  - **Undo** takes back just that line, keeping the user's later edits.
+  - `kiln history` shows "PHP 8.4.26: xsl turned on".
+- **Checked and live:**
+  - **After `on`,** `php -m` must list the extension. If it doesn't, the toggle is undone
+    and PHP's start-up warning is shown.
+  - **Running workers of that build restart:** a new pool starts, Caddy switches to it, and
+    the old one retires.
+  - **`kiln undo` of a toggle** restarts them the same way.
+- **Lifecycle:**
+  - `kiln php update` carries the toggles in effect over to the new patch.
+  - `rollback` and `remove` undo the toggles of the folder they delete, so the journal never
+    points at a file that's gone.
+- **Linux:**
+  - **Kiln's static builds** have everything compiled in. `list` says so, and `on`/`off`
+    are refused.
+  - **A system PHP:** Kiln can turn on a `.so` that isn't loaded. For one its `conf.d`
+    loads, Kiln names `sudo phpdismod`. Kiln never edits `/etc`.
+- **Tests:**
+  - **The edit:** on/off and undo are byte-exact, including CRLF files and a missing final
+    newline.
+  - **Undo:** works out of order, and after the user edits the file.
+  - **The rest:** `php -m` parsing and the toggle/built-in/distribution split.
+  - 314 tests on Windows; clippy is also clean on Linux.
+- **VM scenarios:**
+  - **Windows:**
+    - `xsl` on: live in the site and the `php` shim.
+    - `curl` off: the site loses it, and `kiln undo` brings it back.
+    - Unknown and built-in names are refused.
+    - `xsl` carried through `php update`.
+    - Still on after `php rollback`.
+    - Finally undone, leaving `php.ini` byte-identical.
+  - **Ubuntu:**
+    - The static build lists everything as built in.
+    - `off` is refused, and `php.ini` is unchanged.
+    - The VM's own `php8.3` (`--system`) lists the distribution's modules and names
+      `phpdismod` for `sqlite3`.
+
+  **Windows passed 61 checks, Ubuntu 60**, each leaving the machine as it was.
+- **On the way:**
+  - **A transient DNS failure** for windows.php.net in the Windows VM. A re-run passed.
+  - **One `npm run build` failure** (Vite/rolldown) in the Ubuntu VM. A re-run passed.
+  - **A bulk edit broke two Linux-only lines.** The first Ubuntu run used the previous
+    binary as a result. Caught there, then clippy and the tests were run in the VM.
+- **Not covered by a VM:** turning a system PHP's unloaded `.so` on. Every module the VM's
+  distribution installed is already enabled. Unit tests cover the edit.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1300,6 +1360,7 @@ its local API and autostart.
 | 2026-10-28 | **P2-04 done:** ADR 0027. A project's `kiln.toml` sets its name, HTTPS, aliases and PHP (and later Node) version, read live; an isolate pin still wins. `kiln import herd` turns Laravel Herd's `herd.yml` into `kiln.toml` and links the folder. Fixed I-65 (PHP limits now 512 MB, 60 s, 64 MB uploads on both systems). Scenarios: Windows 46 checks, Ubuntu 47. |
 | 2026-10-28 | **P2-05 done:** ADR 0028. `kiln node available/install/list/remove/default` from nodejs.org, with `SHASUMS256.txt`'s OpenPGP signature checked against Node's release keys (new `kiln-node` crate; `ring` does the arithmetic, no new crates). `node`/`npm`/`npx`/`corepack` shims follow the nearest `kiln.toml`, `.nvmrc` or `.node-version`, and step aside to an existing Node while Kiln has none. Scenarios: Windows 52 checks (Herd's machine-wide Node stays first, as documented), Ubuntu 53, both building the Laravel app with `npm run build`. |
 | 2026-10-29 | **P2-06 done:** ADR 0029. `kiln php update [minor]` installs the newest patch beside the current one and switches live; `kiln php rollback` goes back and removes it. Kiln now pins the previous patch of each line: on Linux from the new kiln-php release `2026-10-29` (the workflow builds exact patches on request), on Windows from windows.php.net's archives. Scenarios: Windows 56 checks, Ubuntu 57, each with a real update and rollback. |
+| 2026-10-29 | **P2-07 done:** ADR 0030. `kiln php ext list/on/off [--php X]`: `php -m` says what is loaded; each toggle is one journaled line in the build's `php.ini` (`PhpExtOp`), undone byte for byte by `kiln undo`, checked after `on` and applied live by restarting that build's workers. `php update` carries toggles over; `rollback`/`remove` undo them first. Kiln's static Linux builds list everything as compiled in; a system PHP's `conf.d` modules are left to `phpdismod`. Scenarios: Windows 61 checks, Ubuntu 60. |
 
 ## How to update this file
 

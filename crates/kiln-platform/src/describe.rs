@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::autostart::AUTOSTART_KIND;
 use crate::hosts_op::HOSTS_BLOCK_KIND;
+use crate::php_ext::PHP_EXT_KIND;
 use crate::shell_profile::SHELL_PROFILE_KIND;
 use crate::trust_nss::NSS_TRUST_KIND;
 use crate::trust_system::SYSTEM_TRUST_KIND;
@@ -54,6 +55,16 @@ pub fn describe(kind: &str, params: &Value) -> String {
             "Kiln's daemon starts at login ({})",
             params["location"].as_str().unwrap_or("login items")
         ),
+        PHP_EXT_KIND => format!(
+            "PHP {}: {} turned {}",
+            params["version"].as_str().unwrap_or("?"),
+            params["name"].as_str().unwrap_or("an extension"),
+            if params["on"].as_bool() == Some(true) {
+                "on"
+            } else {
+                "off"
+            }
+        ),
         other => other.to_owned(),
     }
 }
@@ -84,6 +95,13 @@ mod tests {
         assert_eq!(
             describe(HOSTS_BLOCK_KIND, &json!({"tld": "test", "entries": []})),
             "hosts file: Kiln's block removed"
+        );
+        assert_eq!(
+            describe(
+                PHP_EXT_KIND,
+                &json!({"version": "8.4.26", "name": "xsl", "on": false})
+            ),
+            "PHP 8.4.26: xsl turned off"
         );
         assert_eq!(
             describe(

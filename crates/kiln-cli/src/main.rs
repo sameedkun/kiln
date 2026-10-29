@@ -13,6 +13,7 @@ mod apply;
 mod coexist;
 mod daemon;
 mod doctor;
+mod ext;
 mod history;
 mod node;
 mod php;
@@ -248,6 +249,37 @@ enum PhpAction {
     Default { version: String },
     /// Set how many PHP workers serve sites per version (1–32, default 4; applied live).
     Workers { count: usize },
+    /// The extensions of a PHP build: list them, or turn them on and off (undoable).
+    Ext {
+        #[command(subcommand)]
+        action: ExtAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ExtAction {
+    /// Show which extensions are on, off or built in.
+    List {
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Turn extensions on in the build's php.ini, e.g. `kiln php ext on xsl gmp`.
+    On {
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Turn extensions off in the build's php.ini.
+    Off {
+        #[arg(required = true)]
+        names: Vec<String>,
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -473,7 +505,11 @@ fn changes_state(command: &Command) -> bool {
                 action: CaAction::Info
             }
             | Command::Php {
-                action: PhpAction::Available | PhpAction::List
+                action: PhpAction::Available
+                    | PhpAction::List
+                    | PhpAction::Ext {
+                        action: ExtAction::List { .. }
+                    }
             }
             | Command::Node {
                 action: NodeAction::Available | NodeAction::List
@@ -562,6 +598,24 @@ fn main() -> ExitCode {
     }
 }
 
+fn run_php(action: PhpAction) -> Result<(), String> {
+    match action {
+        PhpAction::Available => php::available(),
+        PhpAction::Install { version, system } => php::install(&version, system),
+        PhpAction::List => php::list(),
+        PhpAction::Remove { version } => php::remove(&version),
+        PhpAction::Update { version } => php::update(version.as_deref()),
+        PhpAction::Rollback { version } => php::rollback(version.as_deref()),
+        PhpAction::Default { version } => php::set_default(&version),
+        PhpAction::Workers { count } => php::set_workers(count),
+        PhpAction::Ext { action } => match action {
+            ExtAction::List { php } => ext::list(php.as_deref()),
+            ExtAction::On { names, php } => ext::toggle(&names, php.as_deref(), true),
+            ExtAction::Off { names, php } => ext::toggle(&names, php.as_deref(), false),
+        },
+    }
+}
+
 fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Doctor { .. } => unreachable!("handled in main"),
@@ -620,16 +674,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Shims {
             action: ShimsAction::Install { yes },
         } => apply::shims_install(yes),
-        Command::Php { action } => match action {
-            PhpAction::Available => php::available(),
-            PhpAction::Install { version, system } => php::install(&version, system),
-            PhpAction::List => php::list(),
-            PhpAction::Remove { version } => php::remove(&version),
-            PhpAction::Update { version } => php::update(version.as_deref()),
-            PhpAction::Rollback { version } => php::rollback(version.as_deref()),
-            PhpAction::Default { version } => php::set_default(&version),
-            PhpAction::Workers { count } => php::set_workers(count),
-        },
+        Command::Php { action } => run_php(action),
         Command::Node { action } => match action {
             NodeAction::Available => node::available(),
             NodeAction::Install { version } => node::install(&version),

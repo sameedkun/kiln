@@ -260,6 +260,39 @@ pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
     Ok(())
 }
 
+/// Restarts the running workers of PHP `version` so they read its changed `php.ini`, without
+/// downtime ([ADR 0030] §5): a new pool starts beside the old one, Caddy switches to it, and
+/// the old one retires.
+///
+/// [ADR 0030]: ../../../docs/adr/0030-php-extension-toggles.md
+pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
+    let running = if is_running()? {
+        crate::pool::running()?
+    } else {
+        None
+    };
+    let Some(running) = running.filter(|r| r.pools.iter().any(|p| p.id == version)) else {
+        println!("No site is served by PHP {version} right now; its next start uses the change.");
+        return Ok(());
+    };
+    let others = Pools {
+        pools: running
+            .pools
+            .iter()
+            .filter(|p| p.id != version)
+            .cloned()
+            .collect(),
+    };
+    let Some(planned) = crate::pool::plan(store, Some(&others))? else {
+        return Ok(());
+    };
+    crate::pool::switch(&planned, reload_with_pools).map_err(|e| {
+        format!("the change is saved, but PHP {version}'s workers didn't restart: {e}")
+    })?;
+    println!("PHP {version}'s workers restarted with the change.");
+    Ok(())
+}
+
 fn hosts_hint(host: &str) {
     if !hosts_names().iter().any(|n| n == host) {
         println!("Note: {host} isn't in the hosts file yet; run `kiln hosts sync`.");
