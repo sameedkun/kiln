@@ -25,7 +25,7 @@ pub const PHP_FPM_BIN: &str = "php-fpm";
 /// `sodium` and `opcache`, as on Windows. No published set has both `mysqli` and `pdo_sqlite`.
 ///
 /// [ADR 0025]: ../../../docs/adr/0025-own-static-linux-php-builds.md
-pub const STATIC_BASE: &str = "https://github.com/sameedkun/kiln-php/releases/download/2026-10-27/";
+pub const STATIC_RELEASES: &str = "https://github.com/sameedkun/kiln-php/releases/download/";
 /// What `php_versions.archive` records for a system PHP.
 pub const SYSTEM_ARCHIVE: &str = "system";
 
@@ -42,11 +42,19 @@ pub struct StaticBuild {
     pub version: &'static str,
     /// `std::env::consts::ARCH`.
     pub arch: &'static str,
+    /// The `sameedkun/kiln-php` release (tag) holding its archives.
+    pub release: &'static str,
     pub cli: Pin,
     pub fpm: Pin,
 }
 
 impl StaticBuild {
+    /// The download address of one of its archives.
+    #[must_use]
+    pub fn url(&self, pin: &Pin) -> String {
+        format!("{STATIC_RELEASES}{}/{}", self.release, pin.archive)
+    }
+
     #[must_use]
     pub fn minor(&self) -> &'static str {
         self.version
@@ -70,6 +78,7 @@ pub const STATIC_BUILDS: &[StaticBuild] = &[
     StaticBuild {
         version: "8.2.35",
         arch: "x86_64",
+        release: "2026-10-27",
         cli: Pin {
             archive: "php-8.2.35-cli-linux-x86_64.tar.gz",
             sha256: "1bbe01a6af1fab907fe96e0b281b0847358f06cd985d30cd0b0b705c394522e9",
@@ -82,6 +91,7 @@ pub const STATIC_BUILDS: &[StaticBuild] = &[
     StaticBuild {
         version: "8.3.36",
         arch: "x86_64",
+        release: "2026-10-27",
         cli: Pin {
             archive: "php-8.3.36-cli-linux-x86_64.tar.gz",
             sha256: "440e205b25090a2667fe697f26f630790b72e7568b5832e53b9a1fd436e8bad1",
@@ -94,6 +104,7 @@ pub const STATIC_BUILDS: &[StaticBuild] = &[
     StaticBuild {
         version: "8.4.27",
         arch: "x86_64",
+        release: "2026-10-27",
         cli: Pin {
             archive: "php-8.4.27-cli-linux-x86_64.tar.gz",
             sha256: "9bcff154f36ec6d961c2c33109484cc5380ba0fa31de14c34ee65d1bf072c446",
@@ -106,6 +117,7 @@ pub const STATIC_BUILDS: &[StaticBuild] = &[
     StaticBuild {
         version: "8.5.12",
         arch: "x86_64",
+        release: "2026-10-27",
         cli: Pin {
             archive: "php-8.5.12-cli-linux-x86_64.tar.gz",
             sha256: "8b07a7dd2213165628cc29b229aa439cd897222b5a0bb5f2af1c9325188ee28b",
@@ -113,6 +125,63 @@ pub const STATIC_BUILDS: &[StaticBuild] = &[
         fpm: Pin {
             archive: "php-8.5.12-fpm-linux-x86_64.tar.gz",
             sha256: "43dc0dbd0d2e08b128ca74aa29ff4685bbaf2bd1c2d31055a930d2a17675b7d7",
+        },
+    },
+    // The previous patch of each line (ADR 0029 §1): release 2026-10-29 of
+    // sameedkun/kiln-php (static-php-cli 7bc4586). Checked 2026-10-29: the release's `.sha256`
+    // files, a download on Windows and one in the Ubuntu 24.04 test VM agree; each build ran
+    // there (`php -v`, `php -m` with mysqli, pdo_sqlite, intl, sodium and OPcache,
+    // `php-fpm -t`).
+    StaticBuild {
+        version: "8.2.34",
+        arch: "x86_64",
+        release: "2026-10-29",
+        cli: Pin {
+            archive: "php-8.2.34-cli-linux-x86_64.tar.gz",
+            sha256: "71c3587cba044d22ffa258c8ce5c09f55d18384dca2f8df871ac1d375db4e933",
+        },
+        fpm: Pin {
+            archive: "php-8.2.34-fpm-linux-x86_64.tar.gz",
+            sha256: "b6ec2a461eee2cdab3173bcd9ccdb50e8ab723aece29a7e1d51be9e65308e98b",
+        },
+    },
+    StaticBuild {
+        version: "8.3.35",
+        arch: "x86_64",
+        release: "2026-10-29",
+        cli: Pin {
+            archive: "php-8.3.35-cli-linux-x86_64.tar.gz",
+            sha256: "ca7bc04943e1a80b45690f8572495df845bce803dafc9b154863aa43f08fe8bc",
+        },
+        fpm: Pin {
+            archive: "php-8.3.35-fpm-linux-x86_64.tar.gz",
+            sha256: "aeeb5b66d9ebd2d49ad3962c0861269f0b7557f05c487c4529b5ac365bf8193a",
+        },
+    },
+    StaticBuild {
+        version: "8.4.26",
+        arch: "x86_64",
+        release: "2026-10-29",
+        cli: Pin {
+            archive: "php-8.4.26-cli-linux-x86_64.tar.gz",
+            sha256: "e82aafbbab8dce347f7a89d2d3df4c08a3f00e0be41d8dbdf677d0bf289efb88",
+        },
+        fpm: Pin {
+            archive: "php-8.4.26-fpm-linux-x86_64.tar.gz",
+            sha256: "af6e7fcfef84d27a11ba7cd120982db99c43ce01f86ed8efd32162dd5f5049b0",
+        },
+    },
+    StaticBuild {
+        version: "8.5.11",
+        arch: "x86_64",
+        release: "2026-10-29",
+        cli: Pin {
+            archive: "php-8.5.11-cli-linux-x86_64.tar.gz",
+            sha256: "2dfb051c3e9f5e65ca87325bab69ba7bb2cab2494ff3cf9f692ef7a6ee5ae583",
+        },
+        fpm: Pin {
+            archive: "php-8.5.11-fpm-linux-x86_64.tar.gz",
+            sha256: "96a829769bb322d9ec085627b72532677f6b612df5e3b4e64dc34a9046277835",
         },
     },
 ];
@@ -125,8 +194,11 @@ pub fn resolve_static(spec: &str, arch: &str) -> Result<&'static StaticBuild, In
         return Err(IndexError::BadSpec(spec.to_owned()));
     }
     let here: Vec<&StaticBuild> = STATIC_BUILDS.iter().filter(|b| b.arch == arch).collect();
+    // A minor means its newest pinned patch (ADR 0029: the previous one is pinned too).
     let found = if parts.len() == 2 {
-        here.iter().find(|b| b.minor() == spec)
+        here.iter()
+            .filter(|b| b.minor() == spec)
+            .max_by_key(|b| version_numbers(b.version))
     } else {
         here.iter().find(|b| b.version == spec)
     };
@@ -141,6 +213,11 @@ pub fn resolve_static(spec: &str, arch: &str) -> Result<&'static StaticBuild, In
                 .join(", ")
         },
     })
+}
+
+/// `8.4.27` as numbers, for ordering.
+fn version_numbers(version: &str) -> Vec<u32> {
+    version.split('.').filter_map(|p| p.parse().ok()).collect()
 }
 
 fn io_err(context: impl Into<String>) -> impl FnOnce(io::Error) -> InstallError {
@@ -277,7 +354,7 @@ pub fn install_static(
     let mut archives = Vec::new();
     for pin in [build.cli, build.fpm] {
         let expected = Expected::sha256(pin.sha256)?;
-        let url = format!("{STATIC_BASE}{}", pin.archive);
+        let url = build.url(&pin);
         archives.push(fetcher.fetch(&url, pin.archive, &expected, progress)?);
     }
     with_incomplete_marker(&dir, |dir| {
@@ -485,7 +562,14 @@ mod tests {
         let err = resolve_static("7.4", "riscv64").unwrap_err().to_string();
         assert!(err.contains("riscv64"), "{err}");
         for build in STATIC_BUILDS {
-            assert_eq!(resolve_static(build.minor(), build.arch).unwrap(), build);
+            let newest = resolve_static(build.minor(), build.arch).unwrap();
+            assert!(version_numbers(newest.version) >= version_numbers(build.version));
+            assert_eq!(newest.minor(), build.minor());
+            assert!(
+                build
+                    .url(&build.cli)
+                    .ends_with(&format!("/{}/{}", build.release, build.cli.archive))
+            );
             assert_eq!(resolve_static(build.version, build.arch).unwrap(), build);
             for pin in [build.cli, build.fpm] {
                 assert!(Expected::sha256(pin.sha256).is_ok(), "{}", pin.archive);

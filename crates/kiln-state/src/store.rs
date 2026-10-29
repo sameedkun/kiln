@@ -155,6 +155,14 @@ impl StateStore {
         Ok(())
     }
 
+    /// Removes a setting. Returns whether it was set.
+    pub fn remove_setting(&mut self, key: &str) -> Result<bool, StateError> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?
+            > 0)
+    }
+
     pub fn operation_count(&self) -> Result<u64, StateError> {
         let n: i64 = self
             .conn
@@ -413,6 +421,9 @@ mod tests {
         store.set_setting("tld", "test").unwrap();
         store.set_setting("tld", "wip").unwrap();
         assert_eq!(store.setting("tld").unwrap().as_deref(), Some("wip"));
+        assert!(store.remove_setting("tld").unwrap());
+        assert_eq!(store.setting("tld").unwrap(), None);
+        assert!(!store.remove_setting("tld").unwrap());
     }
 
     #[test]

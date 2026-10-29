@@ -45,9 +45,14 @@ echo '<?php echo "toml ", PHP_VERSION;' > "$SITES/toml-app/index.php"
 printf '[site]\naliases = ["toml-alias"]\n[php]\nversion = "8.3"\n[node]\nversion = "20"\n' > "$SITES/toml-app/kiln.toml"
 # Node (P2-05, ADR 0028): php-app asks for an LTS line by name in .nvmrc.
 echo lts/iron > "$SITES/php-app/.nvmrc"
+# PHP updates (P2-06, ADR 0029): a site on the default PHP that shows which patch serves it.
+mkdir -p "$SITES/ver-app"
+echo '<?php echo "ver ", PHP_VERSION;' > "$SITES/ver-app/index.php"
 echo '<?php echo "herd-import ", PHP_VERSION;' > "$WORK/herd-app/index.php"
 printf "name: herd-demo\nphp: '8.3'\nsecured: true\naliases:\n  - herd-alias\n" > "$WORK/herd-app/herd.yml"
-check "php install 8.4" "$K" php install 8.4
+# The previous 8.4 patch, pinned in Kiln (ADR 0029), so `kiln php update` has something to do.
+check "php install 8.4.26 (the previous patch, pinned in Kiln)" \
+    contains "Verified and installed PHP 8.4.26" "$K" php install 8.4.26
 check "php install 8.3 (a second version, for per-site PHP)" "$K" php install 8.3
 check "composer install" "$K" composer install
 check "shims install" "$K" shims install --yes
@@ -100,6 +105,31 @@ shim_php() { sh -c "cd '$1' && bash -ic 'php -r \"echo PHP_VERSION;\"' 2>/dev/nu
 check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." shim_php "$SITES/php-app"
 check "the php shim follows kiln.toml in toml-app" contains "8.3." shim_php "$SITES/toml-app"
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
+
+echo "== PHP update and rollback (P2-06, ADR 0029)"
+ver_page() { curl -fsS "http://ver-app.test:$http/"; }
+check "before: ver-app runs the default PHP, 8.4.26" contains "ver 8.4.26" ver_page
+updated() { # installs the newest 8.4 patch beside 8.4.26 and switches to it live
+    "$K" php update 8.4 > "$WORK/update.txt" || { cat "$WORK/update.txt"; return 1; }
+    newest=$(sed -n 's/.*8\.4\.26 → \(8\.4\.[0-9]*\).*/\1/p' "$WORK/update.txt" | head -1)
+    [ -n "$newest" ] || { echo "no new patch named in:"; cat "$WORK/update.txt"; return 1; }
+    echo "$newest" > "$WORK/newest.txt"
+    grep -q 'kept for `kiln php rollback 8.4`' "$WORK/update.txt" &&
+        ver_page | grep -q "ver $newest" &&
+        [ -x "$HOME/.local/share/kiln/php/8.4.26/php" ]
+}
+check "php update 8.4 installs the newest patch beside 8.4.26 and switches to it live" updated
+rolled_back() { # back to 8.4.26 live, and the newer patch gone
+    newest=$(cat "$WORK/newest.txt")
+    "$K" php rollback > "$WORK/rollback.txt" &&
+        grep -q "Rolled back to PHP 8.4.26" "$WORK/rollback.txt" &&
+        ver_page | grep -q "ver 8.4.26" &&
+        ! "$K" php list | grep -q "$newest" &&
+        [ ! -e "$HOME/.local/share/kiln/php/$newest" ]
+}
+check "php rollback goes back to 8.4.26 live and removes the newer patch" rolled_back
+check "a second rollback has nothing to do" \
+    sh -c "! '$K' php rollback > '$WORK/rollback2.txt' 2>&1 && grep -q 'nothing to roll back' '$WORK/rollback2.txt'"
 
 echo "== Node (P2-05, ADR 0028)"
 # npm's cache stays in $WORK, so the run leaves nothing of npm's own behind either.

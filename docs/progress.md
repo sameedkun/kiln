@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (5 of 11 tasks done; ADRs 0026–0028) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-28 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (6 of 11 tasks done; ADRs 0026–0029) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0028 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0029 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -940,8 +940,8 @@ its local API and autostart.
 | P2-03 | Automatic intermediate renewal | **done** 2026-10-28 | ADR 0026 §2 (amended: a brief restart, not a live reload); see below. VM-checked on Windows and Ubuntu |
 | P2-04 | `kiln.toml` project config + `herd.yml` import | **done** 2026-10-28 | [ADR 0027](adr/0027-project-config-kiln-toml.md); see below. VM-checked on Windows and Ubuntu |
 | P2-05 | Node runtimes and shims | **done** 2026-10-28 | [ADR 0028](adr/0028-node-runtimes-and-shims.md); see below. Signature-checked installs; VM-checked on Windows (next to Herd's Node) and Ubuntu |
-| P2-06 | PHP patch updates with rollback | next | |
-| P2-07 | PHP extension toggles | planned | |
+| P2-06 | PHP patch updates with rollback | **done** 2026-10-29 | [ADR 0029](adr/0029-php-patch-updates-and-rollback.md); see below. A real update and rollback round-trip in both VMs |
+| P2-07 | PHP extension toggles | next | |
 | P2-08 | `kiln new` (Laravel) | planned | |
 | P2-09 | Proxy sites | planned | |
 | P2-10 | Configurable TLD | planned | amends ADR 0010 |
@@ -1169,6 +1169,54 @@ its local API and autostart.
     match. Kiln then stopped, by design (I-63), before installing. The scenario now reads the
     whole output first, and the `kiln import herd` check too.
 
+### P2-06 delivered (2026-10-29)
+
+[ADR 0029](adr/0029-php-patch-updates-and-rollback.md).
+
+- **The previous patch of each line is pinned**, so it can be installed again
+  (`kiln php install 8.4.26`), and an update can be tested for real:
+  - **Linux:** `sameedkun/kiln-php` now builds exact patches on request (a `versions` input).
+    Its new release `2026-10-29` holds 8.2.34, 8.3.35, 8.4.26 and 8.5.11. Each pin now names
+    its release.
+    - Checked as before: the release's `.sha256` files, a download on Windows and one in the
+      Ubuntu VM agree.
+    - Each build ran there: `php -v`; `php -m` with mysqli, pdo_sqlite, intl, sodium and
+      OPcache; `php-fpm -t`.
+  - **Windows:** SHA-256s for windows.php.net's archived builds of the same patches. They
+    matched from both of its addresses, and each ran (`php -v`). Older patches are still
+    refused.
+- **`kiln php update [minor]`:**
+  - It installs the newest patch of each installed line (or the one named) beside the
+    current one: from the release index on Windows, the newest pin on Linux. A
+    distribution's PHP is skipped.
+  - An exact `php.default` moves with it. Lines pinned as `8.4` follow by themselves; exact
+    pins stay, and it says so.
+  - A running server switches pools live.
+  - It records the patch it replaced, and names older patches nothing uses any more.
+- **`kiln php rollback [minor]`:**
+  - It goes back to the recorded patch: the default moves back first, then the newer patch
+    is taken out of use, the pools switch live, and its folder is deleted. A file held by
+    an exiting worker is retried, else the folder is marked incomplete.
+  - It refuses while a site is pinned exactly to the newer patch.
+  - The download stays cached, so updating again is offline.
+- **Not journaled,** like installs: it all lives in Kiln's folder and state.
+- **`kiln-state`** gained `remove_setting`.
+- **Tests:** the pinned previous patches resolve (Windows `archives/` URLs, Linux release
+  URLs), a minor resolves to its newest pin, and rollback picks the recorded line. 304 on
+  Windows.
+- **VM scenarios:**
+  - Both start from 8.4.26 and serve a page showing its PHP version.
+  - `kiln php update 8.4` switches it live to the newest patch, keeping 8.4.26.
+  - `kiln php rollback` switches it back live and removes the newer patch. A second rollback
+    has nothing to do.
+
+  **Windows passed 56 checks, Ubuntu 57**, each leaving the machine as it was.
+- **On the way:**
+  - One kiln-php build failed downloading a library through the GitHub API, likely its rate
+    limit. A re-run passed, and the workflow now passes its token to static-php-cli.
+  - The Ubuntu VM's address changed after a reboot. Its host key matched before the new
+    address was trusted.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1251,6 +1299,7 @@ its local API and autostart.
 | 2026-10-28 | **P2-03 done:** `kiln ca renew [--force]`; `kilnd` checks the intermediate every 6 hours and renews it when fewer than 10 days are left. A running server restarts briefly to use it (ADR 0026 §2 amended: Caddy keeps old site certificates across a reload, I-57). API: `ca.status`, `ca.renew`; events `ca.renewed` and `ca.renewal_failed`. A renewal forced through the API passed in both VMs: Windows 42 checks, Ubuntu 40. |
 | 2026-10-28 | **P2-04 done:** ADR 0027. A project's `kiln.toml` sets its name, HTTPS, aliases and PHP (and later Node) version, read live; an isolate pin still wins. `kiln import herd` turns Laravel Herd's `herd.yml` into `kiln.toml` and links the folder. Fixed I-65 (PHP limits now 512 MB, 60 s, 64 MB uploads on both systems). Scenarios: Windows 46 checks, Ubuntu 47. |
 | 2026-10-28 | **P2-05 done:** ADR 0028. `kiln node available/install/list/remove/default` from nodejs.org, with `SHASUMS256.txt`'s OpenPGP signature checked against Node's release keys (new `kiln-node` crate; `ring` does the arithmetic, no new crates). `node`/`npm`/`npx`/`corepack` shims follow the nearest `kiln.toml`, `.nvmrc` or `.node-version`, and step aside to an existing Node while Kiln has none. Scenarios: Windows 52 checks (Herd's machine-wide Node stays first, as documented), Ubuntu 53, both building the Laravel app with `npm run build`. |
+| 2026-10-29 | **P2-06 done:** ADR 0029. `kiln php update [minor]` installs the newest patch beside the current one and switches live; `kiln php rollback` goes back and removes it. Kiln now pins the previous patch of each line: on Linux from the new kiln-php release `2026-10-29` (the workflow builds exact patches on request), on Windows from windows.php.net's archives. Scenarios: Windows 56 checks, Ubuntu 57, each with a real update and rollback. |
 
 ## How to update this file
 

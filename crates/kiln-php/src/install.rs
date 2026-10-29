@@ -285,6 +285,7 @@ mod tests {
             build: "nts-vs17-x64".into(),
             archive: archive.into(),
             sha256,
+            archived: false,
         }
     }
 

@@ -239,6 +239,11 @@ enum PhpAction {
     List,
     /// Delete an installed PHP version.
     Remove { version: String },
+    /// Install the newest patch of each installed PHP version (or of one, e.g. 8.4) beside
+    /// the current one, and switch to it live. The previous patch is kept for `rollback`.
+    Update { version: Option<String> },
+    /// Go back to the patch the last `kiln php update` replaced, and remove the newer one.
+    Rollback { version: Option<String> },
     /// Choose the PHP version that serves sites (applied live if the server runs).
     Default { version: String },
     /// Set how many PHP workers serve sites per version (1–32, default 4; applied live).
@@ -620,6 +625,8 @@ fn run(command: Command) -> Result<(), String> {
             PhpAction::Install { version, system } => php::install(&version, system),
             PhpAction::List => php::list(),
             PhpAction::Remove { version } => php::remove(&version),
+            PhpAction::Update { version } => php::update(version.as_deref()),
+            PhpAction::Rollback { version } => php::rollback(version.as_deref()),
             PhpAction::Default { version } => php::set_default(&version),
             PhpAction::Workers { count } => php::set_workers(count),
         },

@@ -12,6 +12,52 @@ pub const BASE_URL: &str = "https://downloads.php.net/~windows/releases/";
 pub const INDEX_URL: &str = "https://downloads.php.net/~windows/releases/releases.json";
 /// The index is about 25 KB; anything far larger isn't it.
 pub const INDEX_LIMIT: u64 = 2 * 1024 * 1024;
+/// Where windows.php.net keeps builds that are no longer the newest of their line.
+pub const ARCHIVES_URL: &str = "https://downloads.php.net/~windows/releases/archives/";
+
+/// A build that is no longer in the index, whose SHA-256 Kiln pins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviousPin {
+    pub version: &'static str,
+    pub build: &'static str,
+    pub archive: &'static str,
+    pub sha256: &'static str,
+}
+
+/// The previous patch of each line ([ADR 0029] §1), so it can be installed again (and an
+/// update tested). The index lists only the newest patch, and the `archives/` folder has no
+/// checksums, so these come from Kiln: each matched when downloaded from both
+/// `downloads.php.net/~windows/releases/archives/` and
+/// `windows.php.net/downloads/releases/archives/`, and ran (`php -v`), on 2026-10-29. Move
+/// them along only the same way, and note it in docs/progress.md.
+///
+/// [ADR 0029]: ../../../docs/adr/0029-php-patch-updates-and-rollback.md
+pub const PREVIOUS: &[PreviousPin] = &[
+    PreviousPin {
+        version: "8.2.34",
+        build: "nts-vs16-x64",
+        archive: "php-8.2.34-nts-Win32-vs16-x64.zip",
+        sha256: "03249b5c9414c6dbe30276f4a7598bd9d2a7417ee81f709b06b99e9c4a2aff4f",
+    },
+    PreviousPin {
+        version: "8.3.35",
+        build: "nts-vs16-x64",
+        archive: "php-8.3.35-nts-Win32-vs16-x64.zip",
+        sha256: "25a8e2ac9ff30f1d768d1447c09a600617fa6e6082729f6e95f008b59c91fe45",
+    },
+    PreviousPin {
+        version: "8.4.26",
+        build: "nts-vs17-x64",
+        archive: "php-8.4.26-nts-Win32-vs17-x64.zip",
+        sha256: "da68394f9193b7f6b89d0c76861a4034ae10efee7fd55a7255d8118c2acf70d7",
+    },
+    PreviousPin {
+        version: "8.5.11",
+        build: "nts-vs17-x64",
+        archive: "php-8.5.11-nts-Win32-vs17-x64.zip",
+        sha256: "0ea96e0d2b9b737a6036f05cf4e95c49313faa6d0f27bd97edb2742503f0c043",
+    },
+];
 
 /// One installable PHP build: x64, non-thread-safe.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,15 +68,40 @@ pub struct PhpRelease {
     pub version: String,
     /// Build key in the index, e.g. `nts-vs17-x64`.
     pub build: String,
-    /// Plain file name in [`BASE_URL`], e.g. `php-8.4.27-nts-Win32-vs17-x64.zip`.
+    /// Plain file name in [`BASE_URL`] (or [`ARCHIVES_URL`]), e.g.
+    /// `php-8.4.27-nts-Win32-vs17-x64.zip`.
     pub archive: String,
     pub sha256: Expected,
+    /// A [`PREVIOUS`] build, from the `archives/` folder.
+    pub archived: bool,
 }
 
 impl PhpRelease {
     #[must_use]
     pub fn url(&self) -> String {
-        format!("{BASE_URL}{}", self.archive)
+        let base = if self.archived {
+            ARCHIVES_URL
+        } else {
+            BASE_URL
+        };
+        format!("{base}{}", self.archive)
+    }
+
+    fn from_pin(pin: &PreviousPin) -> Result<Self, IndexError> {
+        Ok(Self {
+            minor: pin
+                .version
+                .rsplit_once('.')
+                .map_or(pin.version, |(minor, _)| minor)
+                .to_owned(),
+            version: pin.version.to_owned(),
+            build: pin.build.to_owned(),
+            archive: plain_name(pin.archive)
+                .map_err(|e| shape(e.to_string()))?
+                .to_owned(),
+            sha256: Expected::sha256(pin.sha256).map_err(|e| shape(e.to_string()))?,
+            archived: true,
+        })
     }
 }
 
@@ -49,7 +120,8 @@ pub enum IndexError {
     },
     #[error(
         "PHP {requested} can't be verified: windows.php.net publishes checksums only for the \
-         latest patch of each version. Install {latest} instead (`kiln php install {minor}`)."
+         latest patch of each version, and Kiln pins only the one before it. Install {latest} \
+         instead (`kiln php install {minor}`)."
     )]
     NotVerifiable {
         requested: String,
@@ -124,15 +196,16 @@ pub fn parse(json: &str) -> Result<Vec<PhpRelease>, IndexError> {
             build: build.clone(),
             archive: archive.to_owned(),
             sha256,
+            archived: false,
         });
     }
     releases.sort_by_key(|r| numbers(&r.version));
     Ok(releases)
 }
 
-/// Finds the release for `spec`: `8.4` (that minor's latest patch) or `8.4.27` (only if it is
-/// the latest patch, since older ones can't be verified).
-pub fn resolve<'a>(releases: &'a [PhpRelease], spec: &str) -> Result<&'a PhpRelease, IndexError> {
+/// Finds the release for `spec`: `8.4` (that minor's latest patch) or `8.4.27` (the latest
+/// patch, or the previous one Kiln pins; older ones can't be verified).
+pub fn resolve(releases: &[PhpRelease], spec: &str) -> Result<PhpRelease, IndexError> {
     let spec = spec.trim();
     let parts = numbers(spec).ok_or_else(|| IndexError::BadSpec(spec.to_owned()))?;
     if !(2..=3).contains(&parts.len()) {
@@ -149,14 +222,20 @@ pub fn resolve<'a>(releases: &'a [PhpRelease], spec: &str) -> Result<&'a PhpRele
                 .join(", "),
         });
     };
-    if parts.len() == 3 && numbers(&release.version) != Some(parts) {
+    if parts.len() == 3 && numbers(&release.version) != Some(parts.clone()) {
+        if let Some(pin) = PREVIOUS
+            .iter()
+            .find(|pin| numbers(pin.version) == Some(parts.clone()))
+        {
+            return PhpRelease::from_pin(pin);
+        }
         return Err(IndexError::NotVerifiable {
             requested: spec.to_owned(),
             latest: release.version.clone(),
             minor,
         });
     }
-    Ok(release)
+    Ok(release.clone())
 }
 
 #[cfg(test)]
@@ -208,12 +287,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resolves_minor_and_latest_patch_but_not_older_patches() {
+    fn resolves_minor_latest_and_pinned_previous_patches_but_no_older() {
         let releases = parse(SAMPLE).unwrap();
         assert_eq!(resolve(&releases, "8.4").unwrap().version, "8.4.27");
         assert_eq!(resolve(&releases, " 8.4.27 ").unwrap().version, "8.4.27");
+        assert!(!resolve(&releases, "8.4").unwrap().archived);
+        let previous = resolve(&releases, "8.4.26").unwrap();
+        assert!(previous.archived);
+        assert_eq!(previous.minor, "8.4");
+        assert_eq!(
+            previous.url(),
+            "https://downloads.php.net/~windows/releases/archives/php-8.4.26-nts-Win32-vs17-x64.zip"
+        );
         assert!(matches!(
-            resolve(&releases, "8.4.26"),
+            resolve(&releases, "8.4.25"),
             Err(IndexError::NotVerifiable { latest, .. }) if latest == "8.4.27"
         ));
         assert!(matches!(
@@ -224,6 +311,19 @@ pub(crate) mod tests {
             assert!(
                 matches!(resolve(&releases, bad), Err(IndexError::BadSpec(_))),
                 "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_previous_pin_is_well_formed() {
+        for pin in PREVIOUS {
+            let release = PhpRelease::from_pin(pin).unwrap();
+            assert!(release.archive.contains(pin.version), "{pin:?}");
+            assert!(
+                release
+                    .archive
+                    .contains(&pin.build.replace("nts-", "nts-Win32-"))
             );
         }
     }

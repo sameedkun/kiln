@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use kiln_fetch::Fetcher;
 use kiln_php::{INDEX_LIMIT, INDEX_URL, PhpRelease};
+use kiln_runtime::DEFAULT_KEY;
 use kiln_state::{PhpRecord, StateStore};
 
 /// Kiln's verified download cache.
@@ -113,7 +114,7 @@ pub fn install(spec: &str, system: bool) -> Result<(), String> {
     );
     let label = format!("Downloading {}", release.archive);
     let installed =
-        kiln_php::install::install(&fetcher, release, &php_root, &mut progress_printer(&label))
+        kiln_php::install::install(&fetcher, &release, &php_root, &mut progress_printer(&label))
             .map_err(|e| e.to_string())?;
     store
         .put_php(&PhpRecord {
@@ -193,7 +194,6 @@ fn available_linux() -> Result<(), String> {
 }
 
 /// The first two parts of `8.3` or `8.3.6`.
-#[cfg(unix)]
 fn minor_of(spec: &str) -> Result<String, String> {
     let parts: Vec<&str> = spec.trim().split('.').collect();
     if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.parse::<u32>().is_err()) {
@@ -376,6 +376,279 @@ pub fn remove(version: &str) -> Result<(), String> {
     store.remove_php(version).map_err(|e| e.to_string())?;
     println!("Removed PHP {version} ({}).", record.dir.display());
     Ok(())
+}
+
+/// The setting recording the patch `kiln php update` moved `minor` away from ([ADR 0029] §2).
+///
+/// [ADR 0029]: ../../../docs/adr/0029-php-patch-updates-and-rollback.md
+fn rollback_key(minor: &str) -> String {
+    format!("php.rollback.{minor}")
+}
+
+fn version_numbers(version: &str) -> Vec<u32> {
+    version.split('.').filter_map(|p| p.parse().ok()).collect()
+}
+
+/// (minor, newest patch offered) pairs.
+type Offered = Vec<(String, String)>;
+
+/// The newest patch offered for each of `minors`, and where that comes from: the release
+/// index on Windows, the builds pinned in this Kiln on Linux.
+fn newest_offered(minors: &[String]) -> Result<(Offered, &'static str), String> {
+    if cfg!(windows) {
+        let releases = releases(&fetcher()?)?;
+        let newest = minors
+            .iter()
+            .filter_map(|minor| {
+                kiln_php::index::resolve(&releases, minor)
+                    .ok()
+                    .map(|r| (minor.clone(), r.version))
+            })
+            .collect();
+        Ok((newest, "windows.php.net"))
+    } else {
+        let newest = minors
+            .iter()
+            .filter_map(|minor| {
+                kiln_php::linux::resolve_static(minor, std::env::consts::ARCH)
+                    .ok()
+                    .map(|b| (minor.clone(), b.version.to_owned()))
+            })
+            .collect();
+        Ok((newest, "the builds pinned in this Kiln"))
+    }
+}
+
+/// `kiln php update [minor]` ([ADR 0029] §2): the newest patch of each installed line (or the
+/// one named), beside the current one, switched to live.
+///
+/// [ADR 0029]: ../../../docs/adr/0029-php-patch-updates-and-rollback.md
+pub fn update(minor: Option<&str>) -> Result<(), String> {
+    let store = open_store()?;
+    let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+    let is_system = |r: &PhpRecord| r.archive == kiln_php::linux::SYSTEM_ARCHIVE;
+    let mut minors: Vec<String> = Vec::new();
+    for record in installed.iter().filter(|r| !is_system(r)) {
+        let minor = minor_of(&record.version)?;
+        if !minors.contains(&minor) {
+            minors.push(minor);
+        }
+    }
+    for record in installed.iter().filter(|r| is_system(r)) {
+        println!(
+            "PHP {} is your distribution's: your package manager updates it.",
+            record.version
+        );
+    }
+    if let Some(wanted) = minor {
+        let wanted = minor_of(wanted)?;
+        if !minors.contains(&wanted) {
+            return Err(format!(
+                "no PHP {wanted} installed by Kiln to update (`kiln php install {wanted}`)"
+            ));
+        }
+        minors = vec![wanted];
+    }
+    if minors.is_empty() {
+        println!("No PHP installed by Kiln to update. See `kiln php available`.");
+        return Ok(());
+    }
+    let (offered, source) = newest_offered(&minors)?;
+    drop(store);
+
+    let mut updated = false;
+    for minor in &minors {
+        let Some(current) = kiln_runtime::pick(&installed, minor).map(|r| r.version.clone()) else {
+            continue;
+        };
+        let Some((_, newest)) = offered.iter().find(|(m, _)| m == minor) else {
+            println!("PHP {minor}: {source} no longer offers it; staying on {current}.");
+            continue;
+        };
+        if version_numbers(newest) <= version_numbers(&current) {
+            println!("PHP {minor}: {current} is the newest in {source}.");
+            continue;
+        }
+        println!("PHP {minor}: {current} → {newest}");
+        install(newest, false)?;
+        let mut store = open_store()?;
+        store
+            .set_setting(&rollback_key(minor), &current)
+            .map_err(|e| e.to_string())?;
+        if store
+            .setting(DEFAULT_KEY)
+            .map_err(|e| e.to_string())?
+            .as_deref()
+            == Some(&current)
+        {
+            store
+                .set_setting(DEFAULT_KEY, newest)
+                .map_err(|e| e.to_string())?;
+            println!("The default PHP moves to {newest}.");
+        }
+        for (host, pin) in store.isolations().map_err(|e| e.to_string())? {
+            if pin == current {
+                println!(
+                    "{host} is pinned to {current} exactly, and stays on it (`kiln isolate {minor} {host}` follows updates)."
+                );
+            }
+        }
+        println!("PHP {current} is kept for `kiln php rollback {minor}`.");
+        for older in installed.iter().filter(|r| {
+            r.version != current
+                && minor_of(&r.version).as_deref() == Ok(minor.as_str())
+                && version_numbers(&r.version) < version_numbers(&current)
+        }) {
+            println!(
+                "PHP {} is no longer used by default; `kiln php remove {}` frees its space.",
+                older.version, older.version
+            );
+        }
+        updated = true;
+    }
+    if updated {
+        crate::web::apply_site_change(&open_store()?)?;
+    }
+    Ok(())
+}
+
+/// The line to roll back and the patch to go back to: `minor`'s recorded update, or the only
+/// one recorded.
+fn recorded_update(
+    store: &StateStore,
+    installed: &[PhpRecord],
+    minor: Option<&str>,
+) -> Result<(String, String), String> {
+    let mut recorded: Vec<(String, String)> = Vec::new();
+    for record in installed {
+        let minor = minor_of(&record.version)?;
+        if recorded.iter().any(|(m, _)| *m == minor) {
+            continue;
+        }
+        if let Some(previous) = store
+            .setting(&rollback_key(&minor))
+            .map_err(|e| e.to_string())?
+        {
+            recorded.push((minor, previous));
+        }
+    }
+    if let Some(wanted) = minor {
+        let wanted = minor_of(wanted)?;
+        return recorded
+            .into_iter()
+            .find(|(m, _)| *m == wanted)
+            .ok_or_else(|| {
+                format!("nothing to roll back for PHP {wanted}: no `kiln php update` is recorded")
+            });
+    }
+    match recorded.len() {
+        0 => Err("nothing to roll back: no `kiln php update` is recorded".into()),
+        1 => Ok(recorded.remove(0)),
+        _ => {
+            let names: Vec<&str> = recorded.iter().map(|(m, _)| m.as_str()).collect();
+            Err(format!(
+                "updates of several versions are recorded ({}); name one, e.g. `kiln php rollback {}`",
+                names.join(", "),
+                names[0]
+            ))
+        }
+    }
+}
+
+/// `kiln php rollback [minor]` ([ADR 0029] §3): back to the patch the last update replaced.
+///
+/// [ADR 0029]: ../../../docs/adr/0029-php-patch-updates-and-rollback.md
+pub fn rollback(minor: Option<&str>) -> Result<(), String> {
+    let mut store = open_store()?;
+    let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
+    let (minor, previous) = recorded_update(&store, &installed, minor)?;
+    if !installed.iter().any(|r| r.version == previous) {
+        return Err(format!(
+            "PHP {previous} was removed since the update, so there's nothing to go back to"
+        ));
+    }
+    let Some(current) = kiln_runtime::pick(&installed, &minor).cloned() else {
+        return Err(format!("no PHP {minor} installed"));
+    };
+    if version_numbers(&current.version) <= version_numbers(&previous) {
+        store
+            .remove_setting(&rollback_key(&minor))
+            .map_err(|e| e.to_string())?;
+        return Err(format!("PHP {minor} is already on {previous}"));
+    }
+    let pinned: Vec<String> = store
+        .isolations()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|(_, pin)| *pin == current.version)
+        .map(|(host, _)| host)
+        .collect();
+    if !pinned.is_empty() {
+        return Err(format!(
+            "{} pinned to {} exactly; pin another version or `kiln unisolate` first",
+            pinned.join(", "),
+            current.version
+        ));
+    }
+    // Only ever delete a folder inside Kiln's own PHP directory.
+    let php_root = local_dir()?.join("php");
+    if current.dir.parent() != Some(php_root.as_path()) {
+        return Err(format!(
+            "refusing to delete {}: it isn't inside {}",
+            current.dir.display(),
+            php_root.display()
+        ));
+    }
+
+    println!("PHP {minor}: {} → {previous}", current.version);
+    if store
+        .setting(DEFAULT_KEY)
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some(&current.version)
+    {
+        store
+            .set_setting(DEFAULT_KEY, &previous)
+            .map_err(|e| e.to_string())?;
+        println!("The default PHP moves back to {previous}.");
+    }
+    // Out of use first, then the pools switch back, then the folder goes.
+    store
+        .remove_php(&current.version)
+        .map_err(|e| e.to_string())?;
+    store
+        .remove_setting(&rollback_key(&minor))
+        .map_err(|e| e.to_string())?;
+    crate::web::apply_site_change(&store)?;
+    remove_build_dir(&current.dir);
+    println!(
+        "Rolled back to PHP {previous}. The {} download stays cached: `kiln php update {minor}` installs it again.",
+        current.version
+    );
+    Ok(())
+}
+
+/// Deletes a PHP folder that is out of use. A worker that is still exiting can hold its files
+/// for a moment on Windows: retried for a few seconds, else marked incomplete so nothing uses
+/// it, and replaced by the next install of that version.
+fn remove_build_dir(dir: &std::path::Path) {
+    for attempt in 0..10 {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) if attempt < 9 => std::thread::sleep(std::time::Duration::from_secs(1)),
+            Err(e) => {
+                let _ = std::fs::write(
+                    dir.join(kiln_php::install::INCOMPLETE_MARKER),
+                    b"kiln: rolled back; remove this folder\n",
+                );
+                println!(
+                    "Note: {} couldn't be deleted yet ({e}); it is out of use, and `kiln uninstall` or the next install of that version removes it.",
+                    dir.display()
+                );
+            }
+        }
+    }
 }
 
 /// `kiln php default <version>`: the PHP that serves sites.
@@ -619,4 +892,56 @@ pub fn composer_install() -> Result<(), String> {
         dest.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(version: &str) -> PhpRecord {
+        PhpRecord {
+            version: version.into(),
+            dir: PathBuf::from(format!("/php/{version}")),
+            archive: String::new(),
+            sha256: String::new(),
+        }
+    }
+
+    #[test]
+    fn rollback_picks_the_recorded_update() {
+        let mut store = StateStore::open_in_memory().unwrap();
+        let installed = [
+            record("8.3.35"),
+            record("8.3.36"),
+            record("8.4.26"),
+            record("8.4.27"),
+        ];
+        let err = recorded_update(&store, &installed, None).unwrap_err();
+        assert!(err.contains("nothing to roll back"), "{err}");
+
+        store.set_setting(&rollback_key("8.4"), "8.4.26").unwrap();
+        let only = recorded_update(&store, &installed, None).unwrap();
+        assert_eq!(only, ("8.4".to_owned(), "8.4.26".to_owned()));
+        assert_eq!(
+            recorded_update(&store, &installed, Some("8.4.27")).unwrap(),
+            only,
+            "an exact version names its line"
+        );
+        assert!(recorded_update(&store, &installed, Some("8.3")).is_err());
+
+        store.set_setting(&rollback_key("8.3"), "8.3.35").unwrap();
+        let err = recorded_update(&store, &installed, None).unwrap_err();
+        assert!(err.contains("name one"), "{err}");
+        assert_eq!(
+            recorded_update(&store, &installed, Some("8.3")).unwrap().1,
+            "8.3.35"
+        );
+    }
+
+    #[test]
+    fn versions_compare_as_numbers() {
+        assert!(version_numbers("8.4.10") > version_numbers("8.4.9"));
+        assert_eq!(minor_of("8.4.27").unwrap(), "8.4");
+        assert!(minor_of("8").is_err());
+    }
 }

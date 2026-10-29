@@ -54,13 +54,19 @@ Set-Content "$sites\toml-app\index.php" '<?php echo "toml ", PHP_VERSION;'
 Set-Content "$sites\toml-app\kiln.toml" "[site]`naliases = [`"toml-alias`"]`n[php]`nversion = `"8.3`"`n[node]`nversion = `"20`"`n"
 # Node (P2-05, ADR 0028): php-app asks for an LTS line by name in .nvmrc.
 Set-Content "$sites\php-app\.nvmrc" "lts/iron"
+# PHP updates (P2-06, ADR 0029): a site on the default PHP that shows which patch serves it.
+New-Item -ItemType Directory -Force "$sites\ver-app" | Out-Null
+Set-Content "$sites\ver-app\index.php" '<?php echo "ver ", PHP_VERSION;'
 $herdApp = Join-Path $dir 'herd-app'
 Remove-Item -Recurse -Force $herdApp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $herdApp | Out-Null
 Set-Content "$herdApp\index.php" '<?php echo "herd-import ", PHP_VERSION;'
 Set-Content "$herdApp\herd.yml" "name: herd-demo`nphp: '8.3'`nsecured: true`naliases:`n  - herd-alias`n"
 
-Check 'php install 8.4' { Kiln php install 8.4 }
+# The previous 8.4 patch, pinned in Kiln (ADR 0029), so `kiln php update` has something to do.
+Check 'php install 8.4.26 (the previous patch, from windows.php.net''s archives, pinned in Kiln)' {
+    Expect 'Verified and installed PHP 8.4.26' (Kiln php install 8.4.26)
+}
 Check 'php install 8.3 (a second version, for per-site PHP)' { Kiln php install 8.3 }
 Check 'composer install' { Kiln composer install }
 # Herd's Node (nvm) is on the machine PATH, which Windows puts before the user's: Kiln says that
@@ -204,6 +210,34 @@ Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app and 
     Expect '8.3.' (ShimPhp "$sites\php-app")
     Expect '8.3.' (ShimPhp "$sites\toml-app")
     Expect '8.4.' (ShimPhp "$sites\laravel-app")
+}
+
+Say '== PHP update and rollback (P2-06, ADR 0029)'
+$phpRoot = Join-Path $env:LOCALAPPDATA 'Kiln\php'
+$newest = ''
+Check 'before: ver-app runs the default PHP, 8.4.26' { Expect 'ver 8.4.26' (Get (SiteUrl 'ver-app.test')) }
+Check 'php update 8.4 installs the newest patch beside 8.4.26 and switches to it live' {
+    $out = Kiln php update 8.4
+    # `8.4.26 → 8.4.27`, read loosely: the arrow may not survive the console's code page.
+    $script:newest = [regex]::Match($out, '8\.4\.26\s+\S+\s+(8\.4\.\d+)').Groups[1].Value
+    if (-not $script:newest) { throw "no new patch named in:`n$out" }
+    Expect 'kept for `kiln php rollback 8.4`' $out
+    Expect "ver $script:newest" (Get (SiteUrl 'ver-app.test'))
+    if (-not (Test-Path "$phpRoot\8.4.26\php.exe")) { throw '8.4.26 was not kept' }
+}
+Check 'php rollback goes back to 8.4.26 live and removes the newer patch' {
+    Expect 'Rolled back to PHP 8.4.26' (Kiln php rollback)
+    Expect 'ver 8.4.26' (Get (SiteUrl 'ver-app.test'))
+    if ((Kiln php list).Contains($script:newest)) { throw "$script:newest is still listed" }
+    if (Test-Path "$phpRoot\$script:newest\php.exe") {
+        if (-not (Test-Path "$phpRoot\$script:newest\.kiln-install-incomplete")) { throw "$script:newest is still in use" }
+    }
+}
+Check 'a second rollback has nothing to do' {
+    $out = & $Kiln php rollback 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'nothing to roll back' $out
+    $global:LASTEXITCODE = 0
 }
 
 Say '== Node (P2-05, ADR 0028)'
