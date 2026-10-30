@@ -6,6 +6,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use kiln_core::Tld;
 use kiln_runtime::shim::{COMPOSER_PHAR, Tool};
 use kiln_runtime::{DirPhp, SitePhp};
 use kiln_sites::manifest;
@@ -29,8 +30,8 @@ fn create_args(name: &str) -> Vec<OsString> {
 }
 
 /// The site name `name` gives, which is also the folder's name: a single lowercase label.
-fn project_name(name: &str) -> Result<String, String> {
-    let host = crate::web::host_name(name)?;
+fn project_name(name: &str, tld: &Tld) -> Result<String, String> {
+    let host = crate::web::host_name_under(name, tld)?;
     let label = host
         .as_str()
         .split('.')
@@ -89,7 +90,8 @@ pub fn new(
     php: Option<&str>,
     secure: bool,
 ) -> Result<(), String> {
-    let name = project_name(name)?;
+    let tld = crate::web::current_tld()?;
+    let name = project_name(name, &tld)?;
     let parent = match parent {
         Some(parent) => parent,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
@@ -173,12 +175,12 @@ pub fn new(
         .any(|s| s.alias_of.is_none() && s.project == project);
     drop(store);
     if served {
-        println!("{name}.test already serves it (its folder is parked).");
+        println!("{name}.{tld} already serves it (its folder is parked).");
         if secure {
             crate::web::set_secure(&name, true)?;
         }
         if let Some(url) =
-            crate::web::site_urls(&crate::web::open_store()?).get(&format!("{name}.test"))
+            crate::web::site_urls(&crate::web::open_store()?).get(&format!("{name}.{tld}"))
         {
             println!("URL: {url}");
         }
@@ -198,12 +200,15 @@ mod tests {
 
     #[test]
     fn a_project_name_is_one_site_label() {
-        assert_eq!(project_name("Shop").unwrap(), "shop");
-        assert_eq!(project_name("shop.test").unwrap(), "shop");
-        assert_eq!(project_name("my-app2").unwrap(), "my-app2");
-        assert!(project_name("api.shop").is_err());
-        assert!(project_name("bad_name").is_err());
-        assert!(project_name("").is_err());
+        assert_eq!(project_name("Shop", &Tld::default()).unwrap(), "shop");
+        assert_eq!(project_name("shop.test", &Tld::default()).unwrap(), "shop");
+        assert_eq!(project_name("my-app2", &Tld::default()).unwrap(), "my-app2");
+        let internal = Tld::new("internal").unwrap();
+        assert_eq!(project_name("shop.internal", &internal).unwrap(), "shop");
+        assert!(project_name("shop.test", &internal).is_err());
+        assert!(project_name("api.shop", &Tld::default()).is_err());
+        assert!(project_name("bad_name", &Tld::default()).is_err());
+        assert!(project_name("", &Tld::default()).is_err());
     }
 
     #[test]

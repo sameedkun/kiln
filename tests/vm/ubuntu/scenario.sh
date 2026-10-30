@@ -68,6 +68,12 @@ check "WordPress, from wordpress.org" \
     sh -c "curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://wordpress.org/latest.tar.gz | tar -xz -C '$SITES' && mv '$SITES/wordpress' '$SITES/wp-site'"
 
 check "ca init" "$K" ca init
+tld_refused() { # a TLD that isn't reserved, and a second TLD over the .test root
+    ! "$K" ca init --tld lan > "$WORK/tld1.txt" 2>&1 && grep -q 'reserved development TLD' "$WORK/tld1.txt" &&
+        ! "$K" ca init --tld internal > "$WORK/tld2.txt" 2>&1 &&
+        grep -q 'only vouch for names under .test' "$WORK/tld2.txt"
+}
+check "ca init refuses a TLD that isn't reserved, and another TLD over the .test root (P2-10)" tld_refused
 check "kiln import herd: herd.yml becomes kiln.toml and the folder is linked (P2-04)" \
     sh -c "'$K' import herd '$WORK/herd-app' > '$WORK/import.txt' && grep -q herd-demo '$WORK/import.txt' && grep -q 'version = \"8.3\"' '$WORK/herd-app/kiln.toml'"
 check "park the sites folder" "$K" park "$SITES"
@@ -193,7 +199,7 @@ check "kiln which names the .nvmrc" contains ".nvmrc asks for lts/iron" sh -c "c
 # skeleton's fonts during the build) is the network, not Kiln. Node gives each address only
 # 250 ms to connect, less than Bunny Fonts can take (I-70).
 check "npm install and npm run build in the Laravel app, in a new terminal, with Kiln's Node" \
-    sh -c "cd '$SITES/laravel-app' && for attempt in 1 2; do bash -ic 'npm install --no-audit --no-fund' && break; done && { NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000 bash -ic 'npm run build' || NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000 bash -ic 'npm run build'; } && test -f public/build/manifest.json"
+    sh -c "cd '$SITES/laravel-app' && for attempt in 1 2; do bash -ic 'npm install --no-audit --no-fund' && break; done && { NODE_OPTIONS=--network-family-autoselection-attempt-timeout=10000 bash -ic 'npm run build' || NODE_OPTIONS=--network-family-autoselection-attempt-timeout=10000 bash -ic 'npm run build'; } && test -f public/build/manifest.json"
 check "kiln doctor reports no problems" "$K" doctor
 check "kiln history lists the system changes" contains "in effect" "$K" history
 
@@ -286,6 +292,33 @@ if diff -u "$WORK/before.txt" "$WORK/after.txt" > "$WORK/diff.txt"; then
 else
     echo "FAIL the machine differs after uninstall:"
     sed 's/^/     /' "$WORK/diff.txt"
+    failed=1
+fi
+
+echo "== another TLD from the start (P2-10, ADR 0033)"
+# A fresh Kiln that chose .internal: sites, the hosts block and the root follow it. Checked
+# over HTTPS against the new root itself, without trusting it anywhere.
+check "web install, then ca init --tld internal: a root for .internal" \
+    sh -c "'$K' web install > /dev/null && '$K' ca init --tld internal | grep -q 'names under .internal'"
+check "link static-site --secure: linked as static-site.internal" \
+    contains "static-site.internal" "$K" link static-site --path "$SITES/static-site" --secure
+check "hosts sync lists static-site.internal" \
+    sh -c "'$K' hosts sync --yes > /dev/null && grep -q 'static-site.internal' /etc/hosts"
+internal_https() {
+    "$K" web start > "$WORK/internal-start.txt" 2>&1 || return 1
+    url=$(grep -oE 'https://static-site\.internal[^ ]*' "$WORK/internal-start.txt" | head -1)
+    root="$("$K" ca info | sed -n 's/^CA directory: //p')/root.crt"
+    [ -n "$url" ] && curl -fsS --cacert "$root" "$url" | grep -q 'static from kiln'
+}
+check "static-site.internal over HTTPS, signed by the .internal root" internal_https
+check "kiln uninstall again" "$K" uninstall --yes
+sleep 2
+sh "$HERE/snapshot.sh" > "$WORK/after2.txt"
+if diff -u "$WORK/before.txt" "$WORK/after2.txt" > "$WORK/diff2.txt"; then
+    echo "PASS the machine is as it was after the second uninstall too"
+else
+    echo "FAIL the machine differs after the second uninstall:"
+    sed 's/^/     /' "$WORK/diff2.txt"
     failed=1
 fi
 

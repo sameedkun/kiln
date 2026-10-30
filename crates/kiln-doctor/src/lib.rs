@@ -799,14 +799,14 @@ fn certificates(facts: &CertFacts) -> Vec<Finding> {
     out.push(finding(
         area,
         Status::Info,
-        "curl.exe and Git on Windows (Schannel) refuse local CAs with \"revocation status unknown\"; add --ssl-revoke-best-effort (curl) or http.schannelCheckRevoke=false (git) for .test URLs",
+        "curl.exe and Git on Windows (Schannel) refuse local CAs with \"revocation status unknown\"; add --ssl-revoke-best-effort (curl) or http.schannelCheckRevoke=false (git) for Kiln's HTTPS sites",
     ));
     if facts.firefox_profiles > 0 {
         out.push(finding(
             area,
             Status::Info,
             format!(
-                "Firefox found ({} profile(s)); if it warns on .test HTTPS sites, set security.enterprise_roots.enabled = true in about:config so it uses the Windows trust store",
+                "Firefox found ({} profile(s)); if it warns on Kiln's HTTPS sites, set security.enterprise_roots.enabled = true in about:config so it uses the Windows trust store",
                 facts.firefox_profiles
             ),
         ));

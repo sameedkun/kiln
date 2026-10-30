@@ -5,9 +5,16 @@ use serde::{Deserialize, Serialize};
 const MAX_LABEL: usize = 63;
 const MAX_NAME: usize = 253;
 
-/// Top-level domains Kiln refuses to manage, because they resolve on the public internet or
-/// carry special meaning for operating systems and browsers.
-const RESERVED_TLDS: &[&str] = &[
+/// The development TLDs a user can choose ([ADR 0033] §2): names set aside so that they
+/// never resolve on the public internet (RFC 2606, and ICANN's `.internal`).
+///
+/// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
+pub const ALLOWED_TLDS: &[&str] = &["test", "internal", "example", "invalid"];
+
+/// Top-level domains Kiln never accepts, even in what it recorded under earlier rules,
+/// because they resolve on the public internet or carry special meaning for operating
+/// systems and browsers.
+const PUBLIC_OR_SPECIAL_TLDS: &[&str] = &[
     "com",
     "net",
     "org",
@@ -30,6 +37,8 @@ pub enum NameError {
     BadLabelChars(String),
     #[error("`{0}` is not allowed as a development TLD")]
     ReservedTld(String),
+    #[error("`{0}` isn't a reserved development TLD; use test, internal, example or invalid")]
+    NotReservedTld(String),
     #[error("`{name}` does not end in the managed TLD `.{tld}`")]
     WrongTld { name: String, tld: String },
 }
@@ -53,10 +62,25 @@ fn check_label(label: &str) -> Result<(), NameError> {
 pub struct Tld(String);
 
 impl Tld {
+    /// A TLD the user chooses: one of [`ALLOWED_TLDS`].
     pub fn new(value: &str) -> Result<Self, NameError> {
+        let tld = Self::recorded(value)?;
+        if !ALLOWED_TLDS.contains(&tld.as_str()) {
+            return Err(NameError::NotReservedTld(tld.0));
+        }
+        Ok(tld)
+    }
+
+    /// A TLD Kiln recorded itself (a journal entry, a root's name constraint, its setting),
+    /// checked by the earlier rules: any label but a public or special one. Earlier versions
+    /// let users choose such names, and Kiln must still undo and trust what they made
+    /// ([ADR 0033] §6).
+    ///
+    /// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
+    pub fn recorded(value: &str) -> Result<Self, NameError> {
         let value = value.trim_start_matches('.').to_ascii_lowercase();
         check_label(&value)?;
-        if RESERVED_TLDS.contains(&value.as_str()) {
+        if PUBLIC_OR_SPECIAL_TLDS.contains(&value.as_str()) {
             return Err(NameError::ReservedTld(value));
         }
         Ok(Self(value))
@@ -77,7 +101,8 @@ impl Default for Tld {
 impl TryFrom<String> for Tld {
     type Error = NameError;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(&value)
+        // Deserialising reads back what was written, so the earlier rules apply.
+        Self::recorded(&value)
     }
 }
 
@@ -188,7 +213,26 @@ mod tests {
                 "{tld}"
             );
         }
-        assert_eq!(Tld::new(".Wip").unwrap().as_str(), "wip");
+        assert_eq!(Tld::new(".Internal").unwrap().as_str(), "internal");
+    }
+
+    #[test]
+    fn only_reserved_tlds_can_be_chosen_but_earlier_ones_still_read_back() {
+        for tld in ALLOWED_TLDS {
+            assert_eq!(Tld::new(tld).unwrap().as_str(), *tld);
+        }
+        for tld in ["wip", "box", "lan"] {
+            assert!(
+                matches!(Tld::new(tld), Err(NameError::NotReservedTld(_))),
+                "{tld}"
+            );
+            assert_eq!(Tld::recorded(tld).unwrap().as_str(), tld);
+        }
+        for tld in ["com", "local", "localhost"] {
+            assert!(Tld::recorded(tld).is_err(), "{tld}");
+        }
+        let read: Tld = serde_json::from_str("\"wip\"").unwrap();
+        assert_eq!(read.as_str(), "wip");
     }
 
     proptest! {

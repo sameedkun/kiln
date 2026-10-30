@@ -43,15 +43,27 @@ pub(crate) fn server() -> Result<WebServer, String> {
     ))
 }
 
-/// `blog` or `blog.test` → `blog.test`, validated.
+/// The development TLD sites are served under ([ADR 0033]).
+///
+/// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
+pub(crate) fn current_tld() -> Result<Tld, String> {
+    kiln_runtime::tld(&open_store()?).map_err(|e| e.to_string())
+}
+
+/// `blog` or `blog.test` → `blog.test` (under the current TLD), validated.
 pub(crate) fn host_name(name: &str) -> Result<HostName, String> {
-    let tld = Tld::default();
+    host_name_under(name, &current_tld()?)
+}
+
+/// `blog` or `blog.<tld>` → `blog.<tld>`, validated.
+pub(crate) fn host_name_under(name: &str, tld: &Tld) -> Result<HostName, String> {
+    let name = name.to_ascii_lowercase();
     let fqdn = if name.ends_with(&format!(".{tld}")) {
-        name.to_ascii_lowercase()
+        name
     } else {
-        format!("{}.{tld}", name.to_ascii_lowercase())
+        format!("{name}.{tld}")
     };
-    HostName::new(&fqdn, &tld).map_err(|e| e.to_string())
+    HostName::new(&fqdn, tld).map_err(|e| e.to_string())
 }
 
 pub(crate) fn port_setting(store: &StateStore, key: &str, default: u16) -> Result<u16, String> {
@@ -80,7 +92,7 @@ pub(crate) fn ca_files() -> Result<CaFiles, String> {
         });
     if !fresh_enough {
         let issued = ca
-            .issue_intermediate(&Tld::default())
+            .issue_intermediate(&apply::root_tld(&ca)?)
             .map_err(|e| e.to_string())?;
         println!(
             "Issued a new intermediate certificate for the web server (expires {}).",
@@ -117,7 +129,7 @@ pub fn ca_renew(force: bool) -> Result<(), String> {
         return Ok(());
     }
     let issued = ca
-        .issue_intermediate(&Tld::default())
+        .issue_intermediate(&apply::root_tld(&ca)?)
         .map_err(|e| e.to_string())?;
     println!(
         "Issued a new intermediate certificate for the web server (expires {}).",
@@ -129,24 +141,35 @@ pub fn ca_renew(force: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The current intermediate's SHA-256 if Caddy's stored site certificates were issued from
-/// another one (I-57); `None` without HTTPS sites or when nothing changed.
-fn ca_changed(config: &WebConfig) -> Result<Option<String>, String> {
+/// The SHA-256 of the intermediate `config` hands Caddy; `None` without HTTPS sites.
+fn intermediate_sha256(config: &WebConfig) -> Result<Option<String>, String> {
     let Some(ca) = &config.ca else {
         return Ok(None);
     };
     let pem = std::fs::read_to_string(&ca.intermediate_cert)
         .map_err(|e| format!("cannot read {}: {e}", ca.intermediate_cert.display()))?;
     let der = kiln_pki::pem_to_der(&pem).map_err(|e| e.to_string())?;
-    let sha256 = kiln_pki::sha256_fingerprint(&der);
-    Ok((!kiln_web::issued::issued_from(&config.storage_dir, &sha256)).then_some(sha256))
+    Ok(Some(kiln_pki::sha256_fingerprint(&der)))
+}
+
+/// Records which intermediate Caddy issues from, clearing site certificates from any other
+/// (I-57). Done whenever Caddy gets the CA, so the first certificates are recorded too (I-72).
+fn record_issuer(config: &WebConfig) -> Result<(), String> {
+    match intermediate_sha256(config)? {
+        Some(sha256) => kiln_web::issued::forget_other_issuers(&config.storage_dir, &sha256)
+            .map_err(|e| format!("cannot clear old site certificates: {e}")),
+        None => Ok(()),
+    }
 }
 
 /// After Kiln's CA changed, a reload would keep serving the old site certificates from
 /// Caddy's memory, so a running server restarts instead (I-57). Returns whether it did.
 fn restart_if_ca_changed(store: &StateStore) -> Result<bool, String> {
     let config = web_config(store)?; // may re-issue an expiring intermediate first
-    if ca_changed(&config)?.is_none() {
+    let changed = intermediate_sha256(&config)?
+        .is_some_and(|sha256| !kiln_web::issued::issued_from(&config.storage_dir, &sha256));
+    if !changed {
+        record_issuer(&config)?;
         return Ok(false);
     }
     println!(
@@ -456,7 +479,7 @@ fn folder_arg(path: Option<PathBuf>) -> Result<PathBuf, String> {
     Ok(strip_verbatim(full))
 }
 
-/// `kiln park [folder]`: every subfolder becomes `<name>.test` ([ADR 0015] §6).
+/// `kiln park [folder]`: every subfolder becomes `<name>.<tld>` ([ADR 0015] §6).
 ///
 /// [ADR 0015]: ../../../docs/adr/0015-parked-folders-and-drivers.md
 pub fn park(path: Option<PathBuf>) -> Result<(), String> {
@@ -464,8 +487,9 @@ pub fn park(path: Option<PathBuf>) -> Result<(), String> {
     let mut store = open_store()?;
     if store.park(&folder).map_err(|e| e.to_string())? {
         println!(
-            "Parked {}: each subfolder is served as <name>.test.",
-            folder.display()
+            "Parked {}: each subfolder is served as <name>.{}.",
+            folder.display(),
+            kiln_runtime::tld(&store).map_err(|e| e.to_string())?
         );
     } else {
         println!("{} is already parked.", folder.display());
@@ -850,13 +874,7 @@ pub fn start(
         }
     };
     // Site certificates from an earlier intermediate would be served on (I-57).
-    let forgotten = ca_changed(&config).and_then(|changed| {
-        changed.map_or(Ok(()), |sha256| {
-            kiln_web::issued::forget_other_issuers(&config.storage_dir, &sha256)
-                .map_err(|e| format!("cannot clear old site certificates: {e}"))
-        })
-    });
-    if let Err(e) = forgotten {
+    if let Err(e) = record_issuer(&config) {
         let _ = supervisor.stop();
         return Err(e);
     }
@@ -867,6 +885,8 @@ pub fn start(
             return Err(e.to_string());
         }
     };
+    // The URLs below should work at once (I-69).
+    wait_for_certificates(&store)?;
     println!("Web server started (PID {pid}).");
     print_listeners(&config);
     print_php(pools.as_ref());
@@ -1004,9 +1024,9 @@ pub fn hosts_sync(yes: bool) -> Result<(), String> {
         .into_iter()
         .map(|s| s.host.to_string())
         .collect();
+    let tld = kiln_runtime::tld(&store).map_err(|e| e.to_string())?;
     drop(store);
-    let tld = Tld::default();
-    let (tld, entries) = apply::site_entries(&names, tld.as_str())?;
+    let (tld, entries) = apply::site_entries(&names, tld)?;
     apply::hosts_set(tld, entries, yes)?;
     // New parked folders are served from now on, without a separate reload.
     if is_running()? {

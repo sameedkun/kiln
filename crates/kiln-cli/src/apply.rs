@@ -8,8 +8,7 @@ use kiln_core::{HostName, Tld};
 use kiln_platform::DnsEntry;
 
 /// Parses site names (with or without the TLD) into validated loopback entries.
-pub fn site_entries(names: &[String], tld: &str) -> Result<(Tld, Vec<DnsEntry>), String> {
-    let tld = Tld::new(tld).map_err(|e| e.to_string())?;
+pub fn site_entries(names: &[String], tld: Tld) -> Result<(Tld, Vec<DnsEntry>), String> {
     let entries = names
         .iter()
         .map(|name| {
@@ -671,14 +670,60 @@ fn print_cert(label: &str, info: &kiln_pki::CertInfo) {
     println!("  expires: {}", info.not_after.date());
 }
 
+/// The TLD in the root's name constraint: what its intermediates must be issued for.
+pub fn root_tld(ca: &kiln_pki::CaStore) -> Result<Tld, String> {
+    let root = ca.root().map_err(|e| e.to_string())?;
+    let tld = kiln_pki::kiln_root_tld(&root.der).map_err(|e| e.to_string())?;
+    Tld::recorded(&tld).map_err(|e| e.to_string())
+}
+
 /// Creates Kiln's root CA if there is none, and issues a fresh intermediate for the web server.
-pub fn ca_init(tld: &str) -> Result<(), String> {
-    let tld = Tld::new(tld).map_err(|e| e.to_string())?;
+/// The root fixes the development TLD: `tld` when it is created, else the recorded one
+/// ([ADR 0033] §1-4).
+///
+/// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
+pub fn ca_init(tld: Option<&str>) -> Result<(), String> {
+    let chosen = tld
+        .map(|t| Tld::new(t).map_err(|e| e.to_string()))
+        .transpose()?;
     let ca = ca_store()?;
-    let root = if ca.root_exists() {
-        println!("A Kiln root CA already exists; keeping it.");
-        ca.root().map_err(|e| e.to_string())?
+    let mut store = crate::web::open_store()?;
+    let (root, tld) = if ca.root_exists() {
+        let tld = root_tld(&ca)?;
+        if chosen.as_ref().is_some_and(|c| *c != tld) {
+            return Err(format!(
+                "Kiln's root CA can only vouch for names under .{tld}, and changing the TLD needs a new root, which Kiln can't make while this one exists. To start over under another TLD: `kiln uninstall`, then `kiln ca init --tld <name>`."
+            ));
+        }
+        println!("A Kiln root CA already exists (for .{tld}); keeping it.");
+        (ca.root().map_err(|e| e.to_string())?, tld)
     } else {
+        let tld = match chosen {
+            Some(tld) => tld,
+            None => kiln_runtime::tld(&store).map_err(|e| e.to_string())?,
+        };
+        let suffix = format!(".{tld}");
+        let mut others: Vec<String> = store
+            .sites()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|s| s.host)
+            .chain(
+                store
+                    .proxies()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|p| p.host),
+            )
+            .filter(|h| !h.ends_with(&suffix))
+            .collect();
+        if !others.is_empty() {
+            others.sort();
+            return Err(format!(
+                "these sites aren't under .{tld}: {}. Unlink or unproxy them first, then link them again after `kiln ca init`.",
+                others.join(", ")
+            ));
+        }
         let owner = format!(
             "{}@{}",
             std::env::var("USERNAME")
@@ -690,8 +735,16 @@ pub fn ca_init(tld: &str) -> Result<(), String> {
         );
         let root = ca.create_root(&tld, &owner).map_err(|e| e.to_string())?;
         println!("Created a root CA that can only vouch for names under .{tld}.");
-        root
+        (root, tld)
     };
+    // The root decides: record its TLD, also for a root made before Kiln recorded it.
+    store
+        .set_setting(kiln_runtime::TLD_KEY, tld.as_str())
+        .map_err(|e| e.to_string())?;
+    drop(store);
+    if tld.as_str() != "test" {
+        println!("Sites are served as <name>.{tld}.");
+    }
     print_cert("Root", &root);
     let inter = ca.issue_intermediate(&tld).map_err(|e| e.to_string())?;
     print_cert("Intermediate (for the web server)", &inter);

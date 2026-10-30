@@ -80,6 +80,8 @@ commits and PRs.
 | [I-68](#i-68) | tests | In the Windows VM, the firewall prompt Vite set off covered the certificate dialog, and uninstall waited forever | ✅ (prompt off in the test VM) |
 | [I-69](#i-69) | web | Right after `--secure`, the printed HTTPS URL failed for a moment while Caddy issued the certificate in the background | ✅ (kiln waits for it) |
 | [I-70](#i-70) | node | The Laravel build failed when Bunny Fonts took longer than Node's 250 ms per-address connect limit | 📌 (Node's default; test step raises it) |
+| [I-71](#i-71) | web | Caddy set up its own default CA for a `.internal` site and installed its root into the system and NSS trust stores | ✅ (`local` CA declared with `install_trust: false`) |
+| [I-72](#i-72) | web | The first `kiln web start` never recorded which intermediate issued the site certificates, so the next site change restarted the server | ✅ (recorded whenever Caddy gets the CA) |
 
 ---
 
@@ -917,7 +919,8 @@ commits and PRs.
     printed the URL as soon as the reload returned. Earlier runs had passed only because the
     certificate happened to be ready by the first request.
 - **Fix:** after a reload, `kiln` waits until Caddy has stored a certificate for every
-  secure site, polling every 100 ms for up to 10 s. If that runs out, it says the
+  secure site, polling every 100 ms for up to 10 s. Since P2-10, `kiln web start` waits
+  the same way. If that runs out, it says the
   certificate is still being issued. The real-Caddy test checks that the certificate is
   where Kiln looks for it.
 - **Rule:** reloading Caddy doesn't mean it's ready. Before printing a URL, wait for what
@@ -938,6 +941,63 @@ commits and PRs.
 - **Not Kiln's:** this is Node's default meeting a slow route. It happens with any Node, and
   with Herd's too. Kiln doesn't change Node's defaults for everyone.
 - **Test harness:** both scenarios raise the limit for the build step only, and retry it once.
+  - In the P2-10 Ubuntu run, 2000 ms still failed once. Connects to Bunny Fonts then ranged
+    from 0.25 s to over 1.3 s. The scenarios now use 10000 ms.
 - **For users:** if a Laravel build fails with `fetch failed` and `ETIMEDOUT`, set
-  `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`. A later `kiln doctor`
+  `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=10000`. A later `kiln doctor`
   could recognise it.
+
+## P2-10: configurable TLD
+
+<a id="i-71"></a>
+### I-71: Caddy installed its own root CA into the system and browser trust stores ✅
+- **Found:** the P2-10 Ubuntu VM run, 2026-10-30. After the new stage served a `.internal`
+  site and Kiln was uninstalled, the comparison showed a root Kiln had never made:
+  "Caddy Local Authority - 2026 ECC Root".
+  - It was in the system anchors (`/usr/local/share/ca-certificates`) and in the user's NSS
+    database.
+  - Caddy's log said `pki.ca.local`: "installing root certificate (you might be prompted for
+    password)", then "certificate installed properly in linux trusts".
+- **Cause:** besides Kiln's CA (`kiln`, `install_trust: false`), Caddy set up its own
+  default CA, `local`, and installed its root, as it does by default.
+  - It did this for the `.internal` site. Recent Caddy versions treat `.internal` as a
+    non-public name. It hadn't happened for `.test` sites in any run.
+  - The site's certificate still came from Kiln's CA (`"issuer":"kiln"`). The `local` CA
+    was set up and trusted, but never used.
+  - The test VM has passwordless sudo, so it succeeded silently. On a real machine Caddy
+    would have asked for a password, or used cached sudo credentials. Either way it's a
+    system-wide trust change that Kiln didn't announce or journal, and uninstall didn't
+    remove.
+  - Before P2-10, `kiln ca init --tld internal` was also accepted, so this was possible
+    then too.
+- **Fix:** Kiln's Caddy config also declares the `local` CA, with `install_trust: false`
+  and no keys of its own.
+  - Caddy now logs "trust store installation disabled" for both CAs, and nothing is
+    installed.
+  - A unit test checks the config, and the Ubuntu scenario's second stage (`.internal`,
+    then uninstall and compare) covers the real thing.
+  - The test VM's stray root was removed by hand, after checking its bundle hash against
+    the baseline.
+- **Rule:** with Caddy, turn off every default that can reach outside Kiln's folders, not
+  only the ones Kiln uses. The before/after comparison is what found this. Keep running
+  it after every stage that starts the server.
+
+### I-72: the first site change after `kiln web start` restarted the server ✅
+- **Found:** the P2-10 Windows VM run, 2026-10-30. `kiln new shop --secure` never finished,
+  and the run timed out an hour later. Linking the project again by hand worked, but said
+  "Kiln's CA changed since the web server started" and restarted the server, though nothing
+  had changed the CA.
+- **Cause:** Kiln records which intermediate Caddy's site certificates came from in
+  `kiln-intermediate.sha256` (I-57), but only wrote it when it found certificates from
+  another one.
+  - At the first `kiln web start` there are no certificates yet, so nothing was written.
+  - Caddy then issued them. The next site change found certificates with no record beside
+    them, took that for a changed CA, and restarted the server.
+  - So every first HTTPS session restarted the server once, at the first `link`, `secure`
+    or `kiln new`.
+- **Fix:** the record is written whenever Kiln gives Caddy its CA: at every start, and
+  before every reload that doesn't need a restart.
+- **Not explained:** why the scenario's `kiln new` stalled. It had written `kiln.toml` but
+  not yet saved the link, which is before that restart would happen. The same restart inside
+  a piped command finished in seconds when run by hand. The scenario now runs `kiln new`
+  with a 20-minute limit, and logs its output so far and the running processes if it hits it.

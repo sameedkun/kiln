@@ -65,7 +65,7 @@ fn validated(pem: &str) -> Result<(Vec<u8>, String), Failure> {
     let invalid = |e: &dyn std::fmt::Display| failure(ErrorCode::InvalidRequest, e.to_string());
     let der = kiln_pki::pem_to_der(pem).map_err(|e| invalid(&e))?;
     let tld = kiln_pki::kiln_root_tld(&der).map_err(|e| invalid(&e))?;
-    Tld::new(&tld).map_err(|e| invalid(&e))?;
+    Tld::recorded(&tld).map_err(|e| invalid(&e))?;
     let sha256 = sha256_hex(&kiln_pki::sha256_fingerprint(&der));
     Ok((der, sha256))
 }

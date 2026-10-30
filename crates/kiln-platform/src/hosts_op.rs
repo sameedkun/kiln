@@ -124,7 +124,7 @@ impl HostsBlockOp {
         let tld = params["tld"]
             .as_str()
             .ok_or_else(|| failed("params.tld missing"))
-            .and_then(|t| Tld::new(t).map_err(|e| failed(e.to_string())))?;
+            .and_then(|t| Tld::recorded(t).map_err(|e| failed(e.to_string())))?;
         let entries = to_entries(&parse_lines(&params["entries"], "params.entries")?, &tld)?;
         Ok(Self::new(hosts_path, writer, tld, entries))
     }
@@ -270,7 +270,7 @@ impl Operation for HostsBlockOp {
         let tld = match previous.first() {
             Some((_, name)) => {
                 let label = name.rsplit('.').next().unwrap_or_default();
-                Tld::new(label).map_err(|e| failed(format!("previous block: {e}")))?
+                Tld::recorded(label).map_err(|e| failed(format!("previous block: {e}")))?
             }
             None => self.tld.clone(),
         };

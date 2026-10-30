@@ -16,6 +16,20 @@ pub mod shim;
 /// The `php.default` setting: the version that serves sites without a pin.
 pub const DEFAULT_KEY: &str = "php.default";
 
+/// The `tld` setting: the development TLD, chosen at `kiln ca init` ([ADR 0033]).
+///
+/// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
+pub const TLD_KEY: &str = "tld";
+
+/// The development TLD sites are served under: the recorded one, else `test`. A setting Kiln
+/// can't read (edited by hand) falls back to `test` rather than stopping every command.
+pub fn tld(store: &StateStore) -> Result<Tld, StateError> {
+    Ok(store
+        .setting(TLD_KEY)?
+        .and_then(|t| Tld::recorded(&t).ok())
+        .unwrap_or_default())
+}
+
 /// Every site: links plus parked subfolders, with drivers (ADR 0015).
 pub fn sites(store: &StateStore) -> Result<Resolved, StateError> {
     let links: Vec<Link> = store
@@ -28,7 +42,7 @@ pub fn sites(store: &StateStore) -> Result<Resolved, StateError> {
         })
         .collect();
     let parked = store.parked()?;
-    Ok(kiln_sites::resolve(&links, &parked, &Tld::default()))
+    Ok(kiln_sites::resolve(&links, &parked, &tld(store)?))
 }
 
 /// Installed versions that are complete on disk, oldest first.
@@ -187,6 +201,20 @@ pub fn php_for_dir(store: &StateStore, dir: &Path) -> Result<DirPhp, StateError>
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn the_tld_is_the_recorded_one_else_test() {
+        let mut store = StateStore::open_in_memory().unwrap();
+        assert_eq!(tld(&store).unwrap().as_str(), "test");
+        store.set_setting(TLD_KEY, "internal").unwrap();
+        assert_eq!(tld(&store).unwrap().as_str(), "internal");
+        // Chosen under the earlier rules: still read back.
+        store.set_setting(TLD_KEY, "wip").unwrap();
+        assert_eq!(tld(&store).unwrap().as_str(), "wip");
+        // Edited by hand into something unusable: back to the default.
+        store.set_setting(TLD_KEY, "co m").unwrap();
+        assert_eq!(tld(&store).unwrap().as_str(), "test");
+    }
 
     fn record(version: &str) -> PhpRecord {
         PhpRecord {

@@ -103,6 +103,15 @@ Check 'WordPress, from wordpress.org' {
     Rename-Item (Join-Path $sites 'wordpress') 'wp-site'
 }
 Check 'ca init' { Kiln ca init }
+Check 'ca init refuses a TLD that isn''t reserved, and another TLD over the .test root (P2-10)' {
+    $out = & $Kiln ca init --tld lan 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'reserved development TLD' $out
+    $out = & $Kiln ca init --tld internal 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'only vouch for names under .test' $out
+    $global:LASTEXITCODE = 0
+}
 Check 'kiln import herd: herd.yml becomes kiln.toml and the folder is linked (P2-04)' {
     Expect 'herd-demo' (Kiln import herd $herdApp)
     Expect 'version = "8.3"' (Get-Content "$herdApp\kiln.toml" -Raw)
@@ -219,12 +228,25 @@ $newDir = Join-Path $dir 'new-projects'
 New-Item -ItemType Directory -Force $newDir | Out-Null
 Check 'kiln new shop --secure --php 8.3: a Laravel app over HTTPS, pinned to PHP 8.3' {
     # One retry: a dropped download is the network, not Kiln.
+    # Output goes to files and the wait is bounded, so a stuck run says where it stopped.
     foreach ($attempt in 1, 2) {
         Remove-Item -Recurse -Force "$newDir\shop" -ErrorAction SilentlyContinue
-        $out = & $Kiln new shop --path $newDir --secure --php 8.3 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0) { break }
+        $p = Start-Process $Kiln -ArgumentList 'new', 'shop', '--path', $newDir, '--secure', '--php', '8.3' `
+            -RedirectStandardOutput "$dir\new.out" -RedirectStandardError "$dir\new.err" -NoNewWindow -PassThru
+        $null = $p.Handle   # keeps ExitCode readable after the exit (Windows PowerShell 5.1)
+        if (-not $p.WaitForExit(20 * 60 * 1000)) {
+            Say '     kiln new is still running after 20 minutes; its output so far:'
+            Get-Content "$dir\new.out", "$dir\new.err" | ForEach-Object { Say "       $_" }
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'kiln|php|composer|caddy|curl' } |
+                ForEach-Object { Say "       $($_.ProcessId) <- $($_.ParentProcessId): $($_.CommandLine)" }
+            Stop-Process -Id $p.Id -Force
+            throw 'kiln new hung'
+        }
+        $code = $p.ExitCode
+        $out = (Get-Content "$dir\new.out", "$dir\new.err" -Raw) -join ''
+        if ($code -eq 0) { break }
     }
-    if ($LASTEXITCODE -ne 0) { throw "kiln new failed ($LASTEXITCODE):`n$out" }
+    if ($code -ne 0) { throw "kiln new failed ($code):`n$out" }
     $url = [regex]::Match($out, 'https://shop\.test[^\s]*').Value
     if (-not $url) { throw "no HTTPS URL in:`n$out" }
     Kiln hosts sync --yes | Out-Null
@@ -350,7 +372,7 @@ Check 'npm install and npm run build in the Laravel app, with Kiln''s Node' {
         if ($LASTEXITCODE -ne 0) { throw "npm install failed ($LASTEXITCODE):`n$out" }
         # The build downloads the skeleton's fonts (laravel-vite-plugin/fonts): one retry too.
         # Node gives each address only 250 ms to connect, less than Bunny Fonts can take (I-70).
-        $env:NODE_OPTIONS = '--network-family-autoselection-attempt-timeout=2000'
+        $env:NODE_OPTIONS = '--network-family-autoselection-attempt-timeout=10000'
         foreach ($attempt in 1, 2) {
             $out = & "$shims\npm.exe" run build 2>&1 | Out-String
             if ($LASTEXITCODE -eq 0) { break }
@@ -497,6 +519,34 @@ if ($diff) {
     $script:failed = $true
 } else {
     Say "PASS the machine is as it was: $((Get-Content (Join-Path $dir 'before.txt')).Count) facts compared"
+}
+
+Say '== another TLD from the start (P2-10, ADR 0033)'
+# A fresh Kiln that chose .internal: sites, the hosts block and the root follow it. Not
+# trusted, so no certificate dialog; a static site over HTTP is enough to show the names.
+Check 'web install, then ca init --tld internal: a root for .internal' {
+    Kiln web install | Out-Null
+    Expect 'names under .internal' (Kiln ca init --tld internal)
+}
+Check 'link static-site: served as static-site.internal after hosts sync' {
+    Expect 'static-site.internal' (Kiln link static-site --path "$sites\static-site")
+    Kiln hosts sync --yes | Out-Null
+    $started = Kiln web start
+    $url = [regex]::Match($started, 'http://static-site\.internal[^\s]*').Value
+    if (-not $url) { throw "no .internal URL in:`n$started" }
+    Expect 'static from kiln' (Get $url)
+    Expect 'static-site.internal' (Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -Raw)
+}
+Check 'kiln uninstall again' { Kiln uninstall --yes }
+Start-Sleep -Seconds 2
+& (Join-Path $dir 'snapshot.ps1') | Set-Content (Join-Path $dir 'after2.txt') -Encoding utf8
+$diff = Compare-Object (Get-Content (Join-Path $dir 'before.txt')) (Get-Content (Join-Path $dir 'after2.txt'))
+if ($diff) {
+    Say 'FAIL the machine differs after the second uninstall:'
+    $diff | ForEach-Object { Say "     $($_.SideIndicator) $($_.InputObject)" }
+    $script:failed = $true
+} else {
+    Say 'PASS the machine is as it was after the second uninstall too'
 }
 Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
 Status 'done'

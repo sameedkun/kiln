@@ -292,8 +292,8 @@ pub(crate) mod tests {
 
     #[test]
     fn only_a_constrained_kiln_root_passes_the_system_trust_check() {
-        let root = generate_root(&Tld::new("wip").unwrap(), "dev@box", now()).unwrap();
-        assert_eq!(kiln_root_tld(&root.cert_der).unwrap(), "wip");
+        let root = generate_root(&Tld::new("internal").unwrap(), "dev@box", now()).unwrap();
+        assert_eq!(kiln_root_tld(&root.cert_der).unwrap(), "internal");
 
         // An unconstrained CA calling itself a Kiln root.
         let mut params = CertificateParams::default();
@@ -322,7 +322,7 @@ pub(crate) mod tests {
 
     #[test]
     fn roots_and_intermediates_have_the_documented_shape() {
-        let tld = Tld::new("wip").unwrap();
+        let tld = Tld::new("internal").unwrap();
         let t = now();
         let root = generate_root(&tld, "dev@box", t).unwrap();
         let (subject, not_after) = describe(&root.cert_der).unwrap();

@@ -361,8 +361,10 @@ enum WebAction {
 enum CaAction {
     /// Create the root CA (if there is none) and issue a fresh intermediate for the web server.
     Init {
-        #[arg(long, default_value = "test")]
-        tld: String,
+        /// The development TLD, fixed by the root: test (the default), internal, example or
+        /// invalid. Only when the root is created; changing it later needs a new root.
+        #[arg(long)]
+        tld: Option<String>,
     },
     /// Show the CA's certificates, fingerprints and expiry.
     Info,
@@ -393,8 +395,9 @@ enum HostsAction {
         /// Site names, with or without the TLD (e.g. `blog` or `blog.test`).
         #[arg(required = true)]
         names: Vec<String>,
-        #[arg(long, default_value = "test")]
-        tld: String,
+        /// The development TLD; defaults to Kiln's (`test` unless chosen at `kiln ca init`).
+        #[arg(long)]
+        tld: Option<String>,
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
@@ -407,8 +410,9 @@ enum HostsAction {
     },
     /// Remove Kiln's block from the hosts file.
     Clear {
-        #[arg(long, default_value = "test")]
-        tld: String,
+        /// The development TLD; defaults to Kiln's (`test` unless chosen at `kiln ca init`).
+        #[arg(long)]
+        tld: Option<String>,
         /// Do not ask for confirmation.
         #[arg(long, short)]
         yes: bool,
@@ -462,8 +466,9 @@ enum PlanTarget {
     Hosts {
         /// Site names, with or without the TLD (e.g. `blog` or `blog.test`).
         names: Vec<String>,
-        #[arg(long, default_value = "test")]
-        tld: String,
+        /// The development TLD; defaults to Kiln's (`test` unless chosen at `kiln ca init`).
+        #[arg(long)]
+        tld: Option<String>,
         /// Hosts file to read instead of the system one.
         #[arg(long)]
         file: Option<PathBuf>,
@@ -479,8 +484,16 @@ pub(crate) fn system_hosts_path() -> PathBuf {
     }
 }
 
-fn plan_hosts(names: &[String], tld: &str, file: Option<PathBuf>) -> Result<(), String> {
-    let (_tld, entries) = apply::site_entries(names, tld)?;
+/// `--tld` as given (it must be one a user can choose), else Kiln's current TLD.
+fn tld_arg(tld: Option<&str>) -> Result<Tld, String> {
+    match tld {
+        Some(tld) => Tld::new(tld).map_err(|e| e.to_string()),
+        None => web::current_tld(),
+    }
+}
+
+fn plan_hosts(names: &[String], tld: Option<&str>, file: Option<PathBuf>) -> Result<(), String> {
+    let (_tld, entries) = apply::site_entries(names, tld_arg(tld)?)?;
     let path = file.unwrap_or_else(system_hosts_path);
     let current =
         std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -627,7 +640,7 @@ fn main() -> ExitCode {
 
 fn run_ca(action: CaAction) -> Result<(), String> {
     match action {
-        CaAction::Init { tld } => apply::ca_init(&tld),
+        CaAction::Init { tld } => apply::ca_init(tld.as_deref()),
         CaAction::Info => apply::ca_info(),
         CaAction::Trust { yes, system } => apply::ca_trust(yes, system),
         CaAction::Renew { force } => web::ca_renew(force),
@@ -657,7 +670,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Doctor { .. } => unreachable!("handled in main"),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
-        } => plan_hosts(&names, &tld, file),
+        } => plan_hosts(&names, tld.as_deref(), file),
         Command::Plan {
             target: PlanTarget::Uninstall,
         } => uninstall::uninstall(true, false, false),
@@ -672,13 +685,12 @@ fn run(command: Command) -> Result<(), String> {
         } => state_info(dir),
         Command::Hosts {
             action: HostsAction::Set { names, tld, yes },
-        } => apply::site_entries(&names, &tld)
+        } => tld_arg(tld.as_deref())
+            .and_then(|tld| apply::site_entries(&names, tld))
             .and_then(|(tld, entries)| apply::hosts_set(tld, entries, yes)),
         Command::Hosts {
             action: HostsAction::Clear { tld, yes },
-        } => Tld::new(&tld)
-            .map_err(|e| e.to_string())
-            .and_then(|tld| apply::hosts_set(tld, Vec::new(), yes)),
+        } => tld_arg(tld.as_deref()).and_then(|tld| apply::hosts_set(tld, Vec::new(), yes)),
         Command::Ca { action } => run_ca(action),
         Command::Hosts {
             action: HostsAction::Sync { yes },

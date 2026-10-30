@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-30 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (9 of 11 tasks done; ADRs 0026–0032) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-30 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (10 of 11 tasks done; ADRs 0026–0033) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0032 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0033 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -944,8 +944,8 @@ its local API and autostart.
 | P2-07 | PHP extension toggles | **done** 2026-10-29 | [ADR 0030](adr/0030-php-extension-toggles.md); see below. Journaled one-line toggles, live and undoable; VM-checked on Windows and Ubuntu |
 | P2-08 | `kiln new` (Laravel) | **done** 2026-10-30 | [ADR 0031](adr/0031-kiln-new-laravel-projects.md); see below. A Laravel app over HTTPS in one command; VM-checked on Windows and Ubuntu |
 | P2-09 | Proxy sites | **done** 2026-10-30 | [ADR 0032](adr/0032-proxy-sites.md); see below. A dev server (Vite and others) at `<name>.test`, with HTTPS and live reload; VM-checked on Windows and Ubuntu |
-| P2-10 | Configurable TLD | next | amends ADR 0010 |
-| P2-11 | VM scenarios for Phase 2 | planned | extends ADR 0024 |
+| P2-10 | Configurable TLD | **done** 2026-10-30 | [ADR 0033](adr/0033-configurable-tld.md); see below. `kiln ca init --tld internal` and the rest of Kiln follows; VM-checked on Windows and Ubuntu |
+| P2-11 | VM scenarios for Phase 2 | next | extends ADR 0024 |
 
 ### P2-01 delivered (2026-10-27)
 
@@ -1360,6 +1360,60 @@ its local API and autostart.
 - **Not done:** while the dev server is stopped, the name answers 502. Kiln doesn't start
   or watch dev servers.
 
+### P2-10 delivered (2026-10-30)
+
+[ADR 0033](adr/0033-configurable-tld.md), amending [ADR 0010](adr/0010-local-certificate-authority.md).
+
+- **`kiln ca init --tld <name>`** chooses the development TLD when it creates the root.
+  - **Allowed names:** `test` (the default), `internal`, `example` or `invalid`, the names
+    set aside so that they never resolve publicly. Any other name is refused.
+  - **Recorded** as the `tld` setting. Every command and the shims read it:
+    - site names in `link`, `proxy`, `new`, `secure` and `isolate`;
+    - parked folders and `hosts sync`;
+    - the defaults of `hosts set`, `hosts clear` and `plan hosts`.
+  - **The root decides:**
+    - `ca init` records the existing root's own TLD.
+    - Intermediates are always issued for the root's TLD, at `ca init`, at `ca renew` and
+      at a start with a stale intermediate.
+    - Another TLD over an existing root is refused, since it needs a new root. For now the
+      way is `kiln uninstall`, then `ca init --tld`.
+    - Links or proxies under another TLD are listed and refused when the root is created.
+  - **Reading back:** `Tld::recorded` reads names that the earlier rules allowed (such as
+    `wip`), so `kiln undo` and `kiln ca trust` still work for what Kiln made then.
+- **I-71 fixed on the way:**
+  - Serving a `.internal` site made Caddy set up its own default CA and install its root
+    into the system and NSS trust stores. The test VM's passwordless sudo let that happen
+    silently.
+  - Kiln's Caddy config now declares that CA with `install_trust: false`.
+  - Found by the new stage's before/after comparison.
+- **I-69 extended:** `kiln web start` now also waits for new site certificates before it
+  prints the URLs.
+- **I-70:** the scenarios now give Node 10 s to reach Bunny Fonts. 2 s still failed once.
+- **I-72 fixed:** the first `kiln web start` never recorded which intermediate issued the
+  site certificates. So the first `link`, `secure` or `kiln new` after it took that for a
+  changed CA and restarted the server. Now the record is written whenever Caddy gets the CA.
+  A Windows run's `kiln new` also stalled once before linking, for reasons not found.
+- **Tests:**
+  - The allowed and recorded TLD rules, and the setting with a legacy or broken value.
+  - Project names under another TLD, and Caddy's `local` CA without trust installation.
+  - 327 on Windows, 297 on Linux; clippy clean on both.
+- **VM scenarios:**
+  - **Both:**
+    - `ca init` refuses `--tld lan` (not reserved), and `--tld internal` over the `.test`
+      root.
+    - A new stage after the uninstall comparison: a fresh `kiln ca init --tld internal`,
+      then a static site linked as `static-site.internal`, `hosts sync`, and the site
+      served. Then `kiln uninstall` again, and the machine is compared with the start once
+      more.
+  - **Ubuntu:** the `.internal` site over HTTPS, checked against the new root. 72 checks
+    passed.
+  - **Windows:** the `.internal` site over HTTP, since trusting a root needs a dialog. 71
+    checks passed.
+  - **Windows `kiln new`:** it now runs with a 20-minute limit and logs where it stopped
+    (I-72).
+- **On the way:** the Ubuntu VM got a new address after a host restart. Its host key matched
+  the known one before the new address was added.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1446,6 +1500,7 @@ its local API and autostart.
 | 2026-10-29 | **P2-07 done:** ADR 0030. `kiln php ext list/on/off [--php X]`: `php -m` says what is loaded; each toggle is one journaled line in the build's `php.ini` (`PhpExtOp`), undone byte for byte by `kiln undo`, checked after `on` and applied live by restarting that build's workers. `php update` carries toggles over; `rollback`/`remove` undo them first. Kiln's static Linux builds list everything as compiled in; a system PHP's `conf.d` modules are left to `phpdismod`. Scenarios: Windows 61 checks, Ubuntu 60. |
 | 2026-10-30 | **P2-08 done:** ADR 0031. `kiln new <name> [--path] [--php] [--secure]` runs `composer create-project laravel/laravel` with Kiln's PHP and Composer (installing Composer if missing), then links the project as `<name>.test` (or secures it where a parked folder already serves it); `--php` is kept in the project's `kiln.toml`. Fixed I-66: nodejs.org's index now lists Node 27 alphas, which broke `kiln node install`; pre-releases are skipped. Scenarios: Windows 63 checks, Ubuntu 62. |
 | 2026-10-30 | **P2-09 done:** ADR 0032. `kiln proxy <name> <target> [--secure]` serves `<name>.test` from a loopback dev server through Caddy, with the dev server's own `Host`, WebSocket upgrades for live reload, and HTTPS like any site; `kiln unproxy` removes it. Proxies have their own table (schema v6). Fixed I-67 (php.ini replace retried briefly on Windows) and I-69 (`kiln` now waits for Caddy's certificate before reporting a `--secure` change done); I-68 turned off the firewall prompt in the Windows test VM; I-70 logged (Node's 250 ms connect limit vs Bunny Fonts). Scenarios: Windows 66 checks, Ubuntu 65. |
+| 2026-10-30 | **P2-10 done:** ADR 0033. `kiln ca init --tld <name>` chooses the development TLD (only `test`, `internal`, `example`, `invalid`), recorded as the `tld` setting that every command and the shims read; the root's own TLD always wins, and another TLD over an existing root is refused. Fixed I-71 (Caddy installed its own `local` root into the trust stores for a `.internal` site; now declared with `install_trust: false`) and I-72 (the first site change after `web start` restarted the server). Scenarios: Windows 71 checks, Ubuntu 72, each with a second stage under `.internal` and a second uninstall comparison. |
 
 ## How to update this file
 

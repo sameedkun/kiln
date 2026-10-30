@@ -15,7 +15,7 @@ pub fn hosts_entries(tld: &str, entries: &[HostEntry]) -> Result<Vec<DnsEntry>, 
             entries.len()
         ));
     }
-    let tld = Tld::new(tld).map_err(|e| e.to_string())?;
+    let tld = Tld::recorded(tld).map_err(|e| e.to_string())?;
     entries
         .iter()
         .map(|entry| {

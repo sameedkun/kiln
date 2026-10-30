@@ -1,6 +1,6 @@
 # 0010. Local certificate authority: name-constrained root, DPAPI-protected key, per-user trust
 
-- **Status:** accepted
+- **Status:** accepted; the choice of TLD (and which names are allowed) is set by [ADR 0033](0033-configurable-tld.md)
 - **Date:** 2026-10-21
 - **Task:** P1-05 · Builds on [ADR 0004](0004-reversible-operation-engine.md), [0005](0005-web-server.md), [0008](0008-unsafe-confined-to-kiln-sys.md)
 

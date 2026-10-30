@@ -27,7 +27,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 
 | Crate | Role | `unsafe` |
 |---|---|---|
-| `kiln-core` | Domain types (TLD, host names) | forbidden |
+| `kiln-core` | Domain types (TLD, host names; `ALLOWED_TLDS`, `Tld::new` for a choice, `Tld::recorded` for reading back) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
 | `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp`, `PhpExtOp`, operation descriptions | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins, proxies; JSONL import | forbidden |
@@ -38,7 +38,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-node` | Node runtimes ([ADR 0028](adr/0028-node-runtimes-and-shims.md)): the nodejs.org index, version specs, a minimal OpenPGP check of `SHASUMS256.txt` against the release keys in `keys/`, safe zip and tar.gz extraction, start-up check | forbidden |
 | `kiln-supervisor` | php-cgi supervisor library and `kiln-supervisor` binary: pools, staggered recycling, respawn, CLI handle | forbidden |
 | `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root), each project's `kiln.toml` (settings, aliases; ADR 0027) and reading a Herd `herd.yml` | forbidden |
-| `kiln-runtime` | Which PHP and Node run what (default, pins, folder → site; the nearest `kiln.toml` / `.nvmrc` / `.node-version`); the `kiln-shim` binary (`php`, `composer`, `node`, `npm`, `npx`, `corepack`) | forbidden |
+| `kiln-runtime` | The development TLD (`tld` setting); which PHP and Node run what (default, pins, folder → site; the nearest `kiln.toml` / `.nvmrc` / `.node-version`); the `kiln-shim` binary (`php`, `composer`, `node`, `npm`, `npx`, `corepack`) | forbidden |
 | `kiln-doctor` | `kiln doctor` rules: facts → findings (ok/info/warn/fail with fixes), text and JSON reports | forbidden |
 | `kiln-coexist` | Other local PHP tools: installed tools, port owners by program path, names other tools claim in the hosts file, free-port picking (read-only) | forbidden |
 | `kiln-sys` | Safe wrappers over OS FFI (`replace_file`, `rename_replace`, pipes, SIDs, UAC, process handles, kill-on-close jobs, background processes, `AF_UNIX` connect and listen, user registry strings, console Ctrl+C, TCP listener owners, process parents, DPAPI, cert stores) | **allowed here only** ([ADR 0008](adr/0008-unsafe-confined-to-kiln-sys.md)) |

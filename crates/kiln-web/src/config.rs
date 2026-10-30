@@ -737,21 +737,32 @@ struct PkiApp {
 impl PkiApp {
     fn kiln(files: &CaFiles) -> Result<Self, ConfigError> {
         Ok(Self {
-            certificate_authorities: BTreeMap::from([(
-                CA_ID,
-                PkiCa {
-                    name: "Kiln Local Development CA",
-                    install_trust: false,
-                    root: KeyPair {
-                        certificate: utf8(&files.root_cert)?,
-                        private_key: None,
+            certificate_authorities: BTreeMap::from([
+                (
+                    CA_ID,
+                    PkiCa {
+                        name: "Kiln Local Development CA",
+                        install_trust: false,
+                        root: Some(KeyPair {
+                            certificate: utf8(&files.root_cert)?,
+                            private_key: None,
+                        }),
+                        intermediate: Some(KeyPair {
+                            certificate: utf8(&files.intermediate_cert)?,
+                            private_key: Some(utf8(&files.intermediate_key)?),
+                        }),
                     },
-                    intermediate: KeyPair {
-                        certificate: utf8(&files.intermediate_cert)?,
-                        private_key: Some(utf8(&files.intermediate_key)?),
+                ),
+                (
+                    CADDY_DEFAULT_CA_ID,
+                    PkiCa {
+                        name: "Caddy Local Authority (unused by Kiln)",
+                        install_trust: false,
+                        root: None,
+                        intermediate: None,
                     },
-                },
-            )]),
+                ),
+            ]),
         })
     }
 }
@@ -761,9 +772,16 @@ struct PkiCa {
     name: &'static str,
     /// Never let Caddy touch OS trust stores; Kiln's `trust.ca.user` operation does (ADR 0010).
     install_trust: bool,
-    root: KeyPair,
-    intermediate: KeyPair,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<KeyPair>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intermediate: Option<KeyPair>,
 }
+
+/// Caddy's own default CA. Kiln never issues from it, but Caddy sets it up anyway for some
+/// names (`.internal` sites did, I-71), and by default installs its root into the system and
+/// browser trust stores. Declared here only to turn that off.
+const CADDY_DEFAULT_CA_ID: &str = "local";
 
 #[derive(Debug, Serialize)]
 struct KeyPair {
@@ -884,6 +902,10 @@ mod tests {
         let value = json(&config(vec![site("shop", true)]));
         let ca = &value["apps"]["pki"]["certificate_authorities"][CA_ID];
         assert_eq!(ca["install_trust"], false);
+        // Nor for Caddy's own default CA, which it may set up by itself (I-71).
+        let local = &value["apps"]["pki"]["certificate_authorities"]["local"];
+        assert_eq!(local["install_trust"], false);
+        assert!(local.get("root").is_none(), "{local}");
         assert_eq!(ca["root"]["certificate"], "/kiln/ca/root.crt");
         assert!(ca["root"].get("private_key").is_none());
         assert_eq!(
