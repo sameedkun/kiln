@@ -15,6 +15,7 @@ mod daemon;
 mod doctor;
 mod ext;
 mod history;
+mod new;
 mod node;
 mod php;
 mod pool;
@@ -122,6 +123,20 @@ enum Command {
     Web {
         #[command(subcommand)]
         action: WebAction,
+    },
+    /// Create a Laravel project with Kiln's PHP and Composer, and serve it as <name>.test.
+    New {
+        /// Project and site name, e.g. shop (served as shop.test).
+        name: String,
+        /// Folder to create it in (default: the current folder).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// PHP version to use, e.g. 8.3; also written to the project's kiln.toml.
+        #[arg(long)]
+        php: Option<String>,
+        /// Serve it over HTTPS.
+        #[arg(long)]
+        secure: bool,
     },
     /// Bring a project's settings over from another tool.
     Import {
@@ -695,6 +710,12 @@ fn run(command: Command) -> Result<(), String> {
             WebAction::Status => web::status(),
             WebAction::Config => web::print_config(),
         },
+        Command::New {
+            name,
+            path,
+            php,
+            secure,
+        } => new::new(&name, path, php.as_deref(), secure),
         Command::Import {
             from: ImportFrom::Herd { path, force },
         } => project::import_herd(path, force),

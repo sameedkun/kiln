@@ -106,6 +106,25 @@ check "the php shim in a new terminal runs PHP 8.3 in php-app" contains "8.3." s
 check "the php shim follows kiln.toml in toml-app" contains "8.3." shim_php "$SITES/toml-app"
 check "the php shim in a new terminal runs PHP 8.4 in laravel-app" contains "8.4." shim_php "$SITES/laravel-app"
 
+echo "== kiln new (P2-08, ADR 0031)"
+# Outside the parked folder, so `kiln new` links it itself.
+mkdir -p "$WORK/new-projects"
+made_new() { # one retry: a dropped download is the network, not Kiln
+    for attempt in 1 2; do
+        rm -rf "$WORK/new-projects/shop"
+        "$K" new shop --path "$WORK/new-projects" --secure --php 8.3 > "$WORK/new.txt" 2>&1 && break
+    done
+    grep -q "https://shop.test" "$WORK/new.txt" || { tail -20 "$WORK/new.txt"; return 1; }
+    "$K" hosts sync --yes > /dev/null &&
+        curl -fsS "https://shop.test:$https/" > "$WORK/shop.html" &&
+        grep -q Laravel "$WORK/shop.html" &&
+        (cd "$WORK/new-projects/shop" && "$K" which) > "$WORK/shop-which.txt" &&
+        grep -q "kiln.toml" "$WORK/shop-which.txt" && grep -q "8\.3\." "$WORK/shop-which.txt"
+}
+check "kiln new shop --secure --php 8.3: a Laravel app over HTTPS, pinned to PHP 8.3" made_new
+check "kiln new refuses a folder that already exists" \
+    sh -c "! '$K' new shop --path '$WORK/new-projects' > '$WORK/new2.txt' 2>&1 && grep -q 'already exists' '$WORK/new2.txt'"
+
 echo "== PHP extensions (P2-07, ADR 0030)"
 # Kiln's static builds have every extension compiled in: listed, never toggled.
 ini="$HOME/.local/share/kiln/php/8.4.26/php.ini"

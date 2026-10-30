@@ -105,6 +105,10 @@ pub fn parse(json: &str) -> Result<Vec<NodeRelease>, IndexError> {
         .ok_or_else(|| IndexError::Malformed("not a list".into()))?;
     let mut releases = Vec::new();
     for item in list {
+        // Pre-releases (`v27.0.0-alpha.0.0.0`) share the index since Node 27 (I-66).
+        if item["version"].as_str().is_some_and(|v| v.contains('-')) {
+            continue;
+        }
         let Some(numbers) = item["version"].as_str().and_then(parse_version) else {
             return Err(IndexError::Malformed(format!("bad version in {item}")));
         };
@@ -202,6 +206,24 @@ pub(crate) mod tests {
         assert_eq!(releases[0].lts, None);
         assert!(parse("{}").is_err());
         assert!(parse(r#"[{"version":"x"}]"#).is_err());
+    }
+
+    #[test]
+    fn skips_pre_releases_as_the_real_index_lists_them() {
+        // The head of nodejs.org's index.json on 2026-10-30 (I-66).
+        let json = SAMPLE.replacen(
+            '[',
+            r#"[
+{"version":"v27.0.0-alpha.0.0.0","date":"2026-10-29","files":["linux-x64","win-x64-zip"],"npm":"12.1.0","lts":false,"security":false},"#,
+            1,
+        );
+        let releases = parse(&json).unwrap();
+        assert_eq!(releases.len(), 4);
+        assert_eq!(releases[0].version, "24.1.0");
+        assert!(
+            parse(r#"[{"version":"v27.0.0-alpha.0.0.0"}]"#).is_err(),
+            "nothing left"
+        );
     }
 
     #[test]

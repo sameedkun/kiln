@@ -75,6 +75,7 @@ commits and PRs.
 | [I-63](#i-63) | cli | Piping `kiln` into `head` panicked with "Broken pipe" once the reader exited | ✅ (quiet exit 141) |
 | [I-64](#i-64) | durability | A registry value written just before a hard reset was lost (Windows writes the registry lazily) | ✅ (`RegFlushKey` after each write) |
 | [I-65](#i-65) | php | Windows PHP kept PHP's 30 s / 128 MB development limits; a first WordPress load under Defender ran past 30 s | ✅ (same 60 s / 512 MB limits as Linux) |
+| [I-66](#i-66) | node | nodejs.org started listing Node 27 alphas (`v27.0.0-alpha.0.0.0`) in `index.json`; the parser rejected the whole index, so no Node could be installed | ✅ (pre-releases skipped) |
 
 ---
 
@@ -850,3 +851,19 @@ commits and PRs.
     hand edits, at the path `kiln php ext list` prints.
 - **Not done:** Kiln doesn't offer a Defender exclusion. That would be an admin-level change
   to Windows security, a decision for a later ADR, if ever.
+
+## P2-08: kiln new
+
+<a id="i-66"></a>
+### I-66: nodejs.org's index listed a Node 27 alpha, and no Node could be installed ✅
+- **Found:** the P2-08 Windows VM run, 2026-10-30. `kiln node install 22` failed with
+  "unexpected nodejs.org release index: bad version in {…v27.0.0-alpha.0.0.0…}".
+  - Since 2026-10-29, `index.json` starts with `v27.0.0-alpha.0.0.0`, a pre-release, as
+    Node's new release schedule publishes alphas there.
+  - Kiln's parser required every entry to be `vX.Y.Z` and refused the whole index, like
+    I-61 for PHP.
+- **Fix:** entries whose version has a pre-release suffix (`-…`) are skipped. Any other
+  version Kiln can't read still fails, naming the entry. A test uses the index's real first
+  entry.
+- **Rule:** the same as I-61. Keep a test with the upstream's real shape, and skip only the
+  shape that was seen.

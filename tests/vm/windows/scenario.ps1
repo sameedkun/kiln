@@ -212,6 +212,37 @@ Check 'the php shim in a new terminal runs each site''s PHP (8.3 in php-app and 
     Expect '8.4.' (ShimPhp "$sites\laravel-app")
 }
 
+Say '== kiln new (P2-08, ADR 0031)'
+# Outside the parked folder, so `kiln new` links it itself. Composer's cache from the first
+# Laravel project makes this one quick.
+$newDir = Join-Path $dir 'new-projects'
+New-Item -ItemType Directory -Force $newDir | Out-Null
+Check 'kiln new shop --secure --php 8.3: a Laravel app over HTTPS, pinned to PHP 8.3' {
+    # One retry: a dropped download is the network, not Kiln.
+    foreach ($attempt in 1, 2) {
+        Remove-Item -Recurse -Force "$newDir\shop" -ErrorAction SilentlyContinue
+        $out = & $Kiln new shop --path $newDir --secure --php 8.3 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { break }
+    }
+    if ($LASTEXITCODE -ne 0) { throw "kiln new failed ($LASTEXITCODE):`n$out" }
+    $url = [regex]::Match($out, 'https://shop\.test[^\s]*').Value
+    if (-not $url) { throw "no HTTPS URL in:`n$out" }
+    Kiln hosts sync --yes | Out-Null
+    Expect 'Laravel' (Get $url)
+    Push-Location "$newDir\shop"
+    try {
+        $which = Kiln which
+        Expect 'kiln.toml' $which
+        Expect '8.3.' $which
+    } finally { Pop-Location }
+}
+Check 'kiln new refuses a folder that already exists' {
+    $out = & $Kiln new shop --path $newDir 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "expected a refusal:`n$out" }
+    Expect 'already exists' $out
+    $global:LASTEXITCODE = 0
+}
+
 Say '== PHP extensions (P2-07, ADR 0030)'
 $ini = Join-Path $env:LOCALAPPDATA 'Kiln\php\8.4.26\php.ini'
 $iniHash = (Get-FileHash $ini).Hash
