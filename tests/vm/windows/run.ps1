@@ -42,6 +42,10 @@ Invoke-Command -Session $s {
     if (-not (Test-NetConnection downloads.php.net -Port 443 -InformationLevel Quiet)) {
         throw 'The test VM has no internet connection.'
     }
+    # Vite (the proxy-site checks) makes Windows ask whether Node may use the network. Nobody
+    # answers that prompt here, and it would cover the certificate dialog during uninstall.
+    # Inbound connections are still blocked, as they are when nobody answers the prompt.
+    Set-NetFirewallProfile -All -NotifyOnListen False
     New-Item -ItemType Directory -Force C:\kiln-test\bin | Out-Null
     Remove-Item C:\kiln-test\status, C:\kiln-test\scenario.log -ErrorAction SilentlyContinue
 }

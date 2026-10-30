@@ -189,11 +189,42 @@ check "the node shim in a new terminal follows kiln.toml (20) in toml-app" conta
 check "the node shim follows .nvmrc (lts/iron) in php-app" contains "v20." shim_node "$SITES/php-app"
 check "the node shim uses the default (22) in laravel-app" contains "v22." shim_node "$SITES/laravel-app"
 check "kiln which names the .nvmrc" contains ".nvmrc asks for lts/iron" sh -c "cd '$SITES/php-app' && '$K' which"
-# One retry for npm install: a dropped download is the network, not Kiln.
+# One retry each for npm install and npm run build: a dropped download (packages, or the
+# skeleton's fonts during the build) is the network, not Kiln. Node gives each address only
+# 250 ms to connect, less than Bunny Fonts can take (I-70).
 check "npm install and npm run build in the Laravel app, in a new terminal, with Kiln's Node" \
-    sh -c "cd '$SITES/laravel-app' && for attempt in 1 2; do bash -ic 'npm install --no-audit --no-fund' && break; done && bash -ic 'npm run build' && test -f public/build/manifest.json"
+    sh -c "cd '$SITES/laravel-app' && for attempt in 1 2; do bash -ic 'npm install --no-audit --no-fund' && break; done && { NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000 bash -ic 'npm run build' || NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000 bash -ic 'npm run build'; } && test -f public/build/manifest.json"
 check "kiln doctor reports no problems" "$K" doctor
 check "kiln history lists the system changes" contains "in effect" "$K" history
+
+echo "== Proxy sites (P2-09, ADR 0032)"
+# Laravel's own Vite dev server, started with Kiln's npm, reached as vite.test over HTTPS.
+vite_up() {
+    (cd "$SITES/laravel-app" && setsid bash -ic 'exec npm run dev' > "$WORK/vite.log" 2>&1 < /dev/null &
+        echo $! > "$WORK/vite.pid")
+    i=0
+    while [ $i -lt 30 ]; do
+        sleep 2
+        curl -fsS http://localhost:5173/@vite/client 2>/dev/null | grep -q createHotContext && return 0
+        i=$((i + 1))
+    done
+    cat "$WORK/vite.log"
+    return 1
+}
+check "npm run dev starts Vite on localhost:5173" vite_up
+proxied() { # Vite answers only with its own Host (Vite 6+ blocks others), which Kiln sets
+    "$K" proxy vite 5173 --secure > "$WORK/proxy.txt" 2>&1 &&
+        grep -q "https://vite.test" "$WORK/proxy.txt" &&
+        "$K" hosts sync --yes > /dev/null &&
+        curl -fsS "https://vite.test:$https/@vite/client" > "$WORK/vite-client.js" &&
+        grep -q createHotContext "$WORK/vite-client.js" &&
+        "$K" sites > "$WORK/sites.txt" && grep -q "http://localhost:5173" "$WORK/sites.txt"
+}
+check "kiln proxy vite 5173 --secure: Vite's HMR client over HTTPS at vite.test" proxied
+check "kiln unproxy vite: the name is no longer served" \
+    sh -c "'$K' unproxy vite > '$WORK/unproxy.txt' && grep -q 'no longer proxies' '$WORK/unproxy.txt' && curl -sS 'http://vite.test:$http/' | grep -q 'No Kiln site is linked'"
+[ -s "$WORK/vite.pid" ] && kill -- "-$(cat "$WORK/vite.pid")" 2>/dev/null
+rm -f "$SITES/laravel-app/public/hot"
 
 echo "== kilnd (ADR 0026)"
 caddy_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-caddy" {print $1}'; }

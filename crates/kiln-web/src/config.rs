@@ -41,6 +41,8 @@ pub struct SiteSpec {
     /// The PHP pool (a version, e.g. `8.3.36`) serving this site (ADR 0016 §6). `None` for
     /// static sites (ADR 0015 §2).
     pub php_pool: Option<String>,
+    /// Forward to this local dev server instead of serving `root` (ADR 0032).
+    pub proxy: Option<crate::ProxyTarget>,
 }
 
 /// The CA files Caddy gets: the root certificate (no key) and the intermediate pair, from
@@ -174,8 +176,12 @@ impl WebConfig {
             .collect()
     }
 
-    /// PHP through the worker pool when there is one, static files otherwise.
+    /// The dev server for a proxy site; else PHP through the worker pool when there is one,
+    /// static files otherwise.
     fn site_handler(&self, site: &SiteSpec) -> Result<Handler, ConfigError> {
+        if let Some(target) = &site.proxy {
+            return Ok(Handler::proxy(target));
+        }
         let upstreams = site
             .php_pool
             .as_ref()
@@ -474,6 +480,38 @@ enum Handler {
         transport: FastCgiTransport,
         upstreams: Vec<Upstream>,
     },
+    /// A proxy site's dev server (ADR 0032 §3).
+    #[serde(rename = "reverse_proxy")]
+    DevServer {
+        upstreams: Vec<Upstream>,
+        headers: ProxyHeaders,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transport: Option<HttpTransport>,
+    },
+}
+
+/// Header changes on the way to the dev server.
+#[derive(Debug, Serialize)]
+struct ProxyHeaders {
+    request: HeaderOps,
+}
+
+#[derive(Debug, Serialize)]
+struct HeaderOps {
+    set: BTreeMap<&'static str, Vec<String>>,
+}
+
+/// HTTP to an HTTPS dev server: its self-signed certificate is accepted, as the connection
+/// stays on loopback.
+#[derive(Debug, Serialize)]
+struct HttpTransport {
+    protocol: &'static str,
+    tls: InsecureTls,
+}
+
+#[derive(Debug, Serialize)]
+struct InsecureTls {
+    insecure_skip_verify: bool,
 }
 
 /// [ADR 0014] §7: no passive health checks, retries bounded by time (I-14, I-15).
@@ -513,6 +551,30 @@ pub const PHP_TRY_DURATION: Duration = Duration::from_secs(2);
 pub const PHP_TRY_INTERVAL: Duration = Duration::from_millis(50);
 
 impl Handler {
+    /// The dev server behind a proxy site. It sees its own `host:port` as `Host`, which dev
+    /// servers such as Vite require; `X-Forwarded-Host` keeps the site's name.
+    fn proxy(target: &crate::ProxyTarget) -> Self {
+        Self::DevServer {
+            upstreams: vec![Upstream {
+                dial: target.dial(),
+            }],
+            headers: ProxyHeaders {
+                request: HeaderOps {
+                    set: BTreeMap::from([(
+                        "Host",
+                        vec!["{http.reverse_proxy.upstream.hostport}".to_owned()],
+                    )]),
+                },
+            },
+            transport: target.https.then_some(HttpTransport {
+                protocol: "http",
+                tls: InsecureTls {
+                    insecure_skip_verify: true,
+                },
+            }),
+        }
+    }
+
     fn files(root: &Path) -> Result<Self, ConfigError> {
         Ok(Self::FileServer {
             root: Some(utf8(root)?),
@@ -723,6 +785,7 @@ mod tests {
             root: PathBuf::from(format!("/srv/{name}")),
             secure,
             php_pool: Some("8.4.27".into()),
+            proxy: None,
         }
     }
 
@@ -996,6 +1059,40 @@ mod tests {
         let route = &servers(&value)[HTTP_SERVER]["routes"][0];
         assert_eq!(route["handle"][0]["handler"], "file_server");
         assert!(!value.to_string().contains("reverse_proxy"));
+    }
+
+    #[test]
+    fn a_proxy_site_forwards_to_its_dev_server_with_the_targets_host() {
+        let mut vite = site("app", true);
+        vite.proxy = Some(crate::ProxyTarget::parse("5173").unwrap());
+        let mut tls_api = site("api", false);
+        tls_api.proxy = Some(crate::ProxyTarget::parse("https://[::1]:8443").unwrap());
+        let mut cfg = with_php(vec![vite, tls_api]);
+        cfg.ipv6 = true;
+        let value = json(&cfg);
+
+        let app = &servers(&value)[HTTPS_SERVER]["routes"][0];
+        assert_eq!(app["match"][0]["host"][0], "app.test");
+        let handler = &app["handle"][0];
+        assert_eq!(handler["handler"], "reverse_proxy");
+        assert_eq!(handler["upstreams"][0]["dial"], "localhost:5173");
+        assert_eq!(
+            handler["headers"]["request"]["set"]["Host"][0],
+            "{http.reverse_proxy.upstream.hostport}"
+        );
+        assert!(
+            handler.get("transport").is_none(),
+            "plain HTTP to the dev server"
+        );
+        assert!(handler.get("load_balancing").is_none());
+        // HTTP redirects to it, as for any secure site.
+        let redirect = &servers(&value)[HTTP_SERVER]["routes"][0]["handle"][0];
+        assert_eq!(redirect["status_code"], 308);
+
+        let api = &servers(&value)[HTTP_SERVER]["routes"][1]["handle"][0];
+        assert_eq!(api["upstreams"][0]["dial"], "[::1]:8443");
+        assert_eq!(api["transport"]["protocol"], "http");
+        assert_eq!(api["transport"]["tls"]["insecure_skip_verify"], true);
     }
 
     #[test]

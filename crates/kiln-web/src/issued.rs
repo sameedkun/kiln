@@ -26,6 +26,18 @@ pub fn issued_from(storage_dir: &Path, intermediate_sha256: &str) -> bool {
     fs::read_to_string(storage_dir.join(MARKER)).is_ok_and(|m| m.trim() == intermediate_sha256)
 }
 
+/// Whether Caddy has stored a certificate for `host` from Kiln's CA. Caddy issues them in
+/// the background after a config load, so a newly secured site has none for a moment (I-69).
+#[must_use]
+pub fn has_certificate(storage_dir: &Path, host: &str) -> bool {
+    storage_dir
+        .join("certificates")
+        .join(CA_ID)
+        .join(host)
+        .join(format!("{host}.crt"))
+        .is_file()
+}
+
 /// Deletes the certificates Caddy issued from an earlier intermediate, and records
 /// `intermediate_sha256` as the one the next certificates come from. Only Kiln's CA's
 /// folder is touched.
@@ -52,9 +64,11 @@ mod tests {
         let storage = dir.path().join("storage");
         let site = storage.join("certificates").join(CA_ID).join("blog.test");
         assert!(issued_from(&storage, "AA"), "nothing issued yet");
+        assert!(!has_certificate(&storage, "blog.test"));
 
         fs::create_dir_all(&site).unwrap();
         fs::write(site.join("blog.test.crt"), "old").unwrap();
+        assert!(has_certificate(&storage, "blog.test"));
         assert!(
             !issued_from(&storage, "AA"),
             "issued before Kiln recorded anything"

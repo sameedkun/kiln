@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-30 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (8 of 11 tasks done; ADRs 0026–0031) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-30 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (9 of 11 tasks done; ADRs 0026–0032) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0031 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0032 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -943,8 +943,8 @@ its local API and autostart.
 | P2-06 | PHP patch updates with rollback | **done** 2026-10-29 | [ADR 0029](adr/0029-php-patch-updates-and-rollback.md); see below. A real update and rollback round-trip in both VMs |
 | P2-07 | PHP extension toggles | **done** 2026-10-29 | [ADR 0030](adr/0030-php-extension-toggles.md); see below. Journaled one-line toggles, live and undoable; VM-checked on Windows and Ubuntu |
 | P2-08 | `kiln new` (Laravel) | **done** 2026-10-30 | [ADR 0031](adr/0031-kiln-new-laravel-projects.md); see below. A Laravel app over HTTPS in one command; VM-checked on Windows and Ubuntu |
-| P2-09 | Proxy sites | next | |
-| P2-10 | Configurable TLD | planned | amends ADR 0010 |
+| P2-09 | Proxy sites | **done** 2026-10-30 | [ADR 0032](adr/0032-proxy-sites.md); see below. A dev server (Vite and others) at `<name>.test`, with HTTPS and live reload; VM-checked on Windows and Ubuntu |
+| P2-10 | Configurable TLD | next | amends ADR 0010 |
 | P2-11 | VM scenarios for Phase 2 | planned | extends ADR 0024 |
 
 ### P2-01 delivered (2026-10-27)
@@ -1313,6 +1313,53 @@ its local API and autostart.
 - **On the way:** the Ubuntu VM's address changed again. Its host key matched the known one
   before the new address was added.
 
+### P2-09 delivered (2026-10-30)
+
+[ADR 0032](adr/0032-proxy-sites.md).
+
+- **`kiln proxy <name> <target> [--secure]`:** serves `<name>.test` from a local dev server
+  (Vite, Next, a Node or Go server) through Kiln's Caddy.
+  - **Target:** a port (`5173`), `host:port`, or `http(s)://host:port`. It must be on
+    this machine (`localhost`, a `127.x` address or `[::1]`), so a `.test` name never
+    forwards to another machine.
+  - **Forwarding:**
+    - The dev server sees its own host (`localhost:5173`) in `Host`, which Vite's host
+      check accepts. The site's name arrives in `X-Forwarded-Host`.
+    - WebSocket upgrades pass through, so live reload keeps working.
+    - An HTTPS target is reached without checking its certificate, since it's on loopback.
+  - **HTTPS** with `--secure`, the same way as for folder sites; `kiln secure` and `kiln
+    unsecure` work on proxies too.
+  - **Names:** a proxy takes precedence over a parked subfolder with the same name, and
+    says so. A linked site's name is refused: unlink it first.
+  - **Listed** in `kiln sites` with its target. `kiln hosts sync` covers it.
+- **`kiln unproxy <name>`** removes it.
+- **Stored in its own table** (state schema v6). Like links, proxies are Kiln's own
+  settings, not journaled system changes.
+- **I-67 fixed on the way:** replacing php.ini on Windows failed once with "Access is
+  denied" while another process briefly held it. Kiln's rename now retries for up to about
+  two seconds.
+- **I-69 fixed on the way:** right after `--secure`, Caddy refused HTTPS for a moment while it
+  issued the certificate in the background. `kiln` now waits for the certificate, up to 10 s,
+  before it reports the change done. This affects `secure`, `link`, `new` and `proxy`.
+- **I-68 (test harness):** in the Windows VM, the firewall prompt Vite set off covered the
+  certificate dialog during uninstall. The test VM now has that prompt turned off. Kiln
+  doesn't touch firewall rules.
+- **Tests:**
+  - Target parsing (loopback only, no paths), the Caddy route, and the proxy table.
+  - Against a real Caddy: the dev server's `Host` and the forwarded headers, a WebSocket
+    echo, and 502 once the dev server is gone.
+  - 325 on Windows; clippy and tests are also clean on Linux.
+- **VM scenarios:**
+  - **Both:** `npm run dev` in the Laravel app starts Vite. `kiln proxy vite 5173
+    --secure`, then `hosts sync`: Vite's HMR client answers over HTTPS at `vite.test`, and
+    `kiln sites` lists the target. After `kiln unproxy vite` the name is no longer served.
+  - **Windows passed 66 checks, Ubuntu 65**, each leaving the machine as it was.
+  - Both also retry the Laravel build once and give Node longer to reach Bunny Fonts (I-70,
+    a slow route, not Kiln). Windows' passing run came before that change to its build step;
+    Ubuntu's ran with it.
+- **Not done:** while the dev server is stopped, the name answers 502. Kiln doesn't start
+  or watch dev servers.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1398,6 +1445,7 @@ its local API and autostart.
 | 2026-10-29 | **P2-06 done:** ADR 0029. `kiln php update [minor]` installs the newest patch beside the current one and switches live; `kiln php rollback` goes back and removes it. Kiln now pins the previous patch of each line: on Linux from the new kiln-php release `2026-10-29` (the workflow builds exact patches on request), on Windows from windows.php.net's archives. Scenarios: Windows 56 checks, Ubuntu 57, each with a real update and rollback. |
 | 2026-10-29 | **P2-07 done:** ADR 0030. `kiln php ext list/on/off [--php X]`: `php -m` says what is loaded; each toggle is one journaled line in the build's `php.ini` (`PhpExtOp`), undone byte for byte by `kiln undo`, checked after `on` and applied live by restarting that build's workers. `php update` carries toggles over; `rollback`/`remove` undo them first. Kiln's static Linux builds list everything as compiled in; a system PHP's `conf.d` modules are left to `phpdismod`. Scenarios: Windows 61 checks, Ubuntu 60. |
 | 2026-10-30 | **P2-08 done:** ADR 0031. `kiln new <name> [--path] [--php] [--secure]` runs `composer create-project laravel/laravel` with Kiln's PHP and Composer (installing Composer if missing), then links the project as `<name>.test` (or secures it where a parked folder already serves it); `--php` is kept in the project's `kiln.toml`. Fixed I-66: nodejs.org's index now lists Node 27 alphas, which broke `kiln node install`; pre-releases are skipped. Scenarios: Windows 63 checks, Ubuntu 62. |
+| 2026-10-30 | **P2-09 done:** ADR 0032. `kiln proxy <name> <target> [--secure]` serves `<name>.test` from a loopback dev server through Caddy, with the dev server's own `Host`, WebSocket upgrades for live reload, and HTTPS like any site; `kiln unproxy` removes it. Proxies have their own table (schema v6). Fixed I-67 (php.ini replace retried briefly on Windows) and I-69 (`kiln` now waits for Caddy's certificate before reporting a `--secure` change done); I-68 turned off the firewall prompt in the Windows test VM; I-70 logged (Node's 250 ms connect limit vs Bunny Fonts). Scenarios: Windows 66 checks, Ubuntu 65. |
 
 ## How to update this file
 

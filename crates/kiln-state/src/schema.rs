@@ -59,6 +59,13 @@ const MIGRATIONS: &[&str] = &[
          version    TEXT    NOT NULL,     -- 8.3 (newest installed 8.3.x) or 8.3.36
          created_ms INTEGER NOT NULL
      ) STRICT;",
+    // v6: proxy sites, served from a local dev server (ADR 0032).
+    "CREATE TABLE proxies (
+         host       TEXT    PRIMARY KEY,  -- e.g. app.test
+         target     TEXT    NOT NULL,     -- loopback URL, e.g. http://localhost:5173
+         secure     INTEGER NOT NULL DEFAULT 0 CHECK (secure IN (0, 1)),
+         created_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.

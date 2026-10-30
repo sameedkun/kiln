@@ -109,6 +109,7 @@ fn each_site_runs_on_its_own_php_version() {
         root: dir.path().join(name),
         secure: false,
         php_pool: Some(version(php)),
+        proxy: None,
     };
     let config = WebConfig {
         http_port,

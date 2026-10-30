@@ -348,7 +348,15 @@ Check 'npm install and npm run build in the Laravel app, with Kiln''s Node' {
             if ($LASTEXITCODE -eq 0) { break }
         }
         if ($LASTEXITCODE -ne 0) { throw "npm install failed ($LASTEXITCODE):`n$out" }
-        $out = & "$shims\npm.exe" run build 2>&1 | Out-String
+        # The build downloads the skeleton's fonts (laravel-vite-plugin/fonts): one retry too.
+        # Node gives each address only 250 ms to connect, less than Bunny Fonts can take (I-70).
+        $env:NODE_OPTIONS = '--network-family-autoselection-attempt-timeout=2000'
+        foreach ($attempt in 1, 2) {
+            $out = & "$shims\npm.exe" run build 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) { break }
+            Say "     npm run build failed (attempt $attempt): $(($out -split "`n" | Select-String 'error|fetch|ENOTFOUND|ECONN' | Select-Object -First 4) -join ' | ')"
+        }
+        Remove-Item Env:NODE_OPTIONS
         if ($LASTEXITCODE -ne 0) { throw "npm run build failed ($LASTEXITCODE):`n$out" }
         if (-not (Test-Path 'public\build\manifest.json')) { throw "no public\build\manifest.json:`n$out" }
     } finally { Pop-Location }
@@ -362,6 +370,37 @@ Check 'Herd''s Node keeps its place: a new terminal''s node is still Herd''s' {
 Check 'kiln doctor says the machine-wide Node comes first' {
     Expect 'comes before Kiln''s shim' (& $Kiln doctor 2>&1 | Out-String)
 }
+
+Say '== Proxy sites (P2-09, ADR 0032)'
+# Laravel's own Vite dev server, started with Kiln's npm, reached as vite.test over HTTPS.
+$vite = $null
+$viteUrl = ''
+Check 'npm run dev starts Vite on localhost:5173' {
+    $script:vite = Start-Process -FilePath "$shims\npm.exe" -ArgumentList 'run', 'dev' -WorkingDirectory "$sites\laravel-app" `
+        -WindowStyle Hidden -PassThru -RedirectStandardOutput "$dir\vite.log" -RedirectStandardError "$dir\vite-err.log"
+    $deadline = (Get-Date).AddMinutes(1)
+    do {
+        Start-Sleep -Seconds 2
+        $client = curl.exe -s http://localhost:5173/@vite/client 2>&1 | Out-String
+    } until ($client.Contains('vite') -or (Get-Date) -gt $deadline)
+    if (-not $client.Contains('vite')) { throw "Vite didn't answer:`n$(Get-Content "$dir\vite.log", "$dir\vite-err.log" -Raw)" }
+}
+Check 'kiln proxy vite 5173 --secure: Vite''s HMR client over HTTPS at vite.test' {
+    $out = Kiln proxy vite 5173 --secure
+    $script:viteUrl = [regex]::Match($out, 'https://vite\.test[^\s]*').Value
+    if (-not $script:viteUrl) { throw "no HTTPS URL in:`n$out" }
+    Kiln hosts sync --yes | Out-Null
+    # Vite answers only with its own Host (Vite 6+ blocks others), which Kiln sets.
+    $client = Get "$($script:viteUrl)@vite/client"
+    Expect 'createHotContext' $client
+    Expect 'http://localhost:5173' (Kiln sites)
+}
+Check 'kiln unproxy vite: the name is no longer served' {
+    Expect 'no longer proxies' (Kiln unproxy vite)
+    Expect 'No Kiln site is linked' (Get "http://vite.test:8080/")
+}
+if ($vite) { taskkill /T /F /PID $vite.Id 2>&1 | Out-Null }
+Remove-Item "$sites\laravel-app\public\hot" -ErrorAction SilentlyContinue
 
 Say '== Herd restarts while Kiln runs (I-11)'
 $caddy = (Get-Process kiln-caddy).Id

@@ -20,6 +20,7 @@ mod node;
 mod php;
 mod pool;
 mod project;
+mod proxy;
 mod uninstall;
 mod web;
 
@@ -69,6 +70,17 @@ enum Command {
     },
     /// Stop serving a site. Its files are untouched.
     Unlink { name: String },
+    /// Serve `<name>.test` from a local dev server: a port (5173), `host:port`, or
+    /// `http(s)://host:port` on this machine. Live reload keeps working through it.
+    Proxy {
+        name: String,
+        target: String,
+        /// Serve it over HTTPS.
+        #[arg(long)]
+        secure: bool,
+    },
+    /// Stop serving a proxy site.
+    Unproxy { name: String },
     /// Serve every subfolder of a folder as <subfolder>.test (default: the current folder).
     Park { path: Option<PathBuf> },
     /// Stop serving a parked folder's subfolders. Nothing is deleted.
@@ -613,6 +625,15 @@ fn main() -> ExitCode {
     }
 }
 
+fn run_ca(action: CaAction) -> Result<(), String> {
+    match action {
+        CaAction::Init { tld } => apply::ca_init(&tld),
+        CaAction::Info => apply::ca_info(),
+        CaAction::Trust { yes, system } => apply::ca_trust(yes, system),
+        CaAction::Renew { force } => web::ca_renew(force),
+    }
+}
+
 fn run_php(action: PhpAction) -> Result<(), String> {
     match action {
         PhpAction::Available => php::available(),
@@ -658,23 +679,18 @@ fn run(command: Command) -> Result<(), String> {
         } => Tld::new(&tld)
             .map_err(|e| e.to_string())
             .and_then(|tld| apply::hosts_set(tld, Vec::new(), yes)),
-        Command::Ca {
-            action: CaAction::Init { tld },
-        } => apply::ca_init(&tld),
-        Command::Ca {
-            action: CaAction::Info,
-        } => apply::ca_info(),
-        Command::Ca {
-            action: CaAction::Trust { yes, system },
-        } => apply::ca_trust(yes, system),
-        Command::Ca {
-            action: CaAction::Renew { force },
-        } => web::ca_renew(force),
+        Command::Ca { action } => run_ca(action),
         Command::Hosts {
             action: HostsAction::Sync { yes },
         } => web::hosts_sync(yes),
         Command::Link { name, path, secure } => web::link(name, path, secure),
         Command::Unlink { name } => web::unlink(&name),
+        Command::Proxy {
+            name,
+            target,
+            secure,
+        } => proxy::proxy(&name, &target, secure),
+        Command::Unproxy { name } => proxy::unproxy(&name),
         Command::Park { path } => web::park(path),
         Command::Unpark { path } => web::unpark(path),
         Command::Secure { name } => web::set_secure(&name, true),

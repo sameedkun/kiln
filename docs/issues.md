@@ -76,6 +76,10 @@ commits and PRs.
 | [I-64](#i-64) | durability | A registry value written just before a hard reset was lost (Windows writes the registry lazily) | ✅ (`RegFlushKey` after each write) |
 | [I-65](#i-65) | php | Windows PHP kept PHP's 30 s / 128 MB development limits; a first WordPress load under Defender ran past 30 s | ✅ (same 60 s / 512 MB limits as Linux) |
 | [I-66](#i-66) | node | nodejs.org started listing Node 27 alphas (`v27.0.0-alpha.0.0.0`) in `index.json`; the parser rejected the whole index, so no Node could be installed | ✅ (pre-releases skipped) |
+| [I-67](#i-67) | sys | Replacing php.ini sometimes failed with "Access is denied" while another process briefly held it open | ✅ (brief retry) |
+| [I-68](#i-68) | tests | In the Windows VM, the firewall prompt Vite set off covered the certificate dialog, and uninstall waited forever | ✅ (prompt off in the test VM) |
+| [I-69](#i-69) | web | Right after `--secure`, the printed HTTPS URL failed for a moment while Caddy issued the certificate in the background | ✅ (kiln waits for it) |
+| [I-70](#i-70) | node | The Laravel build failed when Bunny Fonts took longer than Node's 250 ms per-address connect limit | 📌 (Node's default; test step raises it) |
 
 ---
 
@@ -867,3 +871,73 @@ commits and PRs.
   entry.
 - **Rule:** the same as I-61. Keep a test with the upstream's real shape, and skip only the
   shape that was seen.
+
+## P2-09: proxy sites
+
+<a id="i-67"></a>
+### I-67: php.ini sometimes couldn't be replaced: "Access is denied" ✅
+- **Found:** the P2-09 Windows VM run, 2026-10-30. `kiln php ext off curl` failed once with
+  "Access is denied. (os error 5)". The same check had passed in the P2-07 and P2-08 runs.
+  - Kiln writes php.ini to a temporary file and moves it over the old one with `MoveFileExW`.
+    The move fails while another process has the old file open without delete sharing.
+  - The likely holders are Defender scanning the file Kiln has just written, or a PHP
+    process starting after the previous toggle restarted the pools. Both let go within
+    moments.
+- **Fix:** `kiln_sys::rename_replace` retries "Access is denied" and sharing violations on
+  Windows. It waits 20 ms at first, doubling each time, for about two seconds in all. Any
+  other error, or one that lasts longer, is reported as before.
+- **Rule:** a Windows move over a file that other programs read can fail for a moment.
+  Retry briefly, never forever.
+
+<a id="i-68"></a>
+### I-68: Windows' firewall prompt for Node covered the certificate dialog in the VM ✅
+- **Found:** the same P2-09 Windows VM runs. Twice `kiln uninstall` waited until the run timed
+  out.
+  - Its "Root Certificate Store" dialog was open, and the scenario clicked its Yes button.
+  - A screenshot of the VM showed Windows Firewall asking whether Node.js may use public and
+    private networks. That prompt sat over the dialog, so the click never reached Yes.
+  - `npm run dev` had started Vite. Vite listens on `::1` only, but Node still set off the
+    prompt (probably while checking that the port was free). Windows also added "Block"
+    rules for Kiln's `node.exe` while the prompt waited.
+- **Fix (test harness):** `run.ps1` turns off the firewall's notify-on-listen setting in
+  the test VM, next to its other test settings. Inbound connections stay blocked, as when
+  nobody answers the prompt.
+- **For users:** the same prompt appears for any dev server on Windows, with or without
+  Kiln. A proxy target is on loopback, so "Cancel" is fine. Kiln doesn't change firewall
+  rules.
+
+<a id="i-69"></a>
+### I-69: a newly secured site refused HTTPS for a moment after Kiln printed its URL ✅
+- **Found:** a later P2-09 Windows VM run, 2026-10-30. Straight after `kiln proxy vite 5173
+  --secure`, curl to the printed `https://vite.test` URL failed with "The Local Security
+  Authority cannot be contacted". That is how Schannel reports a TLS `internal_error` alert.
+  - Caddy's internal issuer creates a site's certificate in the background after a config
+    load. Until it has one, Caddy answers that name's handshakes with that alert.
+  - `kiln secure`, `kiln link --secure`, `kiln new --secure` and `kiln proxy --secure` all
+    printed the URL as soon as the reload returned. Earlier runs had passed only because the
+    certificate happened to be ready by the first request.
+- **Fix:** after a reload, `kiln` waits until Caddy has stored a certificate for every
+  secure site, polling every 100 ms for up to 10 s. If that runs out, it says the
+  certificate is still being issued. The real-Caddy test checks that the certificate is
+  where Kiln looks for it.
+- **Rule:** reloading Caddy doesn't mean it's ready. Before printing a URL, wait for what
+  the URL needs.
+
+<a id="i-70"></a>
+### I-70: the Laravel skeleton's build failed: Node gave up on Bunny Fonts after 250 ms 📌
+- **Found:** later P2-09 runs, on both VMs, 2026-10-30, after the host's network changed.
+  `npm run build` in the Laravel app failed in under a second, twice in a row.
+  - The error was `[plugin laravel:fonts] TypeError: fetch failed`, caused by
+    `AggregateError [ETIMEDOUT]`. The skeleton's `vite.config.js` downloads its fonts from
+    Bunny Fonts at build time.
+  - Node 20 and later give each of a host's addresses only 250 ms to connect
+    (`--network-family-autoselection-attempt-timeout`). From this network, Bunny Fonts took
+    about 260–270 ms to connect, and sometimes seconds. So every attempt timed out.
+  - With the limit at 2000 ms, the same build succeeded in 5 s. curl, which waits longer,
+    got there every time.
+- **Not Kiln's:** this is Node's default meeting a slow route. It happens with any Node, and
+  with Herd's too. Kiln doesn't change Node's defaults for everyone.
+- **Test harness:** both scenarios raise the limit for the build step only, and retry it once.
+- **For users:** if a Laravel build fails with `fetch failed` and `ETIMEDOUT`, set
+  `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`. A later `kiln doctor`
+  could recognise it.

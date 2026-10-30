@@ -65,7 +65,7 @@ pub(crate) fn port_setting(store: &StateStore, key: &str, default: u16) -> Resul
 
 /// Makes sure the CA can back HTTPS sites: the root exists and the intermediate has at least
 /// [`INTERMEDIATE_MIN_DAYS`] left (re-issued here if not; Caddy can't renew it).
-fn ca_files() -> Result<CaFiles, String> {
+pub(crate) fn ca_files() -> Result<CaFiles, String> {
     let ca = apply::ca_store()?;
     if !ca.root_exists() {
         return Err(
@@ -165,11 +165,7 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let site_pools = crate::pool::needs(store)?.site_pools;
-    let sites: Vec<SiteSpec> = resolved(store)?
-        .sites
-        .iter()
-        .map(|site| spec(site, &site_pools))
-        .collect();
+    let sites = all_specs(store, &site_pools)?;
     let ca = if sites.iter().any(|s| s.secure) {
         Some(ca_files()?)
     } else {
@@ -196,6 +192,48 @@ pub(crate) fn resolved(store: &StateStore) -> Result<kiln_sites::Resolved, Strin
     kiln_runtime::sites(store).map_err(|e| e.to_string())
 }
 
+/// Proxy sites as the web server sees them ([ADR 0032]).
+///
+/// [ADR 0032]: ../../../docs/adr/0032-proxy-sites.md
+pub(crate) fn proxy_specs(store: &StateStore) -> Result<Vec<SiteSpec>, String> {
+    store
+        .proxies()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|p| {
+            Ok(SiteSpec {
+                host: host_name(&p.host)?,
+                root: PathBuf::new(),
+                secure: p.secure,
+                php_pool: None,
+                proxy: Some(
+                    kiln_web::ProxyTarget::parse(&p.target)
+                        .map_err(|e| format!("{}: {e}", p.host))?,
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Every site the server serves: proxies, then the folder sites whose name no proxy has
+/// taken (a proxy shadows a parked subfolder, [ADR 0032] §4).
+///
+/// [ADR 0032]: ../../../docs/adr/0032-proxy-sites.md
+fn all_specs(
+    store: &StateStore,
+    site_pools: &BTreeMap<String, String>,
+) -> Result<Vec<SiteSpec>, String> {
+    let mut sites = proxy_specs(store)?;
+    let folders: Vec<SiteSpec> = resolved(store)?
+        .sites
+        .iter()
+        .filter(|site| !sites.iter().any(|p| p.host == site.host))
+        .map(|site| spec(site, site_pools))
+        .collect();
+    sites.extend(folders);
+    Ok(sites)
+}
+
 /// The web server's view of a site; `site_pools` maps PHP sites to their pool (ADR 0016 §6).
 fn spec(site: &kiln_sites::Site, site_pools: &BTreeMap<String, String>) -> SiteSpec {
     SiteSpec {
@@ -203,6 +241,7 @@ fn spec(site: &kiln_sites::Site, site_pools: &BTreeMap<String, String>) -> SiteS
         root: site.document_root.clone(),
         secure: site.secure,
         php_pool: site_pools.get(site.host.as_str()).cloned(),
+        proxy: None,
     }
 }
 
@@ -237,6 +276,7 @@ pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
     match (&running, &planned) {
         (Some(old), Some(new)) if old != new => {
             crate::pool::switch(new, reload_with_pools).map_err(saved)?;
+            wait_for_certificates(store)?;
             println!("Web server and PHP pools updated without a restart.");
             print_php(Some(new));
             return Ok(());
@@ -256,8 +296,37 @@ pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
             .stop()
             .map_err(|e| saved(e.to_string()))?;
     }
+    wait_for_certificates(store)?;
     println!("Web server reloaded with the change.");
     Ok(())
+}
+
+/// Caddy issues a newly secured site's certificate in the background after a reload, and
+/// until then refuses the handshake (I-69). Wait a little for it, so the URL Kiln prints
+/// next works at once.
+fn wait_for_certificates(store: &StateStore) -> Result<(), String> {
+    let config = web_config(store)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let missing: Vec<_> = config
+            .sites
+            .iter()
+            .filter(|s| s.secure)
+            .map(|s| s.host.as_str())
+            .filter(|h| !kiln_web::issued::has_certificate(&config.storage_dir, h))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            println!(
+                "Caddy is still issuing the certificate for {}; HTTPS answers once it's done.",
+                missing.join(", ")
+            );
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// Restarts the running workers of PHP `version` so they read its changed `php.ini`, without
@@ -293,7 +362,7 @@ pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn hosts_hint(host: &str) {
+pub(crate) fn hosts_hint(host: &str) {
     if !hosts_names().iter().any(|n| n == host) {
         println!("Note: {host} isn't in the hosts file yet; run `kiln hosts sync`.");
     }
@@ -334,6 +403,12 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
     };
     let host = host_name(&name)?;
     let mut store = open_store()?;
+    if let Some(proxy) = store.proxy(host.as_str()).map_err(|e| e.to_string())? {
+        return Err(format!(
+            "{host} is a proxy to {}; `kiln unproxy {name}` first",
+            proxy.target
+        ));
+    }
     if secure {
         ca_files()?;
     }
@@ -488,9 +563,13 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
     if secure {
         ca_files()?;
     }
-    if !store
-        .set_site_secure(host.as_str(), secure)
-        .map_err(|e| e.to_string())?
+    let is_proxy = store
+        .set_proxy_secure(host.as_str(), secure)
+        .map_err(|e| e.to_string())?;
+    if !is_proxy
+        && !store
+            .set_site_secure(host.as_str(), secure)
+            .map_err(|e| e.to_string())?
     {
         // A parked site has no link row to carry the flag: securing pins it as one
         // (ADR 0015 §8); parked sites are already plain HTTP.
@@ -545,7 +624,7 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn trust_hint() -> Result<(), String> {
+pub(crate) fn trust_hint() -> Result<(), String> {
     let root = apply::ca_store()?.root().map_err(|e| e.to_string())?;
     let trusted = kiln_sys::wincrypt::CertStore::open_current_user("Root")
         .and_then(|store| store.contains(&root.sha1))
@@ -558,7 +637,7 @@ fn trust_hint() -> Result<(), String> {
 
 /// Linux: a hint unless every browser NSS database found already trusts the root.
 #[cfg(not(windows))]
-fn trust_hint() -> Result<(), String> {
+pub(crate) fn trust_hint() -> Result<(), String> {
     use kiln_platform::trust_nss::{Certutil, NssTool, nss_databases};
     let root = apply::ca_store()?.root().map_err(|e| e.to_string())?;
     let nickname = kiln_platform::trust_nss::nickname_for(&root.sha256);
@@ -596,16 +675,10 @@ fn url_config(store: &StateStore) -> WebConfig {
 /// Every site's URL, by host name.
 pub(crate) fn site_urls(store: &StateStore) -> BTreeMap<String, String> {
     let config = url_config(store);
-    resolved(store)
+    all_specs(store, &BTreeMap::new())
         .map(|all| {
-            all.sites
-                .iter()
-                .map(|site| {
-                    (
-                        site.host.to_string(),
-                        config.site_url(&spec(site, &BTreeMap::new())),
-                    )
-                })
+            all.iter()
+                .map(|site| (site.host.to_string(), config.site_url(site)))
                 .collect()
         })
         .unwrap_or_default()
@@ -618,7 +691,8 @@ pub fn sites() -> Result<(), String> {
         println!("Parked: {}", dir.display());
     }
     let all = resolved(&store)?;
-    if all.sites.is_empty() {
+    let proxies = proxy_specs(&store)?;
+    if all.sites.is_empty() && proxies.is_empty() {
         println!(
             "No sites yet. Run `kiln link` in a project folder, or `kiln park` in a folder of projects."
         );
@@ -626,10 +700,36 @@ pub fn sites() -> Result<(), String> {
     }
     let config = url_config(&store);
     let in_hosts = hosts_names();
+    let dns_note = |host: &HostName| {
+        if in_hosts.iter().any(|n| n == host.as_str()) {
+            ""
+        } else {
+            "  (not in hosts file)"
+        }
+    };
+    for proxy in &proxies {
+        let target = proxy
+            .proxy
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        println!(
+            "{:<34} {:<17} {:<17} {:<6} {target}{}",
+            config.site_url(proxy),
+            "dev server",
+            "-",
+            "proxy",
+            dns_note(&proxy.host)
+        );
+    }
     let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
     let versions =
         kiln_runtime::site_versions(&store, &all.sites, &installed).map_err(|e| e.to_string())?;
-    for site in &all.sites {
+    for site in all
+        .sites
+        .iter()
+        .filter(|s| !proxies.iter().any(|p| p.host == s.host))
+    {
         let url = config.site_url(&spec(site, &BTreeMap::new()));
         // "8.4.27", "8.1.34 (pinned)", "8.3.36 (kiln.toml)", "8.4.27 (pin 8.2 missing)",
         // or "-" for static sites.
@@ -647,11 +747,7 @@ pub fn sites() -> Result<(), String> {
             }
             None => "none".to_owned(),
         };
-        let dns = if in_hosts.iter().any(|n| n == site.host.as_str()) {
-            ""
-        } else {
-            "  (not in hosts file)"
-        };
+        let dns = dns_note(&site.host);
         let source = match (&site.alias_of, &site.source) {
             (Some(_), _) => "alias",
             (None, kiln_sites::Source::Link) => "link",
@@ -903,9 +999,8 @@ pub fn print_config() -> Result<(), String> {
 
 pub fn hosts_sync(yes: bool) -> Result<(), String> {
     let store = open_store()?;
-    // Links and parked sites alike: the hosts file has no wildcards (ADR 0015 §9).
-    let names: Vec<String> = resolved(&store)?
-        .sites
+    // Links, parked sites and proxies alike: the hosts file has no wildcards (ADR 0015 §9).
+    let names: Vec<String> = all_specs(&store, &BTreeMap::new())?
         .into_iter()
         .map(|s| s.host.to_string())
         .collect();

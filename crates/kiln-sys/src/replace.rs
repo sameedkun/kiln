@@ -110,7 +110,7 @@ mod platform {
     }
 
     pub(super) fn rename_replace(from: &Path, to: &Path) -> io::Result<()> {
-        use windows_sys::Win32::Foundation::ERROR_NOT_SAME_DEVICE;
+        use windows_sys::Win32::Foundation::{ERROR_NOT_SAME_DEVICE, ERROR_SHARING_VIOLATION};
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
@@ -125,6 +125,26 @@ mod platform {
             }
         };
         let base = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+        // I-67: a scanner or a starting PHP may hold `to` open for a moment without delete
+        // sharing, which fails the move with "Access is denied" or a sharing violation. Wait
+        // for it, up to about two seconds.
+        let attempt = |flags| {
+            let mut delay = std::time::Duration::from_millis(20);
+            loop {
+                match attempt(flags) {
+                    Err(e)
+                        if delay.as_millis() < 1000
+                            && (e.kind() == io::ErrorKind::PermissionDenied
+                                || e.raw_os_error()
+                                    == i32::try_from(ERROR_SHARING_VIOLATION).ok()) =>
+                    {
+                        std::thread::sleep(delay);
+                        delay *= 2;
+                    }
+                    other => return other,
+                }
+            }
+        };
         match attempt(base) {
             // I-44: some machines report same-folder paths in the user profile as being on
             // different devices. Let Windows copy and delete instead; WRITE_THROUGH makes it

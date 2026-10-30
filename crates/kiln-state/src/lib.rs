@@ -10,6 +10,7 @@
 mod import;
 mod paths;
 mod php;
+mod proxies;
 mod schema;
 mod sites;
 mod store;
@@ -17,6 +18,7 @@ mod store;
 pub use import::ImportReport;
 pub use paths::{DB_FILE, LEGACY_JOURNAL_FILE, default_local_dir, default_state_dir};
 pub use php::PhpRecord;
+pub use proxies::ProxyRecord;
 pub use schema::SCHEMA_VERSION;
 pub use sites::SiteRecord;
 pub use store::{OpenReport, StateError, StateStore};

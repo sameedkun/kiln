@@ -42,6 +42,7 @@ fn site(dir: &Path, name: &str, secure: bool) -> SiteSpec {
         root,
         secure,
         php_pool: None,
+        proxy: None,
     }
 }
 
@@ -220,6 +221,11 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
         let (code, body) = https_get_eventually(&server, https_port, "shop.test", &root.der);
         assert_eq!(code, 200, "{body}");
         assert!(body.ends_with("shop ok"), "{body}");
+        // Where `kiln` looks to know the certificate is there (I-69).
+        assert!(kiln_web::issued::has_certificate(
+            &dir.path().join("run").join("storage"),
+            "shop.test"
+        ));
         assert!(
             https_get(https_port, "blog.test", &root.der).is_err(),
             "plain site has no TLS"
