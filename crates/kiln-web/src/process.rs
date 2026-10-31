@@ -146,23 +146,56 @@ impl WebServer {
             Status::Stale { .. } | Status::Stopped => self.forget()?,
         }
         self.check_socket(config)?;
-        let json = config.render()?;
-        let listeners = config.listeners();
-        for addr in &listeners {
+        for addr in &config.listeners() {
             if TcpListener::bind(addr).is_err() {
                 return Err(WebError::PortInUse(*addr));
             }
         }
+        self.prepare(config, &self.config_path())?;
+        self.launch(config)
+    }
 
+    /// Restarts the running server with `config`, for changes a reload can't apply (I-57).
+    /// The new config is written and validated while the old server still serves, so sites
+    /// go unanswered only from the old server's stop until the new one listens (ADR 0034).
+    pub fn restart(&self, config: &WebConfig) -> Result<u32, WebError> {
+        if !self.exe.is_file() {
+            return Err(WebError::MissingBinary(self.exe.clone()));
+        }
+        if !matches!(self.status()?, Status::Running { .. }) {
+            return Err(WebError::NotRunning);
+        }
+        self.check_socket(config)?;
+        // As for a reload: a listener the running config doesn't have must be free.
+        let running = fs::read_to_string(self.config_path()).unwrap_or_default();
+        for addr in config.listeners() {
+            let known = running.contains(&format!("\"{addr}\""));
+            if !known && TcpListener::bind(addr).is_err() {
+                return Err(WebError::PortInUse(addr));
+            }
+        }
+        let next = self.dir.join(format!("{CONFIG_FILE}.next"));
+        if let Err(e) = self.prepare(config, &next) {
+            let _ = fs::remove_file(&next);
+            return Err(e); // the running server is left as it was
+        }
+        self.stop()?;
+        kiln_sys::rename_replace(&next, &self.config_path())
+            .map_err(io_err(format!("cannot move {} into place", next.display())))?;
+        self.launch(config)
+    }
+
+    /// Writes `config` to `path` and has Caddy validate it.
+    fn prepare(&self, config: &WebConfig, path: &Path) -> Result<(), WebError> {
+        let json = config.render()?;
         background::create_private_dir(&self.dir)
             .map_err(io_err(format!("cannot create {}", self.dir.display())))?;
-        let config_path = self.config_path();
-        write_atomically(&config_path, json.as_bytes())?;
+        write_atomically(path, json.as_bytes())?;
 
         let output = Command::new(&self.exe)
             .arg("validate")
             .arg("--config")
-            .arg(&config_path)
+            .arg(path)
             .current_dir(&self.dir)
             .stdin(Stdio::null())
             .output()
@@ -172,7 +205,14 @@ impl WebServer {
             text.push_str(&String::from_utf8_lossy(&output.stdout));
             return Err(WebError::Validate(tail(&text, 20)));
         }
+        Ok(())
+    }
 
+    /// Starts Caddy in the background on the written config. Returns once every listener of
+    /// `config` accepts connections.
+    fn launch(&self, config: &WebConfig) -> Result<u32, WebError> {
+        let config_path = self.config_path();
+        let listeners = config.listeners();
         // Only errors Caddy logs from here on belong to this start.
         let log_start = fs::metadata(self.log_file()).map_or(0, |m| m.len());
         let console_path = self.console_log_path();

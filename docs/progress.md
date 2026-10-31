@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-30 · **Current phase:** **Phase 1 done** (15 of 15 tasks; exit criteria met in both VMs) · **Phase 2 in progress** (10 of 11 tasks done; ADRs 0026–0033) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-31 · **Current phase:** **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0033 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0034 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -927,7 +927,7 @@ entries.
   They are manual, not CI.
 
 <a id="phase-2"></a>
-## Phase 2: developer tooling (in progress)
+## Phase 2: developer tooling (done)
 
 Tasks and exit criteria are in [plan.md](plan.md#phase-2-developer-tooling-windows--linux).
 Planned 2026-10-27, with [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) for the daemon,
@@ -945,7 +945,7 @@ its local API and autostart.
 | P2-08 | `kiln new` (Laravel) | **done** 2026-10-30 | [ADR 0031](adr/0031-kiln-new-laravel-projects.md); see below. A Laravel app over HTTPS in one command; VM-checked on Windows and Ubuntu |
 | P2-09 | Proxy sites | **done** 2026-10-30 | [ADR 0032](adr/0032-proxy-sites.md); see below. A dev server (Vite and others) at `<name>.test`, with HTTPS and live reload; VM-checked on Windows and Ubuntu |
 | P2-10 | Configurable TLD | **done** 2026-10-30 | [ADR 0033](adr/0033-configurable-tld.md); see below. `kiln ca init --tld internal` and the rest of Kiln follows; VM-checked on Windows and Ubuntu |
-| P2-11 | VM scenarios for Phase 2 | next | extends ADR 0024 |
+| P2-11 | VM scenarios for Phase 2 | **done** 2026-10-31 | [ADR 0034](adr/0034-phase-2-vm-scenarios.md); see below. A real reboot inside each scenario, a timed renewal restart; fixed I-73. Exit criteria met on Windows (with Herd) and Ubuntu |
 
 ### P2-01 delivered (2026-10-27)
 
@@ -1414,6 +1414,59 @@ its local API and autostart.
 - **On the way:** the Ubuntu VM got a new address after a host restart. Its host key matched
   the known one before the new address was added.
 
+### P2-11 delivered (2026-10-31)
+
+[ADR 0034](adr/0034-phase-2-vm-scenarios.md), extending
+[ADR 0024](adr/0024-integration-test-vms.md). **Phase 2's exit criteria are met in both
+VMs.**
+
+- **A reboot inside each scenario:**
+  - The session part ends at `kiln daemon enable`, with `kilnd` left running.
+  - The runner reboots the VM and waits for the automatic login.
+  - The after-reboot part checks what the login brought back, then uninstalls and
+    compares with the very first snapshot.
+  - Shared helpers moved to `lib.ps1` and `lib.sh`. The Ubuntu work folder moved from
+    `/tmp` to `~/kiln-test`, since a reboot can clear `/tmp`.
+- **I-73 fixed:** the restart after a CA change left sites unanswered for 8.1 s on Windows,
+  found by the new timed check.
+  - It now restarts only Caddy (`WebServer::restart`). The PHP workers keep running, and
+    Caddy validates the new config while the old server still serves.
+  - Caddy's log shows about 0.12 s between the two servers. A client on Windows sees about
+    0.6 s, because Windows retries a refused connection.
+- **Tests:**
+  - A real-Caddy test of `restart`, and of a rejected config leaving the server running.
+  - 328 on Windows, 298 on Linux; clippy clean on both.
+- **Exit criteria, and the checks that cover them** (both VMs unless noted):
+
+  | Criterion | Checks |
+  |---|---|
+  | `kiln.toml` pins PHP and Node for `php`, `node`, `npm` and the site | `toml-app`: its site and the `php` shim on PHP 8.3; the `node` shim on its Node 20 (22 is the default); **new:** `npm version` names Node 20 there and 22 in `laravel-app` |
+  | `herd.yml` imported to the same result | `kiln import herd`: HTTPS, PHP 8.3 and the alias, in the site and the shim. `herd.yml` has no Node setting |
+  | `kilnd` starts at login | **new:** a real reboot; `kilnd` running, started by the login item; the web server and PHP back as new processes; the sites over trusted HTTPS; `daemon status` |
+  | Its versioned API | `daemon call web.status`; the renewal through `daemon call ca.renew` |
+  | HTTPS across a renewal forced through the API, a restart under a second | a new intermediate, a restarted server, HTTPS on the new chain; **new:** the longest time without an answer, measured |
+  | `php update` then `php rollback` round-trips | a real update to the newest patch and back, live in a site |
+  | Extensions on and off, undoable | Windows: `xsl` on and `curl` off, live, then undone byte for byte. Ubuntu: Kiln's static builds refuse, with `php.ini` unchanged, and a system PHP's are left to `phpdismod` |
+  | `kiln new` over HTTPS | `kiln new shop --secure --php 8.3` |
+  | A proxy serves a dev server | Vite over HTTPS at `vite.test`, with its HMR client; `unproxy` |
+  | Uninstall leaves the machine as it was, autostart, Node and shims included | the comparison after a session whose `kilnd` the login had started, and again after the `.internal` stage |
+
+- **VM scenarios:**
+  - **Windows (with Herd):** 80 checks passed. The renewal's restart left sites without an
+    answer for 672 ms. After the reboot the scenario opens Herd's app, as its user would,
+    since the test VM's Herd has no login item.
+  - **Ubuntu:** 80 checks passed. The renewal's restart left sites without an answer for
+    66 ms (115 ms in an earlier run).
+- **On the way:**
+  - The first runs checked too early after the login: Windows starts the `Run` key's
+    programs a while after the logon. Each after-reboot check now waits for its condition,
+    up to a limit.
+  - The Ubuntu keyring lists its items in another order after a login, so the snapshot now
+    sorts them, keeping the unlocked and locked counts. The five items it lists are the
+    orphans from earlier runs (open item), the same before and after.
+  - The P2-02 reboot scripts (`autostart.ps1`, `autostart.sh`) stay, for quick checks and
+    `-HardReset`.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1501,6 +1554,7 @@ its local API and autostart.
 | 2026-10-30 | **P2-08 done:** ADR 0031. `kiln new <name> [--path] [--php] [--secure]` runs `composer create-project laravel/laravel` with Kiln's PHP and Composer (installing Composer if missing), then links the project as `<name>.test` (or secures it where a parked folder already serves it); `--php` is kept in the project's `kiln.toml`. Fixed I-66: nodejs.org's index now lists Node 27 alphas, which broke `kiln node install`; pre-releases are skipped. Scenarios: Windows 63 checks, Ubuntu 62. |
 | 2026-10-30 | **P2-09 done:** ADR 0032. `kiln proxy <name> <target> [--secure]` serves `<name>.test` from a loopback dev server through Caddy, with the dev server's own `Host`, WebSocket upgrades for live reload, and HTTPS like any site; `kiln unproxy` removes it. Proxies have their own table (schema v6). Fixed I-67 (php.ini replace retried briefly on Windows) and I-69 (`kiln` now waits for Caddy's certificate before reporting a `--secure` change done); I-68 turned off the firewall prompt in the Windows test VM; I-70 logged (Node's 250 ms connect limit vs Bunny Fonts). Scenarios: Windows 66 checks, Ubuntu 65. |
 | 2026-10-30 | **P2-10 done:** ADR 0033. `kiln ca init --tld <name>` chooses the development TLD (only `test`, `internal`, `example`, `invalid`), recorded as the `tld` setting that every command and the shims read; the root's own TLD always wins, and another TLD over an existing root is refused. Fixed I-71 (Caddy installed its own `local` root into the trust stores for a `.internal` site; now declared with `install_trust: false`) and I-72 (the first site change after `web start` restarted the server). Scenarios: Windows 71 checks, Ubuntu 72, each with a second stage under `.internal` and a second uninstall comparison. |
+| 2026-10-31 | **P2-11 done, Phase 2 done:** ADR 0034. Each VM scenario now reboots after `kiln daemon enable` and checks that the login started `kilnd`, which brought the web server, PHP and the HTTPS sites back, before uninstall and the comparison; `npm` is checked on the project's Node; the renewal restart forced through the API is timed. That found I-73 (8.1 s on Windows): the restart after a CA change now restarts only Caddy, on a config validated while the old server serves (about 0.1 s; a client sees 0.67 s on Windows, 0.07 s on Ubuntu). Scenarios: Windows 80 checks, Ubuntu 80. Phase 2's exit criteria are met in both VMs. |
 
 ## How to update this file
 

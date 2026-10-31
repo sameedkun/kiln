@@ -24,9 +24,16 @@ for db in "$HOME/.pki/nssdb" "$HOME"/snap/firefox/common/.mozilla/firefox/*/ "$H
     certutil -d "sql:$db" -L 2>/dev/null | tail -n +4 | sed "s|^|nss $db: |"
 done
 
-# Kiln's items in the desktop keyring (unlocked, then locked lists).
-echo "keyring: $(busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
-    org.freedesktop.Secret.Service SearchItems 'a{ss}' 1 application kiln 2>&1)"
+# Kiln's items in the desktop keyring, as a sorted set: the keyring lists them in another
+# order after it is reloaded at login (ADR 0034). Anything other than item paths (an error)
+# is printed as it is.
+keyring=$(busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
+    org.freedesktop.Secret.Service SearchItems 'a{ss}' 1 application kiln 2>&1)
+case "$keyring" in
+    # The two counts (unlocked, locked), then the paths.
+    aoao*) echo "keyring: $(echo "$keyring" | cut -d' ' -f1-3) $(printf '%s' "$keyring" | grep -o '"[^"]*"' | sort | tr '\n' ' ')" ;;
+    *) echo "keyring: $keyring" ;;
+esac
 
 # Login items (P2-02): the autostart folder and what is in it.
 autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"

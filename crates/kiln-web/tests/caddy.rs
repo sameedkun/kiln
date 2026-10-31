@@ -296,3 +296,85 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
         Err(WebError::NotRunning)
     ));
 }
+
+#[test]
+#[allow(clippy::similar_names)] // http_port and https_port
+fn restarts_on_a_validated_config_and_keeps_serving_when_caddy_rejects_one() {
+    let Some(caddy) = caddy() else {
+        eprintln!("skipped: set KILN_TEST_CADDY to a Caddy binary to run this test");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("bin").join(kiln_web::EXE_NAME);
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::copy(&caddy, &exe).unwrap();
+
+    let ca = CaStore::new(dir.path().join("ca"), default_protector());
+    let root = ca.create_root(&Tld::default(), "test@kiln").unwrap();
+    ca.issue_intermediate(&Tld::default()).unwrap();
+    let (root_cert, intermediate_cert, intermediate_key) = ca.web_server_files();
+
+    let server = WebServer::new(exe, dir.path().join("run"));
+    let (http_port, https_port) = (free_port(), free_port());
+    let blog = site(dir.path(), "blog", false);
+    let shop = site(dir.path(), "shop", true);
+    let with = |sites: Vec<SiteSpec>, ca: Option<CaFiles>| WebConfig {
+        http_port,
+        https_port,
+        ipv6: false,
+        sites,
+        ca,
+        storage_dir: dir.path().join("run").join("storage"),
+        log_file: server.log_file(),
+        admin_socket: server.admin_socket(),
+        php_pools: std::collections::BTreeMap::new(),
+    };
+    let kiln_ca = CaFiles {
+        root_cert,
+        intermediate_cert,
+        intermediate_key,
+    };
+
+    assert!(matches!(
+        server.restart(&with(vec![blog.clone()], None)),
+        Err(WebError::NotRunning)
+    ));
+    let first = server.start(&with(vec![blog.clone()], None)).unwrap();
+    let result = std::panic::catch_unwind(|| {
+        // A new process, on the new config, with the new HTTPS listener.
+        let started = std::time::Instant::now();
+        let second = server
+            .restart(&with(
+                vec![blog.clone(), shop.clone()],
+                Some(kiln_ca.clone()),
+            ))
+            .unwrap();
+        eprintln!("restart took {:?}", started.elapsed());
+        assert_ne!(second, first);
+        assert_eq!(server.status().unwrap(), Status::Running { pid: second });
+        assert_eq!(http_get(http_port, "blog.test").0, 200);
+        let (code, body) = https_get_eventually(&server, https_port, "shop.test", &root.der);
+        assert_eq!(code, 200, "{body}");
+
+        // A config Caddy rejects (the intermediate's files are missing) stops nothing.
+        let missing = CaFiles {
+            intermediate_cert: dir.path().join("missing.crt"),
+            intermediate_key: dir.path().join("missing.key"),
+            ..kiln_ca.clone()
+        };
+        let err = server
+            .restart(&with(vec![blog.clone(), shop.clone()], Some(missing)))
+            .unwrap_err();
+        assert!(matches!(err, WebError::Validate(_)), "{err}");
+        assert_eq!(server.status().unwrap(), Status::Running { pid: second });
+        assert_eq!(http_get(http_port, "blog.test").0, 200, "still serving");
+        assert!(
+            !dir.path().join("run").join("caddy.json.next").exists(),
+            "the rejected config is not left behind"
+        );
+    });
+    server.stop().unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}

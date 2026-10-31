@@ -82,6 +82,7 @@ commits and PRs.
 | [I-70](#i-70) | node | The Laravel build failed when Bunny Fonts took longer than Node's 250 ms per-address connect limit | 📌 (Node's default; test step raises it) |
 | [I-71](#i-71) | web | Caddy set up its own default CA for a `.internal` site and installed its root into the system and NSS trust stores | ✅ (`local` CA declared with `install_trust: false`) |
 | [I-72](#i-72) | web | The first `kiln web start` never recorded which intermediate issued the site certificates, so the next site change restarted the server | ✅ (recorded whenever Caddy gets the CA) |
+| [I-73](#i-73) | web | The restart after a CA change left sites unanswered for 8 s on Windows: it also restarted PHP and validated the new config while nothing was serving | ✅ (`WebServer::restart`: only Caddy, validated first; about 0.1 s) |
 
 ---
 
@@ -1001,3 +1002,29 @@ commits and PRs.
   not yet saved the link, which is before that restart would happen. The same restart inside
   a piped command finished in seconds when run by hand. The scenario now runs `kiln new`
   with a 20-minute limit, and logs its output so far and the running processes if it hits it.
+
+## P2-11: Phase 2 VM scenarios
+
+### I-73: the restart after a CA change left sites unanswered for seconds ✅
+- **Found:** the P2-11 Windows VM run, 2026-10-31, by the new timed check
+  ([ADR 0034](adr/0034-phase-2-vm-scenarios.md) §2). During a renewal forced through
+  `kilnd`'s API, the static site went 8.1 s without an answer. The Phase 2 exit criterion is
+  under a second.
+- **Cause:** the restart after a CA change (I-57) was `kiln web stop` then `kiln web start`.
+  - It stopped and restarted the PHP workers too, though they don't depend on the CA. With
+    two PHP versions and four workers each, that took most of the time.
+  - Caddy validated the new config with a separate run only after the old server had
+    stopped.
+  - On a small machine (one PHP version, eight sites) the same restart measured 1.1 s:
+    about 0.2 s stopping PHP, about 0.5 s starting it, and the validation.
+- **Fix:** `WebServer::restart` writes the new config beside the running one and has Caddy
+  validate it while the old server still serves.
+  - A config Caddy rejects leaves the running server as it was.
+  - Then it stops the old server, moves the config into place and starts Caddy at once.
+  - The PHP workers keep running.
+  - Caddy's log shows about 0.12 s between the old server exiting and the new one
+    serving. A real-Caddy test covers the restart and the rejected config.
+- **What a client sees on Windows:** a connection to a port with no listener isn't refused
+  at once; Windows retries for about 2 s. So a request that arrives in the window is
+  answered after one retry, about 0.6 s later, rather than failing. That is what the
+  scenario's check measures.

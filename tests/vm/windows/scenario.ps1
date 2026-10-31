@@ -1,39 +1,21 @@
-# Kiln's Windows integration scenario (ADR 0024 §1, §4-5): snapshot, a full Kiln session next
-# to a running Laravel Herd (including Herd restarting), uninstall, snapshot again, compare.
+# Kiln's Windows integration scenario (ADR 0024 §1, §4-5; ADR 0034): snapshot, then a full
+# Kiln session next to a running Laravel Herd (including Herd restarting), up to
+# `kiln daemon enable`. Then it asks run.ps1 for a reboot; after-reboot.ps1 checks what came
+# back, uninstalls, snapshots again and compares.
 # Runs inside the Windows test VM, in the logged-on test user's desktop session (run.ps1 starts
 # it as a scheduled task), not elevated: UAC elevates Kiln's helper without asking there
 # (setup-test-vm.ps1). Results go to C:\kiln-test\scenario.log; C:\kiln-test\status tells the
-# host what's happening ("waiting-trust-dialog" while Windows' certificate dialog is open).
+# host what's happening ("waiting-trust-dialog" while Windows' certificate dialog is open,
+# "reboot" at the end of this part).
 param([string] $Kiln = 'C:\kiln-test\bin\kiln.exe')
 $ErrorActionPreference = 'Continue'
 $dir = 'C:\kiln-test'
 $log = Join-Path $dir 'scenario.log'
 $status = Join-Path $dir 'status'
 Set-Content $log '' -Encoding utf8
+Remove-Item (Join-Path $dir 'failed'), (Join-Path $dir 'started.txt') -ErrorAction SilentlyContinue
 $script:failed = $false
-
-function Say($text) { Add-Content $log $text -Encoding utf8 }
-function Status($text) { Set-Content $status $text -Encoding ascii }
-function Check($desc, [scriptblock] $test) {
-    Say "     ... $(Get-Date -Format HH:mm:ss) $desc"   # shows which step a stuck run is in
-    $started = Get-Date
-    try {
-        $out = & $test 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { throw "exit code $LASTEXITCODE`n$out" }
-        Say "PASS $desc ($([int]((Get-Date) - $started).TotalSeconds) s)"
-    } catch {
-        Say "FAIL $desc ($([int]((Get-Date) - $started).TotalSeconds) s)"
-        ($_ | Out-String).Trim().Split("`n") | Select-Object -Last 8 | ForEach-Object { Say "     $_" }
-        $script:failed = $true
-    }
-}
-function Kiln {
-    $out = & $Kiln @args 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "kiln $args failed ($LASTEXITCODE): $($out.Trim())" }
-    $out
-}
-function Get($url) { curl.exe -sS --ssl-revoke-best-effort $url 2>&1 | Out-String }
-function Expect($text, $output) { if (-not $output.Contains($text)) { throw "expected '$text' in:`n$output" } }
+. (Join-Path $dir 'lib.ps1')
 
 Status 'running'
 & (Join-Path $dir 'snapshot.ps1') | Set-Content (Join-Path $dir 'before.txt') -Encoding utf8
@@ -122,40 +104,6 @@ Check 'secure laravel-app' { Kiln secure laravel-app }
 Check 'secure wp-site' { Kiln secure wp-site }
 Check 'isolate php-app to PHP 8.3' { Kiln isolate 8.3 php-app }
 Check 'hosts sync (UAC, answered by the test VM setting)' { Kiln hosts sync --yes }
-# Windows asks before it adds a root to the user's store ("Security Warning") and before it
-# deletes one ("Root Certificate Store"). Those dialogs open behind whatever window has focus
-# (Windows doesn't let a background process take it), so keystrokes from the host can miss
-# them, and their buttons are panes UI Automation can't press. So: find the dialog through UI
-# Automation, minimize the windows that could cover it, and write where its Yes button is to
-# C:\kiln-test\click, in screen pixels; run.ps1 clicks there with the VM's mouse. (Clicks made
-# from inside this session by a scheduled task's process don't reach the dialog.)
-function Start-Answerer($title) { Start-Job -ArgumentList $title {
-    param($title)
-    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-    Add-Type -Namespace KilnTest -Name Win -MemberDefinition '
-        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-        [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hwnd, int cmd);'
-    [KilnTest.Win]::SetProcessDPIAware() | Out-Null   # positions in physical pixels
-    $ae = [Windows.Automation.AutomationElement]
-    $byName = { param($n) New-Object Windows.Automation.PropertyCondition($ae::NameProperty, $n) }
-    $deadline = (Get-Date).AddMinutes(3)
-    while ((Get-Date) -lt $deadline) {
-        $dialog = $ae::RootElement.FindFirst('Children', (& $byName $title))
-        if ($dialog) {
-            foreach ($w in $ae::RootElement.FindAll('Children', [Windows.Automation.Condition]::TrueCondition)) {
-                if ($w.Current.Name -ne $title -and $w.Current.ClassName -notin 'Shell_TrayWnd', 'Progman') {
-                    [KilnTest.Win]::ShowWindow([IntPtr]$w.Current.NativeWindowHandle, 6) | Out-Null   # minimize
-                }
-            }
-            Start-Sleep -Seconds 1
-            $b = $dialog.FindFirst('Descendants', (& $byName 'Yes')).Current.BoundingRectangle
-            Set-Content C:\kiln-test\click "$([int]($b.X + $b.Width / 2)) $([int]($b.Y + $b.Height / 2))"
-            return "found; Yes is at $b"
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    "no '$title' dialog seen"
-} }
 
 Status 'waiting-trust-dialog'
 $answerer = Start-Answerer 'Security Warning'
@@ -170,7 +118,6 @@ Check 'web start next to Herd moves off port 80 and says why' {
     Expect 'used by Laravel Herd' $script:started
     Expect 'http://static-site.test:8080/' $script:started
 }
-function SiteUrl($host_) { [regex]::Match($script:started, "https?://$([regex]::Escape($host_))[^\s]*").Value }
 Check 'a static site over HTTP' { Expect 'static from kiln' (Get (SiteUrl 'static-site.test')) }
 Check 'a PHP site over HTTPS, trusted for this user, on its own PHP 8.3' {
     $url = SiteUrl 'php-app.test'
@@ -357,6 +304,18 @@ Check 'the node shim follows kiln.toml (20), .nvmrc (lts/iron) and the default e
     Expect 'v20.' (ShimNode "$sites\php-app")
     Expect 'v22.' (ShimNode "$sites\laravel-app")
 }
+# npm prints the versions of the Node it runs on (ADR 0034 §3).
+function ShimNpmNode($folder) {
+    Push-Location $folder
+    try { [regex]::Match((& "$shims\npm.exe" version --json 2>&1 | Out-String), '"node":\s*"([^"]+)"').Groups[1].Value }
+    finally { Pop-Location }
+}
+Check 'the npm shim runs on the project''s Node: 20 in toml-app (kiln.toml), 22 in laravel-app' {
+    $toml, $laravel = (ShimNpmNode "$sites\toml-app"), (ShimNpmNode "$sites\laravel-app")
+    if (-not $toml.StartsWith('20.') -or -not $laravel.StartsWith('22.')) {
+        throw "npm ran on Node '$toml' in toml-app and '$laravel' in laravel-app"
+    }
+}
 Check 'kiln which names the .nvmrc' {
     Push-Location "$sites\php-app"
     try { Expect '.nvmrc asks for lts/iron' (Kiln which) } finally { Pop-Location }
@@ -462,12 +421,52 @@ function IntermediateSha { @((Kiln ca info) -split "`n" | Where-Object { $_ -mat
 Check 'daemon status shows the intermediate certificate''s days left (P2-03)' {
     Expect 'Intermediate certificate:' (Kiln daemon status)
 }
+# Times the restart (ADR 0034 §2): asks for the static site over HTTP every 50 ms, each on a new
+# connection, and returns the longest time between two answers, in ms.
+function Start-Poller($url) {
+    $stop = Join-Path $dir 'poll.stop'
+    Remove-Item $stop, "$stop.ready" -ErrorAction SilentlyContinue
+    $job = Start-Job -ArgumentList $url, $stop {
+        param($url, $stop)
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $last = $null; $worst = 0
+        while (-not (Test-Path $stop)) {
+            try {
+                $request = [Net.WebRequest]::Create($url)
+                $request.Timeout = 2000
+                $request.KeepAlive = $false
+                $request.GetResponse().Close()
+                $now = $clock.ElapsedMilliseconds
+                if ($null -eq $last) { Set-Content "$stop.ready" 'yes' } else { $worst = [Math]::Max($worst, $now - $last) }
+                $last = $now
+            } catch {}
+            Start-Sleep -Milliseconds 50
+        }
+        if ($null -eq $last) { -1 } else { [Math]::Max($worst, $clock.ElapsedMilliseconds - $last) }
+    }
+    $deadline = (Get-Date).AddSeconds(30)
+    while (-not (Test-Path "$stop.ready") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    $job
+}
+function Stop-Poller($job) {
+    Set-Content (Join-Path $dir 'poll.stop') 'yes'
+    $gap = Receive-Job $job -Wait -AutoRemoveJob
+    Remove-Item (Join-Path $dir 'poll.stop*') -ErrorAction SilentlyContinue
+    $gap
+}
+$script:renewalGap = $null
 Check 'renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)' {
     $before = IntermediateSha
     $oldPid = (Get-Process kiln-caddy).Id
+    $poller = Start-Poller 'http://static-site.test:8080/'
     # Windows PowerShell drops bare double quotes in arguments to programs, hence \".
-    try { Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}') }
+    try {
+        Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}')
+        Start-Sleep -Seconds 2
+        $script:renewalGap = Stop-Poller $poller
+    }
     catch {
+        Stop-Poller $poller | Out-Null
         # Keep what uninstall would delete, to see why the restart failed.
         Get-Process kiln-caddy -ErrorAction SilentlyContinue | Format-Table Id, StartTime | Out-String | Say
         Get-Content "$env:LOCALAPPDATA\Kiln\caddy\caddy.log" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "     caddy: $_" }
@@ -481,6 +480,12 @@ Check 'renewal through the daemon: a new intermediate, the server restarts to us
     do { $page = Get (SiteUrl 'php-app.test'); if ($page.Contains('via cgi-fcgi')) { break }; Start-Sleep 1 }
     until ((Get-Date) -gt $deadline)
     Expect 'via cgi-fcgi' $page
+}
+Check 'the renewal''s restart left the sites unanswered for under a second (ADR 0034)' {
+    Say "     longest time without an answer: $script:renewalGap ms"
+    if ($null -eq $script:renewalGap -or $script:renewalGap -lt 0 -or $script:renewalGap -ge 1000) {
+        throw "longest time without an answer: $script:renewalGap ms"
+    }
 }
 Check 'daemon status counts the renewal' { Expect 'Renewals by the daemon: 1' (Kiln daemon status) }
 Check 'daemon stop leaves the web server running' {
@@ -498,55 +503,13 @@ Check 'daemon disable removes the Run value' {
     Kiln daemon disable --yes
     if (RunValue) { throw "Run value still there: $(RunValue)" }
 }
-# On again, and running, so uninstall has to stop it and remove the Run value.
-Check 'daemon enable (again, for uninstall)' { Kiln daemon enable --yes }
+# On again, and left running, so the login after the reboot has to start it, and uninstall
+# then has to stop it and remove the Run value.
+Check 'daemon enable (again, for the reboot and uninstall)' { Kiln daemon enable --yes }
 
-Say '== uninstall'
-Status 'waiting-untrust-dialog'
-$answerer = Start-Answerer 'Root Certificate Store'
-Check 'kiln uninstall (UAC by the test VM setting; the certificate dialog with the VM''s mouse)' { Kiln uninstall --yes }
-Say "     dialog: $(Receive-Job $answerer -Wait -AutoRemoveJob)"
-Status 'running'
-Start-Sleep -Seconds 2
-& (Join-Path $dir 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
-Check 'Herd''s site still answers after the uninstall' { Expect 'herd check' (Get 'http://herdcheck.test/') }
+# What after-reboot.ps1 needs: the URLs Kiln printed, and whether anything failed so far.
+Set-Content (Join-Path $dir 'started.txt') $script:started -Encoding utf8
+if ($script:failed) { Set-Content (Join-Path $dir 'failed') 'yes' -Encoding ascii }
+Say '== reboot (ADR 0034)'
+Status 'reboot'
 
-Say '== compare (ADR 0024, section 2)'   # ASCII: Windows PowerShell reads this file as ANSI
-$diff = Compare-Object (Get-Content (Join-Path $dir 'before.txt')) (Get-Content (Join-Path $dir 'after.txt'))
-if ($diff) {
-    Say 'FAIL the machine differs after uninstall:'
-    $diff | ForEach-Object { Say "     $($_.SideIndicator) $($_.InputObject)" }
-    $script:failed = $true
-} else {
-    Say "PASS the machine is as it was: $((Get-Content (Join-Path $dir 'before.txt')).Count) facts compared"
-}
-
-Say '== another TLD from the start (P2-10, ADR 0033)'
-# A fresh Kiln that chose .internal: sites, the hosts block and the root follow it. Not
-# trusted, so no certificate dialog; a static site over HTTP is enough to show the names.
-Check 'web install, then ca init --tld internal: a root for .internal' {
-    Kiln web install | Out-Null
-    Expect 'names under .internal' (Kiln ca init --tld internal)
-}
-Check 'link static-site: served as static-site.internal after hosts sync' {
-    Expect 'static-site.internal' (Kiln link static-site --path "$sites\static-site")
-    Kiln hosts sync --yes | Out-Null
-    $started = Kiln web start
-    $url = [regex]::Match($started, 'http://static-site\.internal[^\s]*').Value
-    if (-not $url) { throw "no .internal URL in:`n$started" }
-    Expect 'static from kiln' (Get $url)
-    Expect 'static-site.internal' (Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -Raw)
-}
-Check 'kiln uninstall again' { Kiln uninstall --yes }
-Start-Sleep -Seconds 2
-& (Join-Path $dir 'snapshot.ps1') | Set-Content (Join-Path $dir 'after2.txt') -Encoding utf8
-$diff = Compare-Object (Get-Content (Join-Path $dir 'before.txt')) (Get-Content (Join-Path $dir 'after2.txt'))
-if ($diff) {
-    Say 'FAIL the machine differs after the second uninstall:'
-    $diff | ForEach-Object { Say "     $($_.SideIndicator) $($_.InputObject)" }
-    $script:failed = $true
-} else {
-    Say 'PASS the machine is as it was after the second uninstall too'
-}
-Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
-Status 'done'

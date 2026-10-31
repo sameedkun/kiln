@@ -1,32 +1,15 @@
 #!/bin/sh
-# Kiln's Linux integration scenario (ADR 0024 §1): snapshot, a full Kiln session, uninstall,
-# snapshot again, compare. Run in the Ubuntu test VM as the test user:
+# Kiln's Linux integration scenario (ADR 0024 §1; ADR 0034): snapshot, then a full Kiln
+# session up to `kiln daemon enable`. It ends with exit code 10, asking run.sh for a reboot;
+# after-reboot.sh then checks what came back, uninstalls, snapshots again and compares. Run in
+# the Ubuntu test VM as the test user:
 #   tests/vm/ubuntu/scenario.sh [path/to/kiln]
-# Needs the test VM's polkit rule (setup-test-vm.sh), so pkexec doesn't ask. Exit 0 = pass.
+# Needs the test VM's polkit rule (setup-test-vm.sh), so pkexec doesn't ask.
 set -u
 K=${1:-$HOME/kiln/target/debug/kiln}
-HERE=$(cd "$(dirname "$0")" && pwd)
-WORK=$(mktemp -d)
-SITES="$WORK/Sites"
-failed=0
-
-check() { # check <description> <command> [args…]: runs it and reports PASS or FAIL
-    desc=$1
-    shift
-    if out=$("$@" 2>&1); then
-        echo "PASS $desc"
-    else
-        echo "FAIL $desc"
-        printf '%s\n' "$out" | tail -8 | sed 's/^/     /'
-        failed=1
-    fi
-}
-
-contains() { # contains <text> <command> [args…]: the command's output contains text
-    text=$1
-    shift
-    "$@" 2>&1 | grep -qF -- "$text"
-}
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+rm -rf "$WORK"
+mkdir -p "$WORK"
 
 sh "$HERE/snapshot.sh" > "$WORK/before.txt"
 if grep -q "dir .* present" "$WORK/before.txt"; then
@@ -194,6 +177,17 @@ shim_node() { sh -c "cd '$1' && bash -ic 'node -v' 2>/dev/null"; }
 check "the node shim in a new terminal follows kiln.toml (20) in toml-app" contains "v20." shim_node "$SITES/toml-app"
 check "the node shim follows .nvmrc (lts/iron) in php-app" contains "v20." shim_node "$SITES/php-app"
 check "the node shim uses the default (22) in laravel-app" contains "v22." shim_node "$SITES/laravel-app"
+# npm prints the versions of the Node it runs on (ADR 0034 §3).
+shim_npm_node() { sh -c "cd '$1' && bash -ic 'npm version --json' 2>/dev/null" | sed -n 's/^ *"node": "\([^"]*\)".*/\1/p'; }
+npm_follows() {
+    toml=$(shim_npm_node "$SITES/toml-app")
+    laravel=$(shim_npm_node "$SITES/laravel-app")
+    case "$toml/$laravel" in
+        20.*/22.*) return 0 ;;
+        *) echo "npm ran on Node '$toml' in toml-app and '$laravel' in laravel-app"; return 1 ;;
+    esac
+}
+check "the npm shim runs on the project's Node: 20 in toml-app (kiln.toml), 22 in laravel-app" npm_follows
 check "kiln which names the .nvmrc" contains ".nvmrc asks for lts/iron" sh -c "cd '$SITES/php-app' && '$K' which"
 # One retry each for npm install and npm run build: a dropped download (packages, or the
 # skeleton's fonts during the build) is the network, not Kiln. Node gives each address only
@@ -256,10 +250,29 @@ check "daemon call web.status (the API)" contains '"running"' "$K" daemon call w
 intermediate_sha() { "$K" ca info | grep 'SHA-256' | sed -n 2p; }
 check "daemon status shows the intermediate certificate's days left (P2-03)" \
     contains "Intermediate certificate:" "$K" daemon status
+# Times the restart (ADR 0034 §2): asks for the static site over HTTP every 50 ms, each on a new
+# connection, writing the time of each answer (ms) to poll.log until poll.stop appears.
+poll() {
+    rm -f "$WORK/poll.log" "$WORK/poll.stop"
+    while [ ! -e "$WORK/poll.stop" ]; do
+        curl -fsS -m 2 -o /dev/null "http://static-site.test:$http/" 2>/dev/null && date +%s%3N >> "$WORK/poll.log"
+        sleep 0.05
+    done
+}
+longest_gap() { # the longest time between two answers, until now
+    { cat "$WORK/poll.log"; date +%s%3N; } | awk 'NR > 1 && $1 - last > worst { worst = $1 - last } { last = $1 } END { print worst + 0 }'
+}
 renewed() { # a new intermediate, a restarted server, and HTTPS still trusted
     before=$(intermediate_sha)
     old=$(caddy_pid)
-    "$K" daemon call ca.renew '{"force":true}' | grep -q '"ok": true' || return 1
+    poll &
+    sleep 1
+    "$K" daemon call ca.renew '{"force":true}' > "$WORK/renew.txt"
+    sleep 2
+    touch "$WORK/poll.stop"
+    wait
+    longest_gap > "$WORK/gap"
+    grep -q '"ok": true' "$WORK/renew.txt" || { cat "$WORK/renew.txt"; return 1; }
     [ "$(intermediate_sha)" != "$before" ] || { echo "the intermediate didn't change"; return 1; }
     [ "$(caddy_pid)" != "$old" ] || { echo "the web server didn't restart"; return 1; }
     # Caddy issues the sites' certificates in the background right after the restart.
@@ -270,6 +283,9 @@ renewed() { # a new intermediate, a restarted server, and HTTPS still trusted
     return 1
 }
 check "renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)" renewed
+echo "     longest time without an answer: $(cat "$WORK/gap" 2>/dev/null) ms"
+check "the renewal's restart left the sites unanswered for under a second (ADR 0034)" \
+    sh -c "gap=\$(cat '$WORK/gap') && [ -s '$WORK/poll.log' ] && [ \"\$gap\" -lt 1000 ]"
 check "daemon status counts the renewal" contains "Renewals by the daemon: 1" "$K" daemon status
 check "daemon stop leaves the web server running" \
     sh -c "'$K' daemon stop && curl -fsS 'http://static-site.test:$http/' | grep -q 'static from kiln'"
@@ -278,54 +294,12 @@ check "daemon enable: an XDG autostart entry starts kilnd at login (P2-02)" \
     sh -c "'$K' daemon enable --yes && grep -q '^Exec=.*kilnd' '$entry' && '$K' daemon status | grep -q 'Starts at login: yes'"
 check "daemon disable removes the autostart entry" \
     sh -c "'$K' daemon disable --yes && [ ! -e '$entry' ]"
-# On again, and running, so uninstall has to stop it and remove the entry.
-check "daemon enable (again, for uninstall)" "$K" daemon enable --yes
+# On again, and left running, so the login after the reboot has to start it, and uninstall
+# then has to stop it and remove the entry.
+check "daemon enable (again, for the reboot and uninstall)" "$K" daemon enable --yes
 
-echo "== uninstall"
-check "kiln uninstall" "$K" uninstall --yes
-sleep 1
-sh "$HERE/snapshot.sh" > "$WORK/after.txt"
-
-echo "== compare (ADR 0024 §2)"
-if diff -u "$WORK/before.txt" "$WORK/after.txt" > "$WORK/diff.txt"; then
-    echo "PASS the machine is as it was: $(wc -l < "$WORK/before.txt") facts compared"
-else
-    echo "FAIL the machine differs after uninstall:"
-    sed 's/^/     /' "$WORK/diff.txt"
-    failed=1
-fi
-
-echo "== another TLD from the start (P2-10, ADR 0033)"
-# A fresh Kiln that chose .internal: sites, the hosts block and the root follow it. Checked
-# over HTTPS against the new root itself, without trusting it anywhere.
-check "web install, then ca init --tld internal: a root for .internal" \
-    sh -c "'$K' web install > /dev/null && '$K' ca init --tld internal | grep -q 'names under .internal'"
-check "link static-site --secure: linked as static-site.internal" \
-    contains "static-site.internal" "$K" link static-site --path "$SITES/static-site" --secure
-check "hosts sync lists static-site.internal" \
-    sh -c "'$K' hosts sync --yes > /dev/null && grep -q 'static-site.internal' /etc/hosts"
-internal_https() {
-    "$K" web start > "$WORK/internal-start.txt" 2>&1 || return 1
-    url=$(grep -oE 'https://static-site\.internal[^ ]*' "$WORK/internal-start.txt" | head -1)
-    root="$("$K" ca info | sed -n 's/^CA directory: //p')/root.crt"
-    [ -n "$url" ] && curl -fsS --cacert "$root" "$url" | grep -q 'static from kiln'
-}
-check "static-site.internal over HTTPS, signed by the .internal root" internal_https
-check "kiln uninstall again" "$K" uninstall --yes
-sleep 2
-sh "$HERE/snapshot.sh" > "$WORK/after2.txt"
-if diff -u "$WORK/before.txt" "$WORK/after2.txt" > "$WORK/diff2.txt"; then
-    echo "PASS the machine is as it was after the second uninstall too"
-else
-    echo "FAIL the machine differs after the second uninstall:"
-    sed 's/^/     /' "$WORK/diff2.txt"
-    failed=1
-fi
-
-if [ "$failed" -eq 0 ]; then
-    echo "== PASSED"
-    rm -rf "$WORK"
-else
-    echo "== FAILED (kept $WORK)"
-fi
-exit "$failed"
+# What after-reboot.sh needs: the ports, and whether anything failed so far.
+echo "$http $https" > "$WORK/ports"
+echo "$failed" > "$WORK/failed"
+echo "== reboot (ADR 0034)"
+exit 10

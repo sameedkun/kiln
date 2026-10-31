@@ -32,7 +32,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp`, `PhpExtOp`, operation descriptions | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins, proxies; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
-| `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/stop/status of `kiln-caddy`, admin client over its Unix socket; proxy targets (`ProxyTarget`, loopback only) | forbidden |
+| `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/restart/stop/status of `kiln-caddy` (restart validates the new config while the old server serves), admin client over its Unix socket; proxy targets (`ProxyTarget`, loopback only) | forbidden |
 | `kiln-fetch` | Verified HTTPS downloads: expected digest first, streaming hash, OS trust store, cache | forbidden |
 | `kiln-php` | PHP runtimes: windows.php.net index, safe extraction, php.ini defaults, start-up check | forbidden |
 | `kiln-node` | Node runtimes ([ADR 0028](adr/0028-node-runtimes-and-shims.md)): the nodejs.org index, version specs, a minimal OpenPGP check of `SHASUMS256.txt` against the release keys in `keys/`, safe zip and tar.gz extraction, start-up check | forbidden |
@@ -142,10 +142,22 @@ host these VMs.
   - HTTPS through Kiln's CA;
   - the shims;
   - `kiln doctor`;
+  - Phase 2: project config, Node, `kiln new`, PHP updates and extensions, proxies and
+    `kilnd`;
+  - a reboot after `kiln daemon enable`, checking what the login brought back
+    ([ADR 0034](adr/0034-phase-2-vm-scenarios.md));
   - then uninstall and the comparison.
+- **Two parts around a reboot:** `scenario.*` runs the session and asks for a reboot. The
+  runner reboots the VM, waits for the automatic login, and runs `after-reboot.*`. Shared
+  helpers are in `lib.*`. The work folder is `~/kiln-test` on Ubuntu (kept when a run
+  fails) and `C:\kiln-test` on Windows.
 - **Ubuntu:** `tests/vm/ubuntu/run.sh <vm-address>` from Git Bash. It copies the working
-  tree in, builds it, and runs `scenario.sh`. One-time setup: `setup-test-vm.sh` (a polkit
+  tree in, builds it, and runs both parts. One-time setup: `setup-test-vm.sh` (a polkit
   rule for the test user, test VM only). Shut the Windows VM down first.
+  - A run cut off midway leaves Kiln set up, and the next run refuses to start. Run
+    `~/kiln/target/debug/kiln uninstall --yes` in the VM first.
+  - After a host restart the VM's address changes. Find it by its MAC, and check that its
+    host key matches the one in `known_hosts` before adding the new address.
 - **Windows:** `tests/vm/windows/run.ps1 -Bin <folder>` from an elevated PowerShell (Hyper-V).
   - Build the binaries first, with the C runtime linked in:
     `$env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win`.

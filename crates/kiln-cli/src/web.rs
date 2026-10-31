@@ -175,8 +175,12 @@ fn restart_if_ca_changed(store: &StateStore) -> Result<bool, String> {
     println!(
         "Kiln's CA changed since the web server started; restarting it so sites get certificates from the new one."
     );
-    stop()?;
-    start(None, None, false)?;
+    // Only Caddy restarts: the PHP workers don't depend on the CA, and the new config is
+    // validated before the old server stops, so sites go unanswered for a moment (ADR 0034).
+    record_issuer(&config)?;
+    let pid = server()?.restart(&config).map_err(|e| e.to_string())?;
+    wait_for_certificates(store)?;
+    println!("Web server restarted (PID {pid}); the PHP workers kept running.");
     Ok(true)
 }
 
