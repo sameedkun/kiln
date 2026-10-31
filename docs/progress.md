@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-31 · **Current phase:** **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-31 · **Current phase:** **Phase 3 planned** (12 tasks; ADR 0035; next: P3-01) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0034 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0035 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1467,6 +1467,35 @@ VMs.**
   - The P2-02 reboot scripts (`autostart.ps1`, `autostart.sh`) stay, for quick checks and
     `-HardReset`.
 
+## Phase 3: services (planned)
+
+Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux). Planned
+2026-10-31, with [ADR 0035](adr/0035-services.md) for instances, providers, ports, data and
+`.env` wiring.
+
+- **Scope:** Windows and Linux. macOS moved out to Phase 4b
+  ([ADR 0007](adr/0007-platform-delivery-order.md), amended): there's no Apple hardware to
+  test on, and no Apple Developer account for notarization yet.
+- **Binary sources,** checked 2026-10-31:
+  - MySQL and MariaDB come from the vendor on both platforms.
+  - PostgreSQL has no Linux binaries since version 10, so Kiln builds its own (P3-05).
+  - Valkey has no Windows build, so a spike (P3-02) checks Garnet.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| P3-01 | Service framework, instances, second supervisor | next | ADR 0035 §1–3 |
+| P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | planned | ADR 0035 §8 |
+| P3-03 | Ports and coexistence for services | planned | ADR 0035 §5 |
+| P3-04 | MySQL and MariaDB | planned | vendor downloads |
+| P3-05 | PostgreSQL (own Linux builds) | planned | |
+| P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
+| P3-07 | Mailpit, UI at `mail.test` | planned | |
+| P3-08 | `.env` wiring with byte-exact undo | planned | ADR 0035 §9 |
+| P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | planned | |
+| P3-10 | `kilnd` and services | planned | |
+| P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
+| P3-12 | VM scenarios for Phase 3 | planned | extends ADR 0024 |
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1555,6 +1584,7 @@ VMs.**
 | 2026-10-30 | **P2-09 done:** ADR 0032. `kiln proxy <name> <target> [--secure]` serves `<name>.test` from a loopback dev server through Caddy, with the dev server's own `Host`, WebSocket upgrades for live reload, and HTTPS like any site; `kiln unproxy` removes it. Proxies have their own table (schema v6). Fixed I-67 (php.ini replace retried briefly on Windows) and I-69 (`kiln` now waits for Caddy's certificate before reporting a `--secure` change done); I-68 turned off the firewall prompt in the Windows test VM; I-70 logged (Node's 250 ms connect limit vs Bunny Fonts). Scenarios: Windows 66 checks, Ubuntu 65. |
 | 2026-10-30 | **P2-10 done:** ADR 0033. `kiln ca init --tld <name>` chooses the development TLD (only `test`, `internal`, `example`, `invalid`), recorded as the `tld` setting that every command and the shims read; the root's own TLD always wins, and another TLD over an existing root is refused. Fixed I-71 (Caddy installed its own `local` root into the trust stores for a `.internal` site; now declared with `install_trust: false`) and I-72 (the first site change after `web start` restarted the server). Scenarios: Windows 71 checks, Ubuntu 72, each with a second stage under `.internal` and a second uninstall comparison. |
 | 2026-10-31 | **P2-11 done, Phase 2 done:** ADR 0034. Each VM scenario now reboots after `kiln daemon enable` and checks that the login started `kilnd`, which brought the web server, PHP and the HTTPS sites back, before uninstall and the comparison; `npm` is checked on the project's Node; the renewal restart forced through the API is timed. That found I-73 (8.1 s on Windows): the restart after a CA change now restarts only Caddy, on a config validated while the old server serves (about 0.1 s; a client sees 0.67 s on Windows, 0.07 s on Ubuntu). Scenarios: Windows 80 checks, Ubuntu 80. Phase 2's exit criteria are met in both VMs. |
+| 2026-10-31 | **Phase 3 planned:** exit criteria and 12 tasks (P3-01 to P3-12) in plan.md, for Windows and Linux. ADR 0035: services as per-user instances (several versions side by side) behind compiled-in providers, run by a second `kiln-supervisor`, loopback only, on their usual port or the next free one; development credentials; data never deleted without `--delete-data`; GPL services downloaded from the vendor; PostgreSQL built by Kiln for Linux; a spike decides Windows' cache (Garnet). macOS moves to a new Phase 4b (ADR 0007 amended): no Apple hardware to test on and no Developer account yet. Next: P3-01. |
 
 ## How to update this file
 

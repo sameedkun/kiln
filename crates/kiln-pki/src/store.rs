@@ -65,7 +65,7 @@ impl KeyProtector for Dpapi {
 }
 
 /// The key stored as-is, the file restricted to the user (`0600` on Unix): where nothing
-/// better exists (macOS until Phase 3; Linux without a Secret Service uses the same format).
+/// better exists (macOS until Phase 4b; Linux without a Secret Service uses the same format).
 #[derive(Debug, Default)]
 pub struct PermissionsOnly;
 

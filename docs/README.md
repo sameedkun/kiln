@@ -22,7 +22,7 @@ working name). Start here.
 | [0004](adr/0004-reversible-operation-engine.md) | Every system change goes through a reversible, journaled operation engine | accepted, implemented |
 | [0005](adr/0005-web-server.md) | Caddy as the web server, driven by its JSON admin API | accepted (spike 01) |
 | [0006](adr/0006-windows-dns-strategy.md) | Windows `.test` resolution via a managed hosts block; NRPT rejected for now | accepted (spike 02) |
-| [0007](adr/0007-platform-delivery-order.md) | Windows and Linux first, macOS from Phase 3 | accepted |
+| [0007](adr/0007-platform-delivery-order.md) | Windows and Linux first; macOS in its own Phase 4b (amended 2026-10-31: no Apple hardware to test on, no Developer account yet) | accepted, amended |
 | [0008](adr/0008-unsafe-confined-to-kiln-sys.md) | `unsafe` only in the audited `kiln-sys` crate (enforced in CI) | accepted (resolves I-38) |
 | [0009](adr/0009-windows-privileged-helper.md) | Windows helper: per-batch UAC, private single-instance pipe, HMAC-signed messages, fixed operation list | accepted, implemented (P1-02) |
 | [0010](adr/0010-local-certificate-authority.md) | Local CA: `.test`-only (name-constrained) root, DPAPI-protected key, 30-day intermediate for Caddy, per-user reversible trust; Firefox/NSS plan | accepted, implemented (P1-05) |
@@ -50,6 +50,7 @@ working name). Start here.
 | [0032](adr/0032-proxy-sites.md) | Proxy sites: `kiln proxy <name> <target> [--secure]` (a port, `host:port` or `http(s)://host:port`), `kiln unproxy`; loopback targets only; Caddy `reverse_proxy` with the target's `Host` (dev servers such as Vite 6 check it) and `X-Forwarded-*` for the `.test` name; HTTPS targets without certificate checks; WebSockets (HMR) pass through; own `proxies` table (schema v6); shadows a parked subfolder, refused over a link; not journaled | accepted (P2-09) |
 | [0033](adr/0033-configurable-tld.md) | Configurable development TLD: chosen once at `kiln ca init --tld <name>`, from the reserved names `test` (default), `internal`, `example`, `invalid`; recorded as the `tld` setting and read by every command and the shims; an existing root decides, and another TLD needs a new root (refused for now); `Tld::recorded` keeps names allowed by the earlier rules readable for undo and trust | accepted (P2-10) |
 | [0034](adr/0034-phase-2-vm-scenarios.md) | Phase 2 in the VM scenarios: each scenario reboots the VM after `kiln daemon enable` and checks that the login started `kilnd`, which brought the web server back, before uninstall and the comparison; the renewal restart is timed (under a second without an answer over HTTP); `npm` is checked on the project's Node | accepted (P2-11) |
+| [0035](adr/0035-services.md) | Services (Phase 3): per-user instances of MySQL, MariaDB, PostgreSQL, a Redis-compatible cache and Mailpit, several versions side by side; compiled-in providers with contract tests; a second `kiln-supervisor`; loopback only, usual port or the next free one; development credentials; data kept unless `--delete-data`; GPL services from the vendor, PostgreSQL built by Kiln for Linux, Windows' cache decided by a spike; journaled `.env` key wiring with byte-exact undo | accepted (Phase 3) |
 
 ## Conventions
 

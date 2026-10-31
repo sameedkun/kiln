@@ -94,8 +94,8 @@ pub fn installed(locations: &[(Tool, PathBuf)]) -> Vec<(Tool, PathBuf)> {
     out
 }
 
-/// The tools installed on this machine, from their well-known folders (Windows only for now;
-/// Linux and macOS come with P1-04 and Phase 3).
+/// Linux detection is still to come; macOS comes with Phase 4b).
+/// Linux came with P1-04; macOS comes with Phase 4b).
 #[must_use]
 pub fn installed_here() -> Vec<(Tool, PathBuf)> {
     if !cfg!(windows) {

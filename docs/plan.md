@@ -24,9 +24,10 @@ previewed and undone.
 |---|---|---|---|---|
 | **0** | Foundations: repo, CI, operation engine, key decisions via spikes | all (CI) | 2–3 weeks | **done** (one optional recheck open) |
 | **1** | MVP CLI: serve PHP sites over trusted HTTPS, per-site PHP, clean uninstall | Windows, Linux | 6–8 weeks | **done** 2026-10-27: exit criteria met in both VMs |
-| **2** | Developer tooling: Node, Composer, Laravel installer, `kiln.toml`, daemon + local API | Windows, Linux | 4–5 weeks | **in progress** (planned 2026-10-27) |
-| 3 | Services (MySQL, MariaDB, PostgreSQL, Valkey, Mailpit) + macOS bring-up | + macOS | 6–8 weeks | later |
-| 4 | Tauri GUI, log viewer, dev processes, Xdebug on demand, dump capture | all | 6–8 weeks | later |
+| **2** | Developer tooling: Node, Composer, Laravel installer, `kiln.toml`, daemon + local API | Windows, Linux | 4–5 weeks | **done** 2026-10-31: exit criteria met in both VMs |
+| **3** | Services: MySQL, MariaDB, PostgreSQL, a Redis-compatible cache, Mailpit; `.env` wiring | Windows, Linux | 6–8 weeks | **planned** 2026-10-31 ([ADR 0035](adr/0035-services.md)) |
+| 4 | Tauri GUI, log viewer, dev processes, Xdebug on demand, dump capture | Windows, Linux (macOS in 4b) | 6–8 weeks | later |
+| 4b | macOS bring-up: resolver file, Keychain, launchd, privileged helper, PHP, services and the GUI on macOS ([ADR 0007](adr/0007-platform-delivery-order.md), amended) | macOS | 5–7 weeks | later; needs Apple hardware for testing |
 | 5 | Installers, signed updates, MCP server, share tunnels, external security review → 1.0 | all | 4–6 weeks | later |
 | 6 | Backlog: insights, SPX profiler, Windows wildcard DNS, LAN sharing, ARM64 Windows | — | — | later |
 
@@ -120,16 +121,65 @@ order, and P2-11 last.
   ([I-59](issues.md#i-59)).
 - [I-39](issues.md#i-39): the optional Edge DoH recheck.
 
+## Phase 3: services (Windows + Linux)
+
+Design: [ADR 0035](adr/0035-services.md). macOS moved to Phase 4b
+([ADR 0007](adr/0007-platform-delivery-order.md), amended).
+
+**Exit criteria**
+
+- **Databases.** MySQL, MariaDB and PostgreSQL run as Kiln instances, two versions of one
+  kind side by side. A new Laravel app migrates and serves pages against each.
+- **Cache and mail.** On Linux, Laravel's cache, sessions and queue work against Valkey. On
+  Windows they work against the cache the spike chose, or Kiln says plainly that Windows has
+  no cache service yet. Mail sent by the app is caught by Mailpit, whose UI is at
+  `https://mail.test`.
+- **Next to other tools.** Herd (with its services where available), XAMPP or a system
+  MySQL/PostgreSQL keep their ports, processes and data. Kiln takes the next free port and
+  says why.
+- **Wiring.** `kiln env use` changes only the needed `.env` keys, after a preview, and
+  `kiln undo` restores `.env` byte for byte. A project with `[services]` in `kiln.toml`
+  (or a `herd.yml` with services) is brought up by `kiln services up`.
+- **Lifecycle.** Services survive `kiln web stop`. With `kilnd`, they come back after a
+  crash and after a reboot.
+- **Data.** No command deletes a database without `--delete-data`. `kiln db dump` and
+  `restore` round-trip a database.
+- **Uninstall.** With `--delete-data`, the machine is as it was. With `--keep-data`, the
+  only thing left is the named data folder. The VM scenarios on Windows (with Herd) and
+  Ubuntu verify all of the above.
+
+**Tasks** (status is tracked in [progress.md](progress.md#phase-3))
+
+| ID | Task | Depends on | Notes |
+|---|---|---|---|
+| P3-01 | Service framework: instances in the state database, the `ServiceProvider` trait and its contract tests, `kiln service add/list/start/stop/restart/logs/remove`, `kiln services up/down`, a second `kiln-supervisor` for services | — | ADR 0035 §1–3; the supervisor generalized from php-cgi pools to programs |
+| P3-02 | Spike: a Redis-compatible cache on Windows. Garnet against Laravel's cache (locks, tags), sessions, queue (Lua) and rate limiter | — | ADR 0035 §8; decides whether Windows gets a cache service in Phase 3 |
+| P3-03 | Port choice and coexistence for services: usual port, else the next free one; `kiln doctor` names other tools' services | P3-01 | ADR 0035 §5, extends [ADR 0019](adr/0019-coexistence.md) |
+| P3-04 | MySQL and MariaDB providers: vendor downloads (pinned digests, license shown), data folder set-up, graceful stop, `kiln db` client | P3-01 | Linux: libraries such as `libaio.so.1` found without system changes |
+| P3-05 | PostgreSQL provider: EDB archives on Windows; Kiln's own relocatable Linux builds from the PHP build pipeline | P3-01 | ADR 0035 §8, [ADR 0025](adr/0025-own-static-linux-php-builds.md); `trust` on loopback only |
+| P3-06 | Cache provider: Valkey on Linux; on Windows what P3-02 chose | P3-01, P3-02 | |
+| P3-07 | Mailpit provider, with its UI served as `https://mail.test` through a proxy site | P3-01 | [ADR 0032](adr/0032-proxy-sites.md) |
+| P3-08 | `.env` wiring: `kiln env use <instance>`, a journaled key-level operation with preview and byte-exact undo; creates the project's database; `kiln new --db` | P3-04 | ADR 0035 §9 |
+| P3-09 | Project config: `[services]` in `kiln.toml`, `kiln services up` in a project, `herd.yml` services in `kiln import herd` | P3-08 | Finishes [ADR 0027](adr/0027-project-config-kiln-toml.md) |
+| P3-10 | `kilnd` and services: the watchdog restarts the services supervisor after a crash or reboot; `service.*` API methods | P3-01 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |
+| P3-11 | Data safety: `kiln db dump/restore`; `service remove` and `uninstall` keep data unless `--delete-data`; `--keep-data` moves it out | P3-04 | ADR 0035 §7 |
+| P3-12 | VM scenarios for the Phase 3 exit criteria, on Windows (with Herd) and Ubuntu, including a system MySQL or PostgreSQL to coexist with | all | Extends [ADR 0024](adr/0024-integration-test-vms.md); adding that service to the test VMs' `clean` checkpoints needs approval first |
+
+**Suggested order:** P3-01 and the P3-02 spike first, then P3-03, then the providers P3-04
+→ P3-05 → P3-06 → P3-07, then P3-08 → P3-09, P3-10 and P3-11, and P3-12 last.
+
 ## Phase 3–5 scope (summary)
 
-- **Phase 3:** `ServiceProvider` plug-ins with multiple instances, a port allocator and
-  autostart; `.env` key-level wiring with a journal; macOS adapters (resolver file plus stub,
-  Keychain, launchd, `SMAppService`, notarization).
+- **Phase 3:** see above.
 - **Phase 4:** Tauri tray app (sites, PHP/Node, services, onboarding that previews every system
   change, journal viewer with undo); log viewer; dev processes; Xdebug cookie routing; dump
   capture via an open-source collector.
-- **Phase 5:** MSIX/winget, Homebrew cask, deb/rpm/AppImage; signed update manifests; `kiln mcp`;
-  share-tunnel plug-ins; workspaces; external security review; SBOM.
+- **Phase 4b:** macOS adapters (resolver file plus stub, Keychain, launchd, a privileged
+  helper through `SMAppService`); PHP and services builds for macOS; the GUI on macOS. Needs
+  Apple hardware to test on. Builds stay unsigned until Phase 5.
+- **Phase 5:** MSIX/winget, Homebrew cask, deb/rpm/AppImage; Developer ID signing and
+  notarization on macOS (needs an Apple Developer Program account); signed update
+  manifests; `kiln mcp`; share-tunnel plug-ins; workspaces; external security review; SBOM.
 
 ## Out of scope
 
