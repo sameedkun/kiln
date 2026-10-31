@@ -29,6 +29,7 @@ kiln-node.workspace = true
 kiln-php.workspace = true
 kiln-runtime.workspace = true
 kiln-sites.workspace = true
+kiln-services.workspace = true
 kiln-supervisor.workspace = true
 kiln-web.workspace = true
 time.workspace = true

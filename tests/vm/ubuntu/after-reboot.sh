@@ -50,7 +50,15 @@ check "a PHP site over HTTPS, trusted through the system store, on its own PHP 8
 check "the Laravel app over HTTPS" contains "Laravel" curl -fsS "https://laravel-app.test:$https/"
 
 echo "== uninstall"
-check "kiln uninstall" "$K" uninstall --yes
+refused() { # Mailpit's caught mail is service data (ADR 0036 §9)
+    if "$K" uninstall --yes > "$WORK/refused.txt" 2>&1; then
+        echo "uninstall went ahead without --delete-data"
+        return 1
+    fi
+    grep -q "hold data" "$WORK/refused.txt" && [ -d "$HOME/.local/share/kiln" ] && [ -d "$HOME/.local/state/kiln" ]
+}
+check "kiln uninstall refuses while services hold data, and changes nothing" refused
+check "kiln uninstall --delete-data" "$K" uninstall --yes --delete-data
 sleep 1
 sh "$HERE/snapshot.sh" > "$WORK/after.txt"
 

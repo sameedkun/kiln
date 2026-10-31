@@ -66,6 +66,15 @@ const MIGRATIONS: &[&str] = &[
          secure     INTEGER NOT NULL DEFAULT 0 CHECK (secure IN (0, 1)),
          created_ms INTEGER NOT NULL
      ) STRICT;",
+    // v7: service instances (ADR 0035, 0036).
+    "CREATE TABLE services (
+         name       TEXT    PRIMARY KEY,  -- e.g. mailpit-1
+         kind       TEXT    NOT NULL,     -- e.g. mailpit
+         version    TEXT    NOT NULL,     -- exact, e.g. 1.31.6
+         ports      TEXT    NOT NULL,     -- JSON object, role -> port, e.g. {\"smtp\":1025}
+         enabled    INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),  -- should run
+         created_ms INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 /// Schema version this build creates and understands.

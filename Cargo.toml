@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper", "crates/kiln-pki", "crates/kiln-web", "crates/kiln-fetch", "crates/kiln-php", "crates/kiln-supervisor", "crates/kiln-sites", "crates/kiln-runtime", "crates/kiln-doctor", "crates/kiln-coexist", "crates/kiln-daemon", "crates/kiln-node"]
+members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper", "crates/kiln-pki", "crates/kiln-web", "crates/kiln-fetch", "crates/kiln-php", "crates/kiln-supervisor", "crates/kiln-sites", "crates/kiln-runtime", "crates/kiln-doctor", "crates/kiln-coexist", "crates/kiln-daemon", "crates/kiln-node", "crates/kiln-services"]
 exclude = ["spikes"]
 
 [workspace.package]
@@ -29,6 +29,7 @@ kiln-sites = { path = "crates/kiln-sites" }
 kiln-runtime = { path = "crates/kiln-runtime" }
 kiln-doctor = { path = "crates/kiln-doctor" }
 kiln-coexist = { path = "crates/kiln-coexist" }
+kiln-services = { path = "crates/kiln-services" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -2,6 +2,7 @@
 //!
 //! [ADR 0014]: ../../../docs/adr/0014-php-cgi-supervisor.md
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::net::TcpStream;
@@ -23,8 +24,13 @@ pub const EXE_NAME: &str = if cfg!(windows) {
     "kiln-supervisor"
 };
 
-const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long PHP workers get to start listening.
+pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the PHP supervisor gets to stop its workers and exit.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a supervisor of programs gets: each program may take its stop command, a wait
+/// and SIGTERM, about 30 s, before it is killed.
+pub const PROGRAM_STOP_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SupervisorError {
@@ -32,10 +38,14 @@ pub enum SupervisorError {
     Io { context: String, source: io::Error },
     #[error("{} is missing; build or install kiln-supervisor next to kiln", .0.display())]
     MissingBinary(PathBuf),
-    #[error("the PHP supervisor exited during start-up:\n{0}")]
+    #[error("the supervisor exited during start-up:\n{0}")]
     Exited(String),
-    #[error("PHP workers didn't start listening within {seconds} s:\n{log}")]
-    NotReady { seconds: u64, log: String },
+    #[error("{what} didn't start listening within {seconds} s:\n{log}")]
+    NotReady {
+        what: &'static str,
+        seconds: u64,
+        log: String,
+    },
 }
 
 fn io_err(context: impl Into<String>) -> impl FnOnce(io::Error) -> SupervisorError {
@@ -54,12 +64,43 @@ pub fn default_exe() -> io::Result<PathBuf> {
 pub struct SupervisorHandle {
     exe: PathBuf,
     dir: PathBuf,
+    /// What it runs, for messages: "PHP workers" or "services".
+    what: &'static str,
+    ready_timeout: Duration,
+    stop_timeout: Duration,
 }
 
 impl SupervisorHandle {
+    /// The PHP supervisor of `dir`.
     #[must_use]
     pub fn new(exe: PathBuf, dir: PathBuf) -> Self {
-        Self { exe, dir }
+        Self {
+            exe,
+            dir,
+            what: "PHP workers",
+            ready_timeout: READY_TIMEOUT,
+            stop_timeout: STOP_TIMEOUT,
+        }
+    }
+
+    /// A supervisor of programs, such as services ([ADR 0036] §1): `what` names them in
+    /// messages, and they get `ready_timeout` to start listening.
+    ///
+    /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+    #[must_use]
+    pub fn for_programs(
+        exe: PathBuf,
+        dir: PathBuf,
+        what: &'static str,
+        ready_timeout: Duration,
+    ) -> Self {
+        Self {
+            exe,
+            dir,
+            what,
+            ready_timeout,
+            stop_timeout: PROGRAM_STOP_TIMEOUT,
+        }
     }
 
     #[must_use]
@@ -145,18 +186,18 @@ impl SupervisorHandle {
         mut child: Option<&mut Child>,
         log_start: u64,
     ) -> Result<(), SupervisorError> {
-        let deadline = Instant::now() + READY_TIMEOUT;
+        let deadline = Instant::now() + self.ready_timeout;
         loop {
             if let Some(child) = child.as_deref_mut()
                 && let Ok(Some(status)) = child.try_wait()
             {
                 return Err(SupervisorError::Exited(format!(
                     "{status}\n{}",
-                    self.recent_log(log_start)
+                    self.recent_log(log_start, pools)
                 )));
             }
             let ready = pools
-                .upstreams()
+                .ready_addresses()
                 .iter()
                 .all(|addr| TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok());
             if ready {
@@ -164,8 +205,9 @@ impl SupervisorHandle {
             }
             if Instant::now() >= deadline {
                 return Err(SupervisorError::NotReady {
-                    seconds: READY_TIMEOUT.as_secs(),
-                    log: self.recent_log(log_start),
+                    what: self.what,
+                    seconds: self.ready_timeout.as_secs(),
+                    log: self.recent_log(log_start, pools),
                 });
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -184,16 +226,18 @@ impl SupervisorHandle {
             self.pid_file().remove()?;
             return Ok(None);
         };
-        let exited = background::wait_until(|| !background::is_ours(pid, &self.exe), STOP_TIMEOUT);
+        let exited =
+            background::wait_until(|| !background::is_ours(pid, &self.exe), self.stop_timeout);
         if !exited {
-            background::terminate(pid, &self.exe, STOP_TIMEOUT)?;
+            background::terminate(pid, &self.exe, self.stop_timeout)?;
         }
         self.pid_file().remove()?;
         Ok(Some(pid))
     }
 
-    /// Supervisor log lines written after byte `offset` plus the tail of `php-errors.log`.
-    fn recent_log(&self, offset: u64) -> String {
+    /// Supervisor log lines written after byte `offset`, plus the tails of `php-errors.log`
+    /// and of each program's own log in `pools`.
+    fn recent_log(&self, offset: u64, pools: &Pools) -> String {
         let tail = |path: &Path, from: u64, lines: usize| {
             fs::read(path)
                 .ok()
@@ -210,6 +254,15 @@ impl SupervisorHandle {
         if !errors.is_empty() {
             text.push_str("\nphp-errors.log:\n");
             text.push_str(&errors);
+        }
+        for pool in &pools.pools {
+            let Some(spec) = &pool.program_spec else {
+                continue;
+            };
+            let lines = tail(&spec.log, 0, 8);
+            if !lines.is_empty() {
+                let _ = write!(text, "\n{}:\n{lines}", pool.id);
+            }
         }
         text
     }

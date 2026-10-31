@@ -709,6 +709,7 @@ dependencies = [
  "kiln-pki",
  "kiln-platform",
  "kiln-runtime",
+ "kiln-services",
  "kiln-sites",
  "kiln-state",
  "kiln-supervisor",
@@ -884,6 +885,19 @@ dependencies = [
  "kiln-state",
  "kiln-sys",
  "tempfile",
+]
+
+[[package]]
+name = "kiln-services"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "kiln-sys",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "zip",
 ]
 
 [[package]]

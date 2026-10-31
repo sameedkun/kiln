@@ -1,4 +1,4 @@
-//! `kiln uninstall [--dry-run] [--keep-files] [--yes]` ([ADR 0018] §3–7): stop Kiln's
+//! `kiln uninstall [--dry-run] [--keep-files] [--yes] [--delete-data]` ([ADR 0018] §3–7): stop
 //! processes, undo every system change newest first, then delete Kiln's own folders, with the
 //! state folder last. The full plan is always printed first.
 //!
@@ -30,6 +30,11 @@ pub struct Plan {
     pub folders: Vec<Folder>,
     /// The root key is in the desktop keyring (Linux), outside Kiln's folders.
     pub key_in_keyring: bool,
+    /// Services' data folders with something in them, and their sizes: deleted only with
+    /// `--delete-data` ([ADR 0036] §9).
+    ///
+    /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+    pub service_data: Vec<(PathBuf, u64)>,
 }
 
 /// Whether `dir` looks like one of Kiln's folders: its last component is `Kiln` (any case),
@@ -86,7 +91,7 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 /// Total size of the files under `dir`, not following links or junctions.
-fn dir_size(dir: &Path) -> u64 {
+pub(crate) fn dir_size(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -100,7 +105,7 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
-fn mb(bytes: u64) -> String {
+pub(crate) fn mb(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)] // display only
     let mb = bytes as f64 / 1_048_576.0;
     format!("{mb:.1} MB")
@@ -117,6 +122,11 @@ fn build_plan() -> Result<Plan, String> {
         plan.stop
             .push(format!("Kiln's PHP workers (supervisor PID {pid})"));
     }
+    if let Ok(ProcStatus::Running { pid }) = crate::service::supervisor()?.status() {
+        plan.stop
+            .push(format!("Kiln's services (supervisor PID {pid})"));
+    }
+    plan.service_data = crate::service::data_folders();
 
     let mut projects = Vec::new();
     if let Ok(store) = crate::web::open_store() {
@@ -210,20 +220,62 @@ fn print_plan(plan: &Plan, keep_files: bool) {
     if plan.key_in_keyring && !keep_files {
         println!("     and the CA root key's entry in your desktop keyring");
     }
+    if !plan.service_data.is_empty() && !keep_files {
+        println!("     including the services' data, deleted only with --delete-data:");
+        for (path, bytes) in &plan.service_data {
+            println!("       {}  ({})", path.display(), mb(*bytes));
+        }
+    }
     println!(
         "Never touched: your project folders (linked or parked), other tools such as Laravel Herd"
     );
     println!("and other PHP installs, and the kiln programs themselves.");
 }
 
-pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), String> {
+/// `kiln uninstall`'s flags.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+#[allow(clippy::struct_excessive_bools)] // one per flag
+pub struct Options {
+    /// Show the plan and change nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Stop and undo system changes, but keep Kiln's folders (e.g. before reinstalling).
+    #[arg(long)]
+    pub keep_files: bool,
+    /// Do not ask for confirmation (the plan is still printed).
+    #[arg(long, short)]
+    pub yes: bool,
+    /// Also delete the services' data (databases, caught mail). Without it, uninstall
+    /// refuses while there is any.
+    #[arg(long)]
+    pub delete_data: bool,
+}
+
+/// Databases are the user's work: never deleted without being asked ([ADR 0036] §9).
+///
+/// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+fn refuse_data_loss(plan: &Plan, options: Options) -> Result<(), String> {
+    if plan.service_data.is_empty() || options.keep_files || options.delete_data {
+        return Ok(());
+    }
+    Err(
+        "Kiln's services hold data (listed above). Nothing was changed.\n\
+         To delete it with Kiln, run `kiln uninstall --delete-data`. To keep it, copy those \
+         folders somewhere else first, or use --keep-files."
+            .into(),
+    )
+}
+
+pub fn uninstall(options: Options) -> Result<(), String> {
+    let keep_files = options.keep_files;
     let plan = build_plan()?;
     print_plan(&plan, keep_files);
-    if dry_run {
+    if options.dry_run {
         println!("Dry run: nothing was changed.");
         return Ok(());
     }
-    if !yes && !crate::apply::confirm("Uninstall Kiln as shown?") {
+    refuse_data_loss(&plan, options)?;
+    if !options.yes && !crate::apply::confirm("Uninstall Kiln as shown?") {
         println!("Nothing was changed.");
         return Ok(());
     }
@@ -240,6 +292,12 @@ pub fn uninstall(dry_run: bool, keep_files: bool, yes: bool) -> Result<(), Strin
         .map_err(|e| e.to_string())?
     {
         println!("Stopped the PHP workers (supervisor PID {pid}).");
+    }
+    if let Some(pid) = crate::service::supervisor()?
+        .stop()
+        .map_err(|e| e.to_string())?
+    {
+        println!("Stopped the services (supervisor PID {pid}).");
     }
 
     // 2. Undo, newest first; stop at the first failure and delete nothing.

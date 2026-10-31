@@ -30,13 +30,14 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-core` | Domain types (TLD, host names; `ALLOWED_TLDS`, `Tld::new` for a choice, `Tld::recorded` for reading back) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
 | `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp`, `PhpExtOp`, operation descriptions | forbidden |
-| `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins, proxies; JSONL import | forbidden |
+| `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins, proxies, service instances; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
 | `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/restart/stop/status of `kiln-caddy` (restart validates the new config while the old server serves), admin client over its Unix socket; proxy targets (`ProxyTarget`, loopback only) | forbidden |
 | `kiln-fetch` | Verified HTTPS downloads: expected digest first, streaming hash, OS trust store, cache | forbidden |
 | `kiln-php` | PHP runtimes: windows.php.net index, safe extraction, php.ini defaults, start-up check | forbidden |
 | `kiln-node` | Node runtimes ([ADR 0028](adr/0028-node-runtimes-and-shims.md)): the nodejs.org index, version specs, a minimal OpenPGP check of `SHASUMS256.txt` against the release keys in `keys/`, safe zip and tar.gz extraction, start-up check | forbidden |
-| `kiln-supervisor` | php-cgi supervisor library and `kiln-supervisor` binary: pools, staggered recycling, respawn, CLI handle | forbidden |
+| `kiln-supervisor` | Supervisor library and `kiln-supervisor` binary: php-cgi and PHP-FPM pools, staggered recycling, respawn; programs such as services, stopped gracefully ([ADR 0036](adr/0036-service-framework.md)); CLI handle | forbidden |
+| `kiln-services` | Service providers ([ADR 0035](adr/0035-services.md), [ADR 0036](adr/0036-service-framework.md)): the `ServiceProvider` trait and its contract tests, pinned releases and their install under Kiln names, instance folders; Mailpit | forbidden |
 | `kiln-sites` | Which sites are served: links + parked folders, framework drivers (document root), each project's `kiln.toml` (settings, aliases; ADR 0027) and reading a Herd `herd.yml` | forbidden |
 | `kiln-runtime` | The development TLD (`tld` setting); which PHP and Node run what (default, pins, folder → site; the nearest `kiln.toml` / `.nvmrc` / `.node-version`); the `kiln-shim` binary (`php`, `composer`, `node`, `npm`, `npx`, `corepack`) | forbidden |
 | `kiln-doctor` | `kiln doctor` rules: facts → findings (ok/info/warn/fail with fixes), text and JSON reports | forbidden |

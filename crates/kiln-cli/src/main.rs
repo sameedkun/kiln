@@ -21,6 +21,7 @@ mod php;
 mod pool;
 mod project;
 mod proxy;
+mod service;
 mod uninstall;
 mod web;
 
@@ -155,6 +156,16 @@ enum Command {
         #[command(subcommand)]
         from: ImportFrom,
     },
+    /// Services such as Mailpit: instances that run on this computer only, each with its data.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Start or stop all services at once.
+    Services {
+        #[command(subcommand)]
+        action: ServicesAction,
+    },
     /// Kiln's optional background daemon (kilnd): keeps the web server running.
     Daemon {
         #[command(subcommand)]
@@ -169,15 +180,8 @@ enum Command {
     /// Remove Kiln: stop it, undo every system change (newest first), delete its folders.
     /// Always shows the full plan first; your projects and other tools are never touched.
     Uninstall {
-        /// Show the plan and change nothing.
-        #[arg(long)]
-        dry_run: bool,
-        /// Stop and undo system changes, but keep Kiln's folders (e.g. before reinstalling).
-        #[arg(long)]
-        keep_files: bool,
-        /// Do not ask for confirmation (the plan is still printed).
-        #[arg(long, short)]
-        yes: bool,
+        #[command(flatten)]
+        options: uninstall::Options,
     },
     /// Undo a recorded operation by its number (see `kiln history`), or the newest one.
     Undo {
@@ -203,6 +207,54 @@ enum ImportFrom {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceAction {
+    /// Download (checked against Kiln's pinned SHA-256), set up and start a service.
+    Add {
+        /// What to run, e.g. mailpit.
+        kind: String,
+        /// A pinned version, e.g. 1.31 (default: the newest Kiln has).
+        #[arg(long)]
+        version: Option<String>,
+        /// Its name (default: <kind>-<major>, e.g. mailpit-1).
+        #[arg(long)]
+        name: Option<String>,
+        /// A port by role, e.g. smtp=2525 (default: the usual one, or the next free one).
+        #[arg(long = "port", value_name = "ROLE=PORT")]
+        ports: Vec<String>,
+    },
+    /// List the services, their ports and whether they run.
+    List,
+    /// Start services (all of them without names).
+    Start { names: Vec<String> },
+    /// Stop services (all of them without names). Their data stays.
+    Stop { names: Vec<String> },
+    /// Stop and start a service again.
+    Restart { name: String },
+    /// Show a service's recent output.
+    Logs {
+        name: String,
+        /// How many lines.
+        #[arg(long, default_value_t = 40)]
+        lines: usize,
+    },
+    /// Stop a service and remove it. Its data is kept unless --delete-data is given.
+    Remove {
+        name: String,
+        /// Also delete its data.
+        #[arg(long)]
+        delete_data: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServicesAction {
+    /// Start every service.
+    Up,
+    /// Stop every service. Their data stays.
+    Down,
 }
 
 #[derive(Debug, Subcommand)]
@@ -557,6 +609,9 @@ fn changes_state(command: &Command) -> bool {
             | Command::Web {
                 action: WebAction::Status | WebAction::Config
             }
+            | Command::Service {
+                action: ServiceAction::List | ServiceAction::Logs { .. }
+            }
     )
 }
 
@@ -665,6 +720,23 @@ fn run_php(action: PhpAction) -> Result<(), String> {
     }
 }
 
+fn run_service(action: ServiceAction) -> Result<(), String> {
+    match action {
+        ServiceAction::Add {
+            kind,
+            version,
+            name,
+            ports,
+        } => service::add(&kind, version.as_deref(), name.as_deref(), &ports),
+        ServiceAction::List => service::list(),
+        ServiceAction::Start { names } => service::start(&names),
+        ServiceAction::Stop { names } => service::stop(&names),
+        ServiceAction::Restart { name } => service::restart(&name),
+        ServiceAction::Logs { name, lines } => service::logs(&name, lines),
+        ServiceAction::Remove { name, delete_data } => service::remove(&name, delete_data),
+    }
+}
+
 fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Doctor { .. } => unreachable!("handled in main"),
@@ -673,13 +745,17 @@ fn run(command: Command) -> Result<(), String> {
         } => plan_hosts(&names, tld.as_deref(), file),
         Command::Plan {
             target: PlanTarget::Uninstall,
-        } => uninstall::uninstall(true, false, false),
+        } => uninstall::uninstall(uninstall::Options {
+            dry_run: true,
+            ..uninstall::Options::default()
+        }),
         Command::History { all } => history::history(all),
-        Command::Uninstall {
-            dry_run,
-            keep_files,
-            yes,
-        } => uninstall::uninstall(dry_run, keep_files, yes),
+        Command::Uninstall { options } => uninstall::uninstall(options),
+        Command::Service { action } => run_service(action),
+        Command::Services { action } => match action {
+            ServicesAction::Up => service::start(&[]),
+            ServicesAction::Down => service::stop(&[]),
+        },
         Command::State {
             action: StateAction::Info { dir },
         } => state_info(dir),

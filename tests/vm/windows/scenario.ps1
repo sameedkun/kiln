@@ -396,6 +396,38 @@ Check 'Herd''s site answers again (within a minute of its restart)' {
     Expect 'herd check' $page
 }
 
+Say '== Services (P3-01, ADR 0036)'
+function MailTotal { (Invoke-RestMethod 'http://127.0.0.1:8025/api/v1/messages' -TimeoutSec 5).total }
+function MailpitPid { (Get-Process kiln-mailpit -ErrorAction SilentlyContinue).Id }
+Check 'service add mailpit: downloaded, checked, running on loopback' {
+    Expect 'running as mailpit-1: smtp 127.0.0.1:1025, http 127.0.0.1:8025' (Kiln service add mailpit)
+}
+Check 'a mail sent over SMTP is caught (Mailpit''s API counts 1)' {
+    Send-MailMessage -SmtpServer 127.0.0.1 -Port 1025 -From app@example.test -To you@example.test `
+        -Subject 'from the scenario' -Body 'hello from kiln' -WarningAction SilentlyContinue
+    if ((MailTotal) -ne 1) { throw "Mailpit has $(MailTotal) message(s)" }
+}
+Check 'service list shows it running' {
+    Expect 'mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running' (Kiln service list)
+}
+Check 'service stop closes its ports; start brings it back with its mail' {
+    Kiln service stop mailpit-1 | Out-Null
+    if (Test-NetConnection 127.0.0.1 -Port 8025 -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'still answering after stop'
+    }
+    if ((Kiln service list) -notmatch 'mailpit-1 .* stopped') { throw 'not listed as stopped' }
+    Kiln service start mailpit-1 | Out-Null
+    if ((MailTotal) -ne 1) { throw 'the caught mail is gone after a restart' }
+}
+Check 'service restart: a new process, the same data' {
+    $before = MailpitPid
+    Kiln service restart mailpit-1 | Out-Null
+    $after = MailpitPid
+    if (-not $after -or $after -eq $before) { throw "kiln-mailpit PID $before -> $after" }
+    if ((MailTotal) -ne 1) { throw 'the caught mail is gone after a restart' }
+}
+Check 'service logs shows its output' { Expect '127.0.0.1:1025' (Kiln service logs mailpit-1) }
+
 Say '== kilnd (ADR 0026)'
 Check 'daemon start' { Kiln daemon start }
 Check 'daemon status reports the web server running' { Expect 'Web server: running' (Kiln daemon status) }

@@ -226,6 +226,35 @@ check "kiln unproxy vite: the name is no longer served" \
 [ -s "$WORK/vite.pid" ] && kill -- "-$(cat "$WORK/vite.pid")" 2>/dev/null
 rm -f "$SITES/laravel-app/public/hot"
 
+echo "== Services (P3-01, ADR 0036)"
+check "service add mailpit: downloaded, checked, running on loopback" \
+    sh -c "'$K' service add mailpit > '$WORK/mailpit.txt' && grep -q 'running as mailpit-1: smtp 127.0.0.1:1025, http 127.0.0.1:8025' '$WORK/mailpit.txt'"
+mail_total() { curl -fsS "http://127.0.0.1:8025/api/v1/messages" | grep -q "\"total\":$1,"; }
+mail_sent() {
+    printf 'Subject: from the scenario\r\n\r\nhello from kiln\r\n' > "$WORK/mail.txt"
+    curl -fsS smtp://127.0.0.1:1025 --mail-from app@example.test --mail-rcpt you@example.test -T "$WORK/mail.txt" &&
+        mail_total 1
+}
+check "a mail sent over SMTP is caught (Mailpit's API counts 1)" mail_sent
+check "service list shows it running" contains "mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running" "$K" service list
+mailpit_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-mailpit" {print $1}'; }
+stopped_then_started() {
+    "$K" service stop mailpit-1 > /dev/null || return 1
+    if curl -fsS -m 2 "http://127.0.0.1:8025/" > /dev/null 2>&1; then echo "still answering after stop"; return 1; fi
+    "$K" service list | grep -q "mailpit-1 .* stopped" || return 1
+    "$K" service start mailpit-1 > /dev/null || return 1
+    mail_total 1 || { echo "the caught mail is gone after a restart"; return 1; }
+}
+check "service stop closes its ports; start brings it back with its mail" stopped_then_started
+restarted_service() {
+    before=$(mailpit_pid)
+    "$K" service restart mailpit-1 > /dev/null || return 1
+    after=$(mailpit_pid)
+    [ -n "$after" ] && [ "$after" != "$before" ] && mail_total 1
+}
+check "service restart: a new process, the same data" restarted_service
+check "service logs shows its output" contains "127.0.0.1:1025" "$K" service logs mailpit-1
+
 echo "== kilnd (ADR 0026)"
 caddy_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-caddy" {print $1}'; }
 restarted() { # restarted <old pid>: waits up to a minute for a new kiln-caddy

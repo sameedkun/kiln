@@ -152,13 +152,13 @@ Design: [ADR 0035](adr/0035-services.md). macOS moved to Phase 4b
 
 | ID | Task | Depends on | Notes |
 |---|---|---|---|
-| P3-01 | Service framework: instances in the state database, the `ServiceProvider` trait and its contract tests, `kiln service add/list/start/stop/restart/logs/remove`, `kiln services up/down`, a second `kiln-supervisor` for services | — | ADR 0035 §1–3; the supervisor generalized from php-cgi pools to programs |
+| P3-01 | Service framework: instances in the state database, the `ServiceProvider` trait and its contract tests, `kiln service add/list/start/stop/restart/logs/remove`, `kiln services up/down`, a second `kiln-supervisor` for services; Mailpit as the first provider | — | **Done** 2026-10-31, [ADR 0036](adr/0036-service-framework.md): the supervisor runs programs too, stopped gracefully; Mailpit runs as `kiln-mailpit`; uninstall refuses while services hold data, unless `--delete-data` |
 | P3-02 | Spike: a Redis-compatible cache on Windows. Garnet against Laravel's cache (locks, tags), sessions, queue (Lua) and rate limiter | — | ADR 0035 §8; decides whether Windows gets a cache service in Phase 3 |
 | P3-03 | Port choice and coexistence for services: usual port, else the next free one; `kiln doctor` names other tools' services | P3-01 | ADR 0035 §5, extends [ADR 0019](adr/0019-coexistence.md) |
 | P3-04 | MySQL and MariaDB providers: vendor downloads (pinned digests, license shown), data folder set-up, graceful stop, `kiln db` client | P3-01 | Linux: libraries such as `libaio.so.1` found without system changes |
 | P3-05 | PostgreSQL provider: EDB archives on Windows; Kiln's own relocatable Linux builds from the PHP build pipeline | P3-01 | ADR 0035 §8, [ADR 0025](adr/0025-own-static-linux-php-builds.md); `trust` on loopback only |
 | P3-06 | Cache provider: Valkey on Linux; on Windows what P3-02 chose | P3-01, P3-02 | |
-| P3-07 | Mailpit provider, with its UI served as `https://mail.test` through a proxy site | P3-01 | [ADR 0032](adr/0032-proxy-sites.md) |
+| P3-07 | Mailpit's UI served as `https://mail.test` through a proxy site, and the `MAIL_*` wiring (the provider itself came with P3-01) | P3-01, P3-08 | [ADR 0032](adr/0032-proxy-sites.md) |
 | P3-08 | `.env` wiring: `kiln env use <instance>`, a journaled key-level operation with preview and byte-exact undo; creates the project's database; `kiln new --db` | P3-04 | ADR 0035 §9 |
 | P3-09 | Project config: `[services]` in `kiln.toml`, `kiln services up` in a project, `herd.yml` services in `kiln import herd` | P3-08 | Finishes [ADR 0027](adr/0027-project-config-kiln-toml.md) |
 | P3-10 | `kilnd` and services: the watchdog restarts the services supervisor after a crash or reboot; `service.*` API methods | P3-01 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |

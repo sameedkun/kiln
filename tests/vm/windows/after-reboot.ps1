@@ -61,9 +61,17 @@ Check 'Herd is running again after the reboot (its app opened, as a user would)'
 }
 
 Say '== uninstall'
+# Mailpit's caught mail is service data (ADR 0036, section 9): refused before any change.
+Check 'kiln uninstall refuses while services hold data, and changes nothing' {
+    $out = & $Kiln uninstall --yes 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "uninstall went ahead without --delete-data:`n$out" }
+    Expect 'hold data' $out
+    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln") -or -not (Test-Path "$env:APPDATA\Kiln")) { throw 'Kiln folders were touched' }
+    $global:LASTEXITCODE = 0
+}
 Status 'waiting-untrust-dialog'
 $answerer = Start-Answerer 'Root Certificate Store'
-Check 'kiln uninstall (UAC by the test VM setting; the certificate dialog with the VM''s mouse)' { Kiln uninstall --yes }
+Check 'kiln uninstall --delete-data (UAC by the test VM setting; the certificate dialog with the VM''s mouse)' { Kiln uninstall --yes --delete-data }
 Say "     dialog: $(Receive-Job $answerer -Wait -AutoRemoveJob)"
 Status 'running'
 Start-Sleep -Seconds 2

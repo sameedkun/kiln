@@ -2,6 +2,7 @@
 //!
 //! [ADR 0014]: ../../../docs/adr/0014-php-cgi-supervisor.md
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
@@ -42,23 +43,53 @@ pub enum PoolKind {
     ///
     /// [ADR 0022]: ../../../docs/adr/0022-linux-php-runtimes-and-fpm.md
     Fpm,
+    /// Any other program, such as a database or Mailpit ([ADR 0036] §1): run with its own
+    /// arguments, its output going to its own log, stopped gracefully.
+    ///
+    /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+    Program,
+}
+
+/// How a [`PoolKind::Program`] runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramSpec {
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// Its working folder (default: the program's own folder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    /// Where its stdout and stderr go (appended).
+    pub log: PathBuf,
+    /// Run first when it has to stop, e.g. `mysqladmin shutdown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_command: Option<Vec<String>>,
+    /// Ports it opens besides the worker's, all of which must accept connections before it
+    /// counts as started.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_listens: Vec<u16>,
 }
 
 /// The workers for one PHP build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PoolSpec {
-    /// The PHP version, e.g. `8.4.27`.
+    /// The PHP version, e.g. `8.4.27`, or a service instance's name.
     pub id: String,
     #[serde(default)]
     pub kind: PoolKind,
-    /// `php-cgi.exe` for [`PoolKind::Cgi`], `php-fpm` for [`PoolKind::Fpm`].
+    /// `php-cgi.exe` for [`PoolKind::Cgi`], `php-fpm` for [`PoolKind::Fpm`], the executable
+    /// for [`PoolKind::Program`].
     #[serde(alias = "php_cgi")]
     pub program: PathBuf,
-    /// The `php.ini` to load (`-c`).
+    /// The `php.ini` to load (`-c`); empty for a [`PoolKind::Program`].
+    #[serde(default)]
     pub ini: PathBuf,
     /// The PHP-FPM configuration (`--fpm-config`), for [`PoolKind::Fpm`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fpm_config: Option<PathBuf>,
+    /// How to run it, for [`PoolKind::Program`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_spec: Option<ProgramSpec>,
     pub workers: Vec<WorkerSpec>,
 }
 
@@ -99,6 +130,19 @@ impl Pools {
             .map(|worker| SocketAddr::from((Ipv4Addr::LOCALHOST, worker.port)))
             .collect()
     }
+
+    /// Every address that must accept connections before the pools count as started: the
+    /// workers', plus the other ports programs open.
+    #[must_use]
+    pub fn ready_addresses(&self) -> Vec<SocketAddr> {
+        let also = self
+            .pools
+            .iter()
+            .filter_map(|pool| pool.program_spec.as_ref())
+            .flat_map(|spec| &spec.also_listens)
+            .map(|&port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+        self.upstreams().into_iter().chain(also).collect()
+    }
 }
 
 impl PoolSpec {
@@ -116,6 +160,7 @@ impl PoolSpec {
             program: php_cgi,
             ini,
             fpm_config: None,
+            program_spec: None,
             workers,
         }
     }
@@ -137,7 +182,26 @@ impl PoolSpec {
             program: php_fpm,
             ini,
             fpm_config: Some(fpm_config),
+            program_spec: None,
             workers: vec![WorkerSpec { port, max_requests }],
+        }
+    }
+
+    /// A program, such as a service instance, listening on `port` (and the ports in
+    /// `spec.also_listens`). It is never recycled.
+    #[must_use]
+    pub fn program(id: String, program: PathBuf, port: u16, spec: ProgramSpec) -> Self {
+        Self {
+            id,
+            kind: PoolKind::Program,
+            program,
+            ini: PathBuf::new(),
+            fpm_config: None,
+            program_spec: Some(spec),
+            workers: vec![WorkerSpec {
+                port,
+                max_requests: 0,
+            }],
         }
     }
 
@@ -282,6 +346,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!((old.kind, old.fpm_config), (PoolKind::Cgi, None));
+    }
+
+    #[test]
+    fn programs_round_trip_and_wait_for_all_their_ports() {
+        let spec = ProgramSpec {
+            args: vec!["--smtp".into(), "127.0.0.1:1025".into()],
+            log: "/k/services/mail/mail.log".into(),
+            stop_command: Some(vec!["stop-it".into()]),
+            also_listens: vec![8025],
+            ..ProgramSpec::default()
+        };
+        let pools = Pools {
+            pools: vec![PoolSpec::program(
+                "mailpit-1".into(),
+                "/k/services/bin/mailpit/1.31.6/kiln-mailpit".into(),
+                1025,
+                spec,
+            )],
+        };
+        let json = serde_json::to_string(&pools).unwrap();
+        assert_eq!(serde_json::from_str::<Pools>(&json).unwrap(), pools);
+        assert_eq!(pools.pools[0].kind, PoolKind::Program);
+        assert_eq!(
+            pools.upstreams(),
+            [SocketAddr::from((Ipv4Addr::LOCALHOST, 1025))]
+        );
+        assert_eq!(
+            pools.ready_addresses(),
+            [
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 1025)),
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 8025))
+            ]
+        );
     }
 
     #[test]

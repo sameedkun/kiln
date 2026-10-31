@@ -920,6 +920,8 @@ fn print_php(pools: Option<&Pools>) {
                         pool.id,
                         ports.join(", ")
                     ),
+                    // Services run under their own supervisor, never in the PHP one.
+                    kiln_supervisor::pools::PoolKind::Program => {}
                 }
             }
         }

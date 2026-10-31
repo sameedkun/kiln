@@ -67,6 +67,7 @@ struct Identity {
     program: std::path::PathBuf,
     ini: std::path::PathBuf,
     fpm_config: Option<std::path::PathBuf>,
+    program_spec: Option<crate::pools::ProgramSpec>,
     max_requests: u32,
 }
 
@@ -210,6 +211,7 @@ fn identity(pool: &PoolSpec, worker: WorkerSpec) -> Identity {
         program: pool.program.clone(),
         ini: pool.ini.clone(),
         fpm_config: pool.fpm_config.clone(),
+        program_spec: pool.program_spec.clone(),
         max_requests: worker.max_requests,
     }
 }

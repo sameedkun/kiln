@@ -1,0 +1,22 @@
+[package]
+name = "kiln-services"
+description = "Kiln's service providers (ADR 0035, 0036): what each service is, where its pinned binaries come from, and how it runs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kiln-sys.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

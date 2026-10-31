@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-10-31 · **Current phase:** **Phase 3 planned** (12 tasks; ADR 0035; next: P3-01) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-10-31 · **Current phase:** **Phase 3 in progress** (1 of 12 tasks done; ADRs 0035–0036; next: P3-02) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0035 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0036 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1467,7 +1467,7 @@ VMs.**
   - The P2-02 reboot scripts (`autostart.ps1`, `autostart.sh`) stay, for quick checks and
     `-HardReset`.
 
-## Phase 3: services (planned)
+## Phase 3: services (in progress)
 
 Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux). Planned
 2026-10-31, with [ADR 0035](adr/0035-services.md) for instances, providers, ports, data and
@@ -1483,18 +1483,70 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| P3-01 | Service framework, instances, second supervisor | next | ADR 0035 §1–3 |
-| P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | planned | ADR 0035 §8 |
+| P3-01 | Service framework, instances, second supervisor; Mailpit | **done** 2026-10-31 | [ADR 0036](adr/0036-service-framework.md); see below. VM-checked on Windows and Ubuntu |
+| P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | next | ADR 0035 §8 |
 | P3-03 | Ports and coexistence for services | planned | ADR 0035 §5 |
 | P3-04 | MySQL and MariaDB | planned | vendor downloads |
 | P3-05 | PostgreSQL (own Linux builds) | planned | |
 | P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
-| P3-07 | Mailpit, UI at `mail.test` | planned | |
+| P3-07 | Mailpit's UI at `mail.test`, `MAIL_*` wiring | planned | the provider came with P3-01 |
 | P3-08 | `.env` wiring with byte-exact undo | planned | ADR 0035 §9 |
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | planned | |
 | P3-10 | `kilnd` and services | planned | |
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
 | P3-12 | VM scenarios for Phase 3 | planned | extends ADR 0024 |
+
+### P3-01 delivered (2026-10-31)
+
+[ADR 0036](adr/0036-service-framework.md), within [ADR 0035](adr/0035-services.md).
+
+- **`kiln service add <kind> [--version] [--name] [--port role=N]`:**
+  - downloads the pinned release and checks its SHA-256;
+  - installs the executable under a Kiln name (`kiln-mailpit`);
+  - sets up the data folder, records the instance (schema v7, `services` table) and starts
+    it.
+
+  Also `kiln service list | start | stop | restart | logs | remove`, and `kiln services up |
+  down`.
+- **A second `kiln-supervisor`** (`<local data>/services/supervisor`):
+  - **One binary:** the same as for PHP, which now runs programs too, with their own
+    arguments, environment, working folder and log.
+  - **Ports:** a program can open several; start-up waits until all of them listen.
+  - **Graceful stop:** a program's stop command first, then a wait, then SIGTERM on Linux,
+    and only then a kill. The supervisor itself gets 45 s to stop, so it never kills a
+    database mid-shutdown.
+  - **Independent of the web stack:** `kiln web stop` doesn't touch it.
+- **`kiln-services`,** a new crate:
+  - the `ServiceProvider` trait, pinned releases and their install;
+  - **contract tests** for every provider: unique kinds, port roles with usual numbers,
+    well-formed pins, Kiln-named executables, and command lines that name only loopback
+    addresses and use every port given.
+- **Mailpit 1.31.6,** the first provider:
+  - SMTP on 1025 and its UI and API on 8025, loopback only, with `--disable-version-check`;
+  - pinned from GitHub's asset digests, re-checked by hand.
+- **Ports:** the usual port if free and not another instance's, else the next free one
+  above it, recorded with the instance. Naming who holds it comes with P3-03.
+- **Data from the start:**
+  - `kiln service remove` keeps the data folder unless `--delete-data`, and says where it
+    is and how large.
+  - `kiln uninstall` lists the services' data in its plan, and refuses before changing
+    anything while there is some, unless `--delete-data` (or `--keep-files`). Its flags
+    are now one `Options` struct.
+- **Tests:** the supervisor's program pools, the `services` table, the installer (digest
+  mismatch, missing file), the contract tests, Mailpit's command line, and port choice
+  and parsing. 341 on Windows, 311 on Linux; clippy clean on both.
+- **VM scenarios,** both, in a new "Services" stage:
+  - `service add mailpit`, a mail sent over SMTP and caught (Mailpit's API), `service
+    list`;
+  - `stop` closing its ports and `start` bringing it back with its mail;
+  - `restart` with a new process and the same data, and `logs`.
+
+  After the reboot, uninstall refuses without `--delete-data` and changes nothing; then
+  `--delete-data`, and the machine compares clean. **Windows 87 checks, Ubuntu 87.** The
+  renewal restart left sites without an answer for 882 ms on Windows and 120 ms on Ubuntu.
+- **On the way:** [I-74](issues.md#i-74), downloads that stall mid-file. Two Ubuntu runs
+  failed on GitHub stalling the PHP 8.3 download. It worked again within the hour, so a
+  retry with resume is noted for later.
 
 ## Open items carried into Phase 1
 
@@ -1585,6 +1637,7 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | 2026-10-30 | **P2-10 done:** ADR 0033. `kiln ca init --tld <name>` chooses the development TLD (only `test`, `internal`, `example`, `invalid`), recorded as the `tld` setting that every command and the shims read; the root's own TLD always wins, and another TLD over an existing root is refused. Fixed I-71 (Caddy installed its own `local` root into the trust stores for a `.internal` site; now declared with `install_trust: false`) and I-72 (the first site change after `web start` restarted the server). Scenarios: Windows 71 checks, Ubuntu 72, each with a second stage under `.internal` and a second uninstall comparison. |
 | 2026-10-31 | **P2-11 done, Phase 2 done:** ADR 0034. Each VM scenario now reboots after `kiln daemon enable` and checks that the login started `kilnd`, which brought the web server, PHP and the HTTPS sites back, before uninstall and the comparison; `npm` is checked on the project's Node; the renewal restart forced through the API is timed. That found I-73 (8.1 s on Windows): the restart after a CA change now restarts only Caddy, on a config validated while the old server serves (about 0.1 s; a client sees 0.67 s on Windows, 0.07 s on Ubuntu). Scenarios: Windows 80 checks, Ubuntu 80. Phase 2's exit criteria are met in both VMs. |
 | 2026-10-31 | **Phase 3 planned:** exit criteria and 12 tasks (P3-01 to P3-12) in plan.md, for Windows and Linux. ADR 0035: services as per-user instances (several versions side by side) behind compiled-in providers, run by a second `kiln-supervisor`, loopback only, on their usual port or the next free one; development credentials; data never deleted without `--delete-data`; GPL services downloaded from the vendor; PostgreSQL built by Kiln for Linux; a spike decides Windows' cache (Garnet). macOS moves to a new Phase 4b (ADR 0007 amended): no Apple hardware to test on and no Developer account yet. Next: P3-01. |
+| 2026-10-31 | **P3-01 done:** ADR 0036. `kiln service add/list/start/stop/restart/logs/remove` and `kiln services up/down`; instances in a `services` table (schema v7); a second `kiln-supervisor` that now runs programs too, stopped gracefully; the new `kiln-services` crate with contract tests for every provider; Mailpit 1.31.6 as the first provider, running as `kiln-mailpit` on loopback. Uninstall refuses while services hold data unless `--delete-data`. I-74 logged (GitHub downloads stalling mid-file). Scenarios: Windows 87 checks, Ubuntu 87. |
 
 ## How to update this file
 
