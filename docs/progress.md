@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-10-31 · **Current phase:** **Phase 3 in progress** (1 of 12 tasks done; ADRs 0035–0036; next: P3-02) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-01 · **Current phase:** **Phase 3 in progress** (2 of 12 tasks done; ADRs 0035–0036; next: P3-03) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1484,8 +1484,8 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | P3-01 | Service framework, instances, second supervisor; Mailpit | **done** 2026-10-31 | [ADR 0036](adr/0036-service-framework.md); see below. VM-checked on Windows and Ubuntu |
-| P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | next | ADR 0035 §8 |
-| P3-03 | Ports and coexistence for services | planned | ADR 0035 §5 |
+| P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | **done** 2026-11-01 | [spike 03](spikes/results/03-windows-cache.md); see below. Garnet once it fixes Lua ignoring `SELECT` (I-75) |
+| P3-03 | Ports and coexistence for services | next | ADR 0035 §5 |
 | P3-04 | MySQL and MariaDB | planned | vendor downloads |
 | P3-05 | PostgreSQL (own Linux builds) | planned | |
 | P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
@@ -1547,6 +1547,38 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 - **On the way:** [I-74](issues.md#i-74), downloads that stall mid-file. Two Ubuntu runs
   failed on GitHub stalling the PHP 8.3 download. It worked again within the hour, so a
   retry with resume is noted for later.
+
+### P3-02 delivered (2026-11-01)
+
+[Spike 03](spikes/03-windows-cache.md) ([results](spikes/results/03-windows-cache.md)),
+amending [ADR 0035](adr/0035-services.md) §8.
+
+- **The check:** a Laravel artisan command with 22 checks of everything Laravel uses Redis
+  for, over `predis`:
+  - cache operations, locks, tags and sessions;
+  - the queue (immediate, delayed, released and failed jobs);
+  - the rate limiter, `Redis::throttle` and `funnel`;
+  - pipelines, transactions and SCAN.
+
+  The scripts are in `spikes/windows-cache/`.
+- **Control:** Valkey 9.0.7 in the Ubuntu VM passed 22 of 22. Its first run caught three
+  mistakes in the checks, which were fixed before Garnet was judged.
+- **Garnet 2.2.3 on Windows** passed 19 of 22.
+  - `Cache::add`, tag flushes and the rate limiter fail, because Garnet's Lua scripts
+    ignore `SELECT` and act on database 0. Laravel's cache uses database 1.
+  - Upstream issue: [microsoft/garnet#2258](https://github.com/microsoft/garnet/issues/2258),
+    with its fix open in [microsoft/garnet#2311](https://github.com/microsoft/garnet/pull/2311).
+  - With the cache in database 0, all 22 pass. But then `cache:clear` would delete queued
+    jobs and sessions, so that isn't done.
+- **Also found:** Garnet's Windows build needs .NET 10 and doesn't ship it.
+  - With Microsoft's runtime zip unpacked privately and `DOTNET_ROOT` set for the
+    process, it runs, and nothing is installed system-wide.
+  - Size: 80 MB plus 77 MB of runtime.
+  - It runs fine as `kiln-garnet.exe`, listens only on `127.0.0.1`, and takes 2.4–2.8 s to
+    start.
+- **Decision:** Garnet becomes Windows' cache once a release with the fix passes the spike
+  unchanged ([I-75](issues.md#i-75)). Until then, Windows has no cache service and Kiln
+  says so. Linux uses Valkey (P3-06).
 
 ## Open items carried into Phase 1
 
@@ -1638,6 +1670,7 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | 2026-10-31 | **P2-11 done, Phase 2 done:** ADR 0034. Each VM scenario now reboots after `kiln daemon enable` and checks that the login started `kilnd`, which brought the web server, PHP and the HTTPS sites back, before uninstall and the comparison; `npm` is checked on the project's Node; the renewal restart forced through the API is timed. That found I-73 (8.1 s on Windows): the restart after a CA change now restarts only Caddy, on a config validated while the old server serves (about 0.1 s; a client sees 0.67 s on Windows, 0.07 s on Ubuntu). Scenarios: Windows 80 checks, Ubuntu 80. Phase 2's exit criteria are met in both VMs. |
 | 2026-10-31 | **Phase 3 planned:** exit criteria and 12 tasks (P3-01 to P3-12) in plan.md, for Windows and Linux. ADR 0035: services as per-user instances (several versions side by side) behind compiled-in providers, run by a second `kiln-supervisor`, loopback only, on their usual port or the next free one; development credentials; data never deleted without `--delete-data`; GPL services downloaded from the vendor; PostgreSQL built by Kiln for Linux; a spike decides Windows' cache (Garnet). macOS moves to a new Phase 4b (ADR 0007 amended): no Apple hardware to test on and no Developer account yet. Next: P3-01. |
 | 2026-10-31 | **P3-01 done:** ADR 0036. `kiln service add/list/start/stop/restart/logs/remove` and `kiln services up/down`; instances in a `services` table (schema v7); a second `kiln-supervisor` that now runs programs too, stopped gracefully; the new `kiln-services` crate with contract tests for every provider; Mailpit 1.31.6 as the first provider, running as `kiln-mailpit` on loopback. Uninstall refuses while services hold data unless `--delete-data`. I-74 logged (GitHub downloads stalling mid-file). Scenarios: Windows 87 checks, Ubuntu 87. |
+| 2026-11-01 | **P3-02 done:** spike 03. Garnet 2.2.3 on Windows passed 19 of 22 Laravel checks (Valkey control: 22 of 22). Its Lua scripts ignore `SELECT` (microsoft/garnet#2258, fix open), which breaks `Cache::add`, tag flushes and the rate limiter on Laravel's cache database. Using one database would pass but make `cache:clear` delete queued jobs, so it isn't done. Garnet also needs .NET 10, which Kiln would keep privately. ADR 0035 §8 amended: Windows gets Garnet once a release with the fix passes the spike; until then, no Windows cache (I-75). |
 
 ## How to update this file
 

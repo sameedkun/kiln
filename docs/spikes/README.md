@@ -1,12 +1,14 @@
-# Phase 0 spikes
+# Spikes
 
-Time-boxed experiments that produce evidence for an ADR. Spike code lives in `spikes/` (outside
-the Cargo workspace) so results can be reproduced; downloaded binaries never enter git.
+Time-boxed experiments that produce evidence for an ADR. Spikes 01–02 ran in Phase 0, 03 in
+Phase 3. Spike code lives in `spikes/` (outside the Cargo workspace) so results can be
+reproduced; downloaded binaries never enter git.
 
 | # | Spike | Feeds | Time box | Status |
 |---|---|---|---|---|
 | 01 | [Web server: nginx vs Caddy on Windows](01-web-server.md) | ADR 0005 | 3 days | **done**: Caddy ([results](results/01-web-server.md)) |
 | 02 | [Windows DNS: hosts block vs NRPT + stub](02-windows-dns.md) | ADR 0006 | 3 days | **done**: hosts block only; NRPT rejected ([part 1](results/02-windows-dns-part1.md), [part 2](results/02-windows-dns-part2.md)) |
+| 03 | [A Redis-compatible cache on Windows (Garnet)](03-windows-cache.md) | ADR 0035 §8 | 1 day | **done**: Garnet, once it fixes Lua ignoring `SELECT`; no Windows cache until then ([results](results/03-windows-cache.md)) |
 
 ## Ground rules for every spike
 

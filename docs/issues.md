@@ -84,6 +84,7 @@ commits and PRs.
 | [I-72](#i-72) | web | The first `kiln web start` never recorded which intermediate issued the site certificates, so the next site change restarted the server | ✅ (recorded whenever Caddy gets the CA) |
 | [I-73](#i-73) | web | The restart after a CA change left sites unanswered for 8 s on Windows: it also restarted PHP and validated the new config while nothing was serving | ✅ (`WebServer::restart`: only Caddy, validated first; about 0.1 s) |
 | [I-74](#i-74) | fetch | Downloads from GitHub stalled mid-file twice in a row in the Ubuntu VM; Kiln gives up after 60 s without data and has no retry or resume | open (worked again within the hour; retry with resume to consider) |
+| [I-75](#i-75) | services | Garnet's Lua scripts ignore `SELECT` and act on database 0, so Laravel's cache (database 1) breaks for `add`, tag flushes and the rate limiter: no Windows cache service until Garnet fixes it | open (upstream: microsoft/garnet#2258, fix in #2311) |
 
 ---
 
@@ -1047,3 +1048,24 @@ commits and PRs.
   couple of retries would ride out such stalls. The pinned digest still checks the whole
   file, so resuming is safe.
 - **For now:** the scenarios treat such a failure as the network. Rerun.
+
+## P3-02: the Windows cache spike
+
+### I-75: Garnet's Lua scripts ignore `SELECT` (open, upstream)
+- **Found:** spike 03, 2026-11-01 ([results](spikes/results/03-windows-cache.md)). Garnet
+  2.2.3 passed 19 of the 22 Laravel checks that Valkey passes.
+  - `Cache::add` stored nothing, a tag flush left its entry, and the rate limiter never
+    limited.
+  - Raw commands showed why: a script run on a connection that selected database 1 reads
+    and writes database 0. Laravel's cache store uses database 1 (`REDIS_CACHE_DB`), and
+    those three operations are Lua scripts.
+- **Upstream:** [microsoft/garnet#2258](https://github.com/microsoft/garnet/issues/2258)
+  (open since 2026-10-18). The fix is
+  [microsoft/garnet#2311](https://github.com/microsoft/garnet/pull/2311), open and not
+  merged on 2026-11-01. v2.2.5 doesn't have it.
+- **Not worked around:** with the cache in database 0, all 22 checks pass. But
+  `cache:clear` (`FLUSHDB`) would then also delete queued jobs and sessions.
+- **Until it is fixed:** Windows has no cache service, and `kiln service add cache` says
+  so (P3-06). Linux uses Valkey.
+- **To close:** when a Garnet release contains the fix, pin it, rerun
+  `spikes/windows-cache/run-windows.ps1`, and require 22 of 22 with Laravel's defaults.

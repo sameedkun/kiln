@@ -1,6 +1,6 @@
 # 0035. Services: instances, providers, ports, data and `.env` wiring
 
-- **Status:** accepted
+- **Status:** accepted; §8 amended 2026-11-01 by spike 03 (Windows' cache waits for a Garnet fix)
 - **Date:** 2026-10-31
 - **Task:** Phase 3 (P3-01 to P3-12) · Builds on [ADR 0003](0003-license-and-dependency-policy.md), [0004](0004-reversible-operation-engine.md), [0013](0013-downloads-and-php-runtimes.md), [0014](0014-php-cgi-supervisor.md), [0019](0019-coexistence.md), [0025](0025-own-static-linux-php-builds.md), [0026](0026-kilnd-daemon-and-local-api.md), [0027](0027-project-config-kiln-toml.md), [0032](0032-proxy-sites.md)
 
@@ -120,6 +120,20 @@ Five things make services harder than PHP:
      If Garnet passes, it is Windows' cache under the kind `cache`, with `valkey` and
      `garnet` as its implementations. If it doesn't, Windows has no cache service in
      Phase 3, and Kiln says so rather than half-working.
+
+     *Amended 2026-11-01 by spike 03*
+     ([results](../spikes/results/03-windows-cache.md)): Garnet 2.2.3 passed 19 of 22
+     checks. Its Lua scripts ignore `SELECT` and always act on database 0
+     ([microsoft/garnet#2258](https://github.com/microsoft/garnet/issues/2258), fix open
+     in [microsoft/garnet#2311](https://github.com/microsoft/garnet/pull/2311)). So
+     Laravel's cache, on database 1, breaks for `add`, tag flushes and the rate limiter.
+     - Putting the cache in database 0 makes all 22 pass, but `cache:clear` would then
+       also delete queued jobs and sessions. So that isn't done.
+     - Garnet becomes Windows' cache once a release with the fix passes the spike's checks
+       unchanged. It runs on Microsoft's .NET runtime zip, which Kiln keeps privately and
+       hands over through `DOTNET_ROOT`; Garnet's Windows build needs .NET 10 and ships
+       without it.
+     - Until then, Windows has no cache service.
    - **Mailpit:** its GitHub releases on both platforms.
    - **Linux system libraries:** binaries that need a library the system lacks are a
      known risk. For example, MySQL's generic tarball needs `libaio.so.1`, which Ubuntu
