@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-01 · **Current phase:** **Phase 3 in progress** (2 of 12 tasks done; ADRs 0035–0036; next: P3-03) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-01 · **Current phase:** **Phase 3 in progress** (3 of 12 tasks done; ADRs 0035–0037; next: P3-04) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0036 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0037 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1485,8 +1485,8 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 |---|---|---|---|
 | P3-01 | Service framework, instances, second supervisor; Mailpit | **done** 2026-10-31 | [ADR 0036](adr/0036-service-framework.md); see below. VM-checked on Windows and Ubuntu |
 | P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | **done** 2026-11-01 | [spike 03](spikes/results/03-windows-cache.md); see below. Garnet once it fixes Lua ignoring `SELECT` (I-75) |
-| P3-03 | Ports and coexistence for services | next | ADR 0035 §5 |
-| P3-04 | MySQL and MariaDB | planned | vendor downloads |
+| P3-03 | Ports and coexistence for services | **done** 2026-11-01 | [ADR 0037](adr/0037-service-ports-and-coexistence.md); see below. VM-checked on Windows and Ubuntu |
+| P3-04 | MySQL and MariaDB | next | vendor downloads |
 | P3-05 | PostgreSQL (own Linux builds) | planned | |
 | P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
 | P3-07 | Mailpit's UI at `mail.test`, `MAIL_*` wiring | planned | the provider came with P3-01 |
@@ -1580,6 +1580,60 @@ amending [ADR 0035](adr/0035-services.md) §8.
   unchanged ([I-75](issues.md#i-75)). Until then, Windows has no cache service and Kiln
   says so. Linux uses Valkey (P3-06).
 
+### P3-03 delivered (2026-11-01)
+
+[ADR 0037](adr/0037-service-ports-and-coexistence.md), extending
+[ADR 0019](adr/0019-coexistence.md).
+
+- **Who holds a port:** `kiln-coexist` now recognizes service programs by name: MySQL,
+  MariaDB, PostgreSQL, Redis, Valkey, Memurai, Garnet, Mailpit, MailHog, Docker's port
+  forwarders and WSL's relay. A busy usual port then reads, for example:
+  - "Port 1025 (SMTP, where apps send mail) is used by Kiln's mailpit-1; using 1026.";
+  - "… is used by XAMPP (mysqld.exe)".
+
+  When the holder can't be inspected (a system service running as another user), Kiln
+  names a running system service of that kind.
+- **Conflicts at start:** before starting, each port of each instance that should run must
+  be free or held by Kiln's own program. Otherwise the command stops, says who holds the
+  port, and offers both ways out.
+- **`kiln service port <name> <role>=<port>`** moves an instance. A running one restarts
+  there, and its data stays.
+- **Stop means stopped:** `stop`, `remove` and `restart` now wait until the stopped
+  program's ports are released, up to the supervisor's 45 s.
+  - The first Windows run showed `stop` returning while Mailpit was still exiting. A
+    program that grabbed the port right after was refused, and `remove --delete-data` met
+    files still in use. `remove` also retries the delete for 5 s.
+- **"Running" means Kiln's program answers,** not just anything on the port: `service
+  list` and doctor check who holds it.
+- **`kiln doctor`:**
+  - **A new Services area:** each instance running, stopped, or kept from running, with
+    who holds its port and the fix.
+  - **"Other tools"** lists other programs on the usual service ports (3306, 5432, 6379,
+    1025, 8025). It also lists the system's database, cache and mail services, read from
+    `sc.exe query` or `systemctl list-units` by name and state code only.
+  - All of this is information, not warnings.
+- **Tests:** service-program recognition, `sc.exe` and `systemctl` parsing (with real
+  output shapes), the Services rules, and port choice naming another instance. 346 on
+  Windows, 316 on Linux; clippy clean on both.
+- **VM scenarios,** both:
+  - a second Mailpit moves off the first one's ports and says whose they are;
+  - with a stand-in program on 1025, `service start` refuses and names it, and doctor
+    warns and lists it;
+  - `service port … smtp=1027` works, mail arrives there, and the instance moves back.
+
+  **Windows 92 checks, Ubuntu 92.**
+- **On the way:**
+  - **The renewal restart, timed directly on Windows** (ADR 0034 §2, amended). One run
+    read 1,331 ms through HTTP, because Windows retries a refused connection after about
+    0.5 s and again 1 s later. Bare TCP connects measured the server itself: 397 ms. Ubuntu
+    measured 62 ms.
+  - **One Windows run** saw `kilnd`'s restart of a killed web server not hold. The next run
+    passed. The check now records `kilnd`'s and Caddy's logs if it fails again.
+  - **The Linux stand-in** first failed to bind: the earlier SMTP checks leave sockets in
+    TIME_WAIT. It now sets `SO_REUSEADDR`, as real servers do.
+  - **Fixed** a doc comment in `kiln-coexist` that the Phase 3 planning commit had
+    damaged.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1671,6 +1725,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-10-31 | **Phase 3 planned:** exit criteria and 12 tasks (P3-01 to P3-12) in plan.md, for Windows and Linux. ADR 0035: services as per-user instances (several versions side by side) behind compiled-in providers, run by a second `kiln-supervisor`, loopback only, on their usual port or the next free one; development credentials; data never deleted without `--delete-data`; GPL services downloaded from the vendor; PostgreSQL built by Kiln for Linux; a spike decides Windows' cache (Garnet). macOS moves to a new Phase 4b (ADR 0007 amended): no Apple hardware to test on and no Developer account yet. Next: P3-01. |
 | 2026-10-31 | **P3-01 done:** ADR 0036. `kiln service add/list/start/stop/restart/logs/remove` and `kiln services up/down`; instances in a `services` table (schema v7); a second `kiln-supervisor` that now runs programs too, stopped gracefully; the new `kiln-services` crate with contract tests for every provider; Mailpit 1.31.6 as the first provider, running as `kiln-mailpit` on loopback. Uninstall refuses while services hold data unless `--delete-data`. I-74 logged (GitHub downloads stalling mid-file). Scenarios: Windows 87 checks, Ubuntu 87. |
 | 2026-11-01 | **P3-02 done:** spike 03. Garnet 2.2.3 on Windows passed 19 of 22 Laravel checks (Valkey control: 22 of 22). Its Lua scripts ignore `SELECT` (microsoft/garnet#2258, fix open), which breaks `Cache::add`, tag flushes and the rate limiter on Laravel's cache database. Using one database would pass but make `cache:clear` delete queued jobs, so it isn't done. Garnet also needs .NET 10, which Kiln would keep privately. ADR 0035 §8 amended: Windows gets Garnet once a release with the fix passes the spike; until then, no Windows cache (I-75). |
+| 2026-11-01 | **P3-03 done:** ADR 0037. A busy service port names its holder (database, cache, mail and Docker programs recognized; a running system service of that kind when the holder can't be inspected); a start refuses a port another program took, and `kiln service port` moves the instance; stop and remove wait until the program has let go of its ports; doctor gains a Services area and lists other services and system services (`sc.exe`, `systemctl`). ADR 0034 §2 amended: Windows times the restart with bare TCP connects (397 ms; HTTP read 1,331 ms through Windows' connect retries). Scenarios: Windows 92 checks, Ubuntu 92. |
 
 ## How to update this file
 

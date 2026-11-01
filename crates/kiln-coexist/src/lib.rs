@@ -94,8 +94,8 @@ pub fn installed(locations: &[(Tool, PathBuf)]) -> Vec<(Tool, PathBuf)> {
     out
 }
 
+/// The tools installed on this machine, from their well-known folders (Windows only for now;
 /// Linux detection is still to come; macOS comes with Phase 4b).
-/// Linux came with P1-04; macOS comes with Phase 4b).
 #[must_use]
 pub fn installed_here() -> Vec<(Tool, PathBuf)> {
     if !cfg!(windows) {
@@ -179,7 +179,10 @@ impl Holder {
     }
 }
 
-/// What a well-known server program is, from its file name.
+/// What a well-known server program is, from its file name: web servers, PHP, and the
+/// database, cache and mail programs other tools run ([ADR 0037] §1).
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
 fn program_kind(file: &str) -> Option<&'static str> {
     let stem = file
         .to_ascii_lowercase()
@@ -191,8 +194,162 @@ fn program_kind(file: &str) -> Option<&'static str> {
         "caddy" => Some("Caddy"),
         "php-cgi" | "php-fpm" | "php" => Some("PHP"),
         "w3wp" => Some("IIS"),
+        "mysqld" => Some("MySQL"),
+        "mariadbd" => Some("MariaDB"),
+        "postgres" => Some("PostgreSQL"),
+        "redis-server" => Some("Redis"),
+        "valkey-server" => Some("Valkey"),
+        "memurai" => Some("Memurai"),
+        "garnetserver" => Some("Garnet"),
+        "mailpit" => Some("Mailpit"),
+        "mailhog" => Some("MailHog"),
+        "com.docker.backend" | "docker-proxy" | "vpnkit" => Some("Docker"),
+        "wslrelay" => Some("WSL"),
         _ => None,
     }
+}
+
+/// One of the usual ports of the services Kiln runs ([ADR 0035] §5).
+///
+/// [ADR 0035]: ../../../docs/adr/0035-services.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServicePort {
+    pub port: u16,
+    /// What normally listens there, for messages.
+    pub what: &'static str,
+    /// The [`SystemService`] kinds that use it.
+    pub kinds: &'static [&'static str],
+}
+
+/// The usual ports of the services Kiln runs: `kiln doctor` reports who holds them.
+pub const SERVICE_PORTS: [ServicePort; 5] = [
+    ServicePort {
+        port: 3306,
+        what: "MySQL / MariaDB",
+        kinds: &["MySQL", "MariaDB"],
+    },
+    ServicePort {
+        port: 5432,
+        what: "PostgreSQL",
+        kinds: &["PostgreSQL"],
+    },
+    ServicePort {
+        port: 6379,
+        what: "Redis / Valkey",
+        kinds: &["Redis", "Valkey", "Memurai", "Garnet"],
+    },
+    ServicePort {
+        port: 1025,
+        what: "SMTP (mail catcher)",
+        kinds: &["Mailpit", "MailHog"],
+    },
+    ServicePort {
+        port: 8025,
+        what: "a mail catcher's web UI",
+        kinds: &["Mailpit", "MailHog"],
+    },
+];
+
+/// The usual-port entry for `port`, if it is one.
+#[must_use]
+pub fn service_port(port: u16) -> Option<&'static ServicePort> {
+    SERVICE_PORTS.iter().find(|p| p.port == port)
+}
+
+/// A system service of a kind Kiln also runs: the Windows service or systemd unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemService {
+    /// e.g. `MySQL80`, `postgresql@16-main.service`.
+    pub name: String,
+    /// e.g. "MySQL".
+    pub kind: &'static str,
+    pub running: bool,
+}
+
+/// What a system service is, from its name, if it is a database, cache or mail service:
+/// `MySQL80`, `mysql.service`, `postgresql-x64-16`, `redis-server.service`, `Memurai`, …
+#[must_use]
+pub fn system_service_kind(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    [
+        ("mariadb", "MariaDB"),
+        ("mysql", "MySQL"),
+        ("postgresql", "PostgreSQL"),
+        ("redis", "Redis"),
+        ("valkey", "Valkey"),
+        ("memurai", "Memurai"),
+        ("garnet", "Garnet"),
+        ("mailpit", "Mailpit"),
+        ("mailhog", "MailHog"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| name.starts_with(prefix))
+    .map(|(_, kind)| kind)
+}
+
+/// The database, cache and mail services in the output of `sc.exe query type= service
+/// state= all`. Only the service names and the state codes are read, since the labels and
+/// state words can be translated; 4 is "running" ([ADR 0037] §5).
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+#[must_use]
+pub fn parse_sc_query(text: &str) -> Vec<SystemService> {
+    let mut out: Vec<SystemService> = Vec::new();
+    let mut current: Option<(String, &'static str)> = None;
+    let mut block_start = true;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            block_start = true;
+            continue;
+        }
+        let Some((_, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if !line.starts_with(char::is_whitespace) {
+            // A block's first line is the service name, whatever its label says; the
+            // display name follows, also unindented.
+            if block_start {
+                current = system_service_kind(value).map(|kind| (value.to_owned(), kind));
+                block_start = false;
+            }
+            continue;
+        }
+        // The state line is the one whose value starts with a one-digit code (1–7); the
+        // type line's codes have two or more digits, and the exit codes come after it.
+        let mut words = value.split_whitespace();
+        if let (Some((name, kind)), Some(code)) = (&current, words.next())
+            && code.len() == 1
+            && let Ok(code) = code.parse::<u8>()
+            && (1..=7).contains(&code)
+        {
+            out.push(SystemService {
+                name: name.clone(),
+                kind,
+                running: code == 4,
+            });
+            current = None;
+        }
+    }
+    out
+}
+
+/// The database, cache and mail services in the output of `systemctl list-units
+/// --type=service --all --plain --no-legend --no-pager`: unit, load, active, sub, description.
+#[must_use]
+pub fn parse_systemctl_units(text: &str) -> Vec<SystemService> {
+    text.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let (unit, sub) = (fields.first()?, fields.get(3)?);
+            let kind = system_service_kind(unit)?;
+            Some(SystemService {
+                name: (*unit).to_owned(),
+                kind,
+                running: *sub == "running",
+            })
+        })
+        .collect()
 }
 
 /// A name another program put in the hosts file.
@@ -374,6 +531,105 @@ mod tests {
         let thing = path(&["apps", "thing.exe"]);
         let other = Holder::new(5, Some(thing.clone()));
         assert_eq!(other.describe(), thing.display().to_string());
+    }
+
+    #[test]
+    fn service_programs_are_recognized_and_attributed() {
+        let path = |parts: &[&str]| parts.iter().collect::<PathBuf>();
+        let xampp = Holder::new(30, Some(path(&["xampp", "mysql", "bin", "mysqld.exe"])));
+        assert_eq!(xampp.describe(), "XAMPP (mysqld.exe)");
+        let mysqld = path(&[
+            "Program Files",
+            "MySQL",
+            "MySQL Server 8.4",
+            "bin",
+            "mysqld.exe",
+        ]);
+        assert_eq!(
+            Holder::new(31, Some(mysqld.clone())).describe(),
+            format!("MySQL ({})", mysqld.display())
+        );
+        for (file, kind) in [
+            ("postgres", "PostgreSQL"),
+            ("redis-server", "Redis"),
+            ("valkey-server", "Valkey"),
+            ("GarnetServer.exe", "Garnet"),
+            ("mailpit", "Mailpit"),
+            ("com.docker.backend.exe", "Docker"),
+            ("docker-proxy", "Docker"),
+            ("wslrelay.exe", "WSL"),
+        ] {
+            let program = path(&["opt", file]);
+            assert_eq!(
+                Holder::new(1, Some(program.clone())).describe(),
+                format!("{kind} ({})", program.display())
+            );
+        }
+        // Kiln's own instance isn't another tool's.
+        let ours = path(&[
+            "Kiln",
+            "services",
+            "bin",
+            "mailpit",
+            "1.31.6",
+            "kiln-mailpit",
+        ]);
+        assert_eq!(
+            Holder::new(2, Some(ours.clone())).describe(),
+            ours.display().to_string()
+        );
+    }
+
+    #[test]
+    fn windows_services_are_read_by_name_and_state_code() {
+        // `sc.exe query type= service state= all`, trimmed; the labels and words could be in
+        // any language, so only names and codes matter.
+        let text = "\r\nSERVICE_NAME: MySQL80\r\nDISPLAY_NAME: MySQL80\r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n        STATE              : 4  RUNNING \r\n                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)\r\n        WIN32_EXIT_CODE    : 0  (0x0)\r\n        CHECKPOINT         : 0x0\r\n\r\nSERVICE_NAME: postgresql-x64-16\r\nDISPLAY_NAME: postgresql-x64-16 - PostgreSQL Server 16\r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n        STATE              : 1  STOPPED \r\n        WIN32_EXIT_CODE    : 0  (0x0)\r\n\r\nSERVICE_NAME: Spooler\r\nDISPLAY_NAME: Print Spooler\r\n        TYPE               : 110  WIN32_OWN_PROCESS (interactive)\r\n        STATE              : 4  RUNNING \r\n\r\nSERVICE_NAME: Memurai\r\nDISPLAY_NAME: Redis-compatible store\r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n        STATE              : 4  RUNNING \r\n";
+        assert_eq!(
+            parse_sc_query(text),
+            [
+                SystemService {
+                    name: "MySQL80".into(),
+                    kind: "MySQL",
+                    running: true
+                },
+                SystemService {
+                    name: "postgresql-x64-16".into(),
+                    kind: "PostgreSQL",
+                    running: false
+                },
+                SystemService {
+                    name: "Memurai".into(),
+                    kind: "Memurai",
+                    running: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn systemd_units_are_read_with_their_sub_state() {
+        let text = "mysql.service loaded active running MySQL Community Server\n\
+                    postgresql@16-main.service loaded inactive dead PostgreSQL Cluster 16-main\n\
+                    redis-server.service loaded active running Advanced key-value store\n\
+                    ssh.service loaded active running OpenBSD Secure Shell server\n\
+                    mariadb.service not-found inactive dead mariadb.service\n";
+        let found = parse_systemctl_units(text);
+        let names: Vec<_> = found
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind, s.running))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("mysql.service", "MySQL", true),
+                ("postgresql@16-main.service", "PostgreSQL", false),
+                ("redis-server.service", "Redis", true),
+                ("mariadb.service", "MariaDB", false),
+            ]
+        );
+        assert_eq!(system_service_kind("MariaDB"), Some("MariaDB"));
+        assert_eq!(system_service_kind("nginx.service"), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # 0034. Phase 2 in the VM scenarios: a reboot inside the session, timed restarts
 
-- **Status:** accepted
+- **Status:** accepted; §2 amended 2026-11-01 (P3-03): on Windows the restart is timed by bare TCP connects
 - **Date:** 2026-10-31
 - **Task:** P2-11 · Extends [ADR 0024](0024-integration-test-vms.md) · Builds on [ADR 0026](0026-kilnd-daemon-and-local-api.md)
 
@@ -76,6 +76,14 @@ The other criteria already had checks in both scenarios:
      - the new config is written and validated by Caddy while the old server still serves.
        A config Caddy rejects leaves the running server as it was.
      - Only then does the old server stop, and the new one start at once.
+   - *Amended 2026-11-01 (P3-03):* on Windows the poller makes bare TCP connections to the
+     HTTP port, each given 150 ms, instead of HTTP requests.
+     - Windows retries a refused connection after about 0.5 s and again about 1 s later.
+       So an HTTP client's wait comes in those steps: an outage of just over half a second
+       read as 1.3 s.
+     - A connect without retries measures what the criterion is about: how long the web
+       server isn't accepting connections.
+     - Ubuntu refuses at once, so its curl poller already measured that, and stays.
 3. **`npm` is checked through the project's Node.**
    - In `toml-app`, which pins Node 20, `npm version` must name Node 20: npm prints the
      versions of the Node it runs on.
@@ -94,8 +102,8 @@ The other criteria already had checks in both scenarios:
   restarts PHP, and costs sites about a tenth of a second instead of several seconds.
 - On Windows, a connection to a port with no listener isn't refused at once: the client
   retries for about 2 s. A request that arrives in the restart's window is answered after
-  one retry, about half a second later, rather than failing. The timed check measures what
-  a client sees, so it includes that.
+  one retry, about half a second later, rather than failing. Since P3-03, the Windows check
+  measures the server's own window instead (§2, amended).
 - The runner scripts now need to reboot the VM, so they can't be pointed at a machine that
   must stay up. They only ever target the test VMs.
 - If the after-reboot part fails because the daemon didn't come back, the uninstall still

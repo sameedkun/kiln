@@ -38,13 +38,15 @@ fn gather() -> Facts {
         ..Facts::default()
     };
     let listeners = Listeners::now();
+    let system = coexist::system_services();
     let php_on_path = crate::apply::which_on(&std::env::var("PATH").unwrap_or_default(), "php");
     let store = match open_read_only() {
         Ok(store) => store,
         Err(e) => {
             facts.state.open_error = Some(e);
             // Other tools are worth knowing about before Kiln is first used.
-            facts.others = others(None, &listeners, php_on_path.as_ref());
+            facts.others = others(None, &listeners, php_on_path.as_ref(), &system);
+            facts.services = crate::service::doctor_facts(None, &listeners, &system);
             return facts;
         }
     };
@@ -59,7 +61,13 @@ fn gather() -> Facts {
         facts.certificates = Some(certificates());
     }
     facts.shims = shims(php_on_path.clone());
-    facts.others = others(Some((&store, &resolved)), &listeners, php_on_path.as_ref());
+    facts.services = crate::service::doctor_facts(Some(&store), &listeners, &system);
+    facts.others = others(
+        Some((&store, &resolved)),
+        &listeners,
+        php_on_path.as_ref(),
+        &system,
+    );
     facts
 }
 
@@ -176,51 +184,27 @@ fn others(
     kiln: Option<(&StateStore, &kiln_sites::Resolved)>,
     listeners: &Listeners,
     php_on_path: Option<&PathBuf>,
+    system: &[kiln_coexist::SystemService],
 ) -> OtherToolsFacts {
     let installed = kiln_coexist::installed_here();
     let herd_installed = installed
         .iter()
         .any(|(tool, _)| *tool == kiln_coexist::Tool::Herd);
 
-    // Other programs on the web ports Kiln may use, one line per program: nginx's workers
-    // share their master's sockets, so one server can show up as many processes.
     let caddy = web::server().ok().map(|s| s.exe().to_path_buf());
     let web_ports: BTreeSet<u16> = kiln_coexist::HTTP_PORTS
         .iter()
         .chain(&kiln_coexist::HTTPS_PORTS)
         .copied()
         .collect();
-    let mut by_pid: BTreeMap<u32, Vec<SocketAddr>> = BTreeMap::new();
-    for (addr, pid) in listeners.all() {
-        let local = addr.ip().is_loopback() || addr.ip().is_unspecified();
-        if local && web_ports.contains(&addr.port()) {
-            by_pid.entry(*pid).or_default().push(*addr);
-        }
-    }
-    let mut by_program: BTreeMap<String, (Vec<u32>, BTreeSet<SocketAddr>)> = BTreeMap::new();
-    for (pid, addrs) in by_pid {
-        if caddy
+    let service_ports: BTreeSet<u16> = kiln_coexist::SERVICE_PORTS.iter().map(|p| p.port).collect();
+    let web_listeners = grouped(listeners, &web_ports, |pid| {
+        caddy
             .as_deref()
             .is_some_and(|exe| kiln_sys::background::is_ours(pid, exe))
-        {
-            continue;
-        }
-        let entry = by_program
-            .entry(coexist::holder(pid).describe())
-            .or_default();
-        entry.0.push(pid);
-        entry.1.extend(addrs);
-    }
-    let listeners = by_program
-        .into_iter()
-        .map(|(who, (pids, addrs))| {
-            let pids = match pids.as_slice() {
-                [pid] => format!("PID {pid}"),
-                many => format!("{} processes", many.len()),
-            };
-            (format!("{who}, {pids}"), addrs.into_iter().collect())
-        })
-        .collect();
+    });
+    // Kiln's own instances on these ports are reported under Services instead.
+    let service_listeners = grouped(listeners, &service_ports, crate::service::is_ours_pid);
 
     let shared_names = kiln
         .map(|(store, resolved)| {
@@ -242,12 +226,55 @@ fn others(
             .into_iter()
             .map(|(tool, dir)| (tool.name().to_owned(), dir))
             .collect(),
-        listeners,
+        listeners: web_listeners,
         shared_names,
         php_on_path: coexist::php_from_tool(php_on_path)
             .map(|(tool, php)| (tool.name().to_owned(), php)),
         herd_installed,
+        service_listeners,
+        system_services: system
+            .iter()
+            .map(|s| (s.name.clone(), s.kind.to_owned(), s.running))
+            .collect(),
     }
+}
+
+/// Programs listening on `ports` (loopback or all addresses), one line per program, skipping
+/// those `skip` says are Kiln's: nginx's workers share their master's sockets, so one server
+/// can show up as many processes.
+fn grouped(
+    listeners: &Listeners,
+    ports: &BTreeSet<u16>,
+    skip: impl Fn(u32) -> bool,
+) -> Vec<(String, Vec<SocketAddr>)> {
+    let mut by_pid: BTreeMap<u32, Vec<SocketAddr>> = BTreeMap::new();
+    for (addr, pid) in listeners.all() {
+        let local = addr.ip().is_loopback() || addr.ip().is_unspecified();
+        if local && ports.contains(&addr.port()) {
+            by_pid.entry(*pid).or_default().push(*addr);
+        }
+    }
+    let mut by_program: BTreeMap<String, (Vec<u32>, BTreeSet<SocketAddr>)> = BTreeMap::new();
+    for (pid, addrs) in by_pid {
+        if skip(pid) {
+            continue;
+        }
+        let entry = by_program
+            .entry(coexist::holder(pid).describe())
+            .or_default();
+        entry.0.push(pid);
+        entry.1.extend(addrs);
+    }
+    by_program
+        .into_iter()
+        .map(|(who, (pids, addrs))| {
+            let pids = match pids.as_slice() {
+                [pid] => format!("PID {pid}"),
+                many => format!("{} processes", many.len()),
+            };
+            (format!("{who}, {pids}"), addrs.into_iter().collect())
+        })
+        .collect()
 }
 
 fn web_facts(store: &StateStore) -> WebFacts {

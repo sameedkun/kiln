@@ -427,6 +427,43 @@ Check 'service restart: a new process, the same data' {
     if ((MailTotal) -ne 1) { throw 'the caught mail is gone after a restart' }
 }
 Check 'service logs shows its output' { Expect '127.0.0.1:1025' (Kiln service logs mailpit-1) }
+# Ports next to other programs (P3-03, ADR 0037).
+Check 'a second instance moves off the first one''s ports and says whose they are (P3-03)' {
+    $out = Kiln service add mailpit --name mail-two
+    Expect 'Port 1025 (SMTP, where apps send mail) is used by Kiln''s mailpit-1; using 1026.' $out
+    Expect 'running as mail-two: smtp 127.0.0.1:1026, http 127.0.0.1:8026' $out
+    Kiln service remove mail-two --delete-data | Out-Null
+}
+# A plain program on 127.0.0.1:1025 stands in for another tool's mail catcher.
+Kiln service stop mailpit-1 | Out-Null
+$squatter = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-Command',
+    '$l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 1025); $l.Start(); Start-Sleep 300'
+Start-Sleep -Seconds 2
+Check 'service start refuses a port another program took, naming it (P3-03)' {
+    $out = (& $Kiln service start mailpit-1 2>&1 | ForEach-Object { "$_" }) -join "`n"   # unwrapped
+    if ($LASTEXITCODE -eq 0) { throw "it started:`n$out" }
+    if ($out -notmatch "mailpit-1 can't start: port 1025 \(smtp\) is used by .*powershell\.exe") { throw "no holder named:`n$out" }
+    Expect 'kiln service port mailpit-1 smtp=<port>' $out
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln doctor warns about the instance and lists the other program' {
+    $out = (& $Kiln doctor 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    if ($out -notmatch "mailpit-1 can't run: port 1025 \(smtp\) is used by .*powershell\.exe") { throw "no warning:`n$out" }
+    if ($out -notmatch 'a service port is in use by .*powershell\.exe.*127\.0\.0\.1:1025') { throw "not listed:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'service port moves it to 1027, where mail arrives' {
+    Kiln service port mailpit-1 smtp=1027 | Out-Null
+    Send-MailMessage -SmtpServer 127.0.0.1 -Port 1027 -From app@example.test -To you@example.test `
+        -Subject 'moved' -Body 'to 1027' -WarningAction SilentlyContinue
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s)" }
+}
+Stop-Process -Id $squatter.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+Check 'and back to 1025 once the other program is gone' {
+    Kiln service port mailpit-1 smtp=1025 | Out-Null
+    Expect 'mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running' (Kiln service list)
+}
 
 Say '== kilnd (ADR 0026)'
 Check 'daemon start' { Kiln daemon start }
@@ -445,6 +482,11 @@ Check 'Kiln''s sites answer after that restart' {
     $deadline = (Get-Date).AddSeconds(30)
     do { $page = Get 'http://static-site.test:8080/'; if ($page.Contains('static from kiln')) { break }; Start-Sleep 2 }
     until ((Get-Date) -gt $deadline)
+    if (-not $page.Contains('static from kiln')) {
+        # Keep what uninstall would delete, to see why the daemon's restart didn't hold.
+        Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+        Get-Content "$env:LOCALAPPDATA\Kiln\caddy\caddy.log" -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Say "     caddy: $($_.Substring(0, [Math]::Min(200, $_.Length)))" }
+    }
     Expect 'static from kiln' $page
 }
 Check 'daemon status counts the restart' { Expect 'Restarts by the daemon: 1' (Kiln daemon status) }
@@ -453,25 +495,29 @@ function IntermediateSha { @((Kiln ca info) -split "`n" | Where-Object { $_ -mat
 Check 'daemon status shows the intermediate certificate''s days left (P2-03)' {
     Expect 'Intermediate certificate:' (Kiln daemon status)
 }
-# Times the restart (ADR 0034 §2): asks for the static site over HTTP every 50 ms, each on a new
-# connection, and returns the longest time between two answers, in ms.
-function Start-Poller($url) {
+# Times the restart (ADR 0034 §2, amended in P3-03): every 50 ms, a new TCP connection to the
+# web server's HTTP port, given 150 ms; returns the longest time between two that were
+# accepted, in ms. Not an HTTP request: Windows retries a refused connection after about 0.5 s
+# and again 1 s later, so a client's wait comes in those steps and says little about the
+# server. A short connect without retries measures the server itself.
+function Start-Poller($port) {
     $stop = Join-Path $dir 'poll.stop'
     Remove-Item $stop, "$stop.ready" -ErrorAction SilentlyContinue
-    $job = Start-Job -ArgumentList $url, $stop {
-        param($url, $stop)
+    $job = Start-Job -ArgumentList $port, $stop {
+        param($port, $stop)
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $last = $null; $worst = 0
         while (-not (Test-Path $stop)) {
+            $client = [Net.Sockets.TcpClient]::new()
             try {
-                $request = [Net.WebRequest]::Create($url)
-                $request.Timeout = 2000
-                $request.KeepAlive = $false
-                $request.GetResponse().Close()
+                $accepted = $client.ConnectAsync('127.0.0.1', $port).Wait(150) -and $client.Connected
+            } catch { $accepted = $false }
+            $client.Dispose()
+            if ($accepted) {
                 $now = $clock.ElapsedMilliseconds
                 if ($null -eq $last) { Set-Content "$stop.ready" 'yes' } else { $worst = [Math]::Max($worst, $now - $last) }
                 $last = $now
-            } catch {}
+            }
             Start-Sleep -Milliseconds 50
         }
         if ($null -eq $last) { -1 } else { [Math]::Max($worst, $clock.ElapsedMilliseconds - $last) }
@@ -490,7 +536,7 @@ $script:renewalGap = $null
 Check 'renewal through the daemon: a new intermediate, the server restarts to use it, HTTPS keeps working (P2-03)' {
     $before = IntermediateSha
     $oldPid = (Get-Process kiln-caddy).Id
-    $poller = Start-Poller 'http://static-site.test:8080/'
+    $poller = Start-Poller 8080
     # Windows PowerShell drops bare double quotes in arguments to programs, hence \".
     try {
         Expect '"ok": true' (Kiln daemon call ca.renew '{\"force\":true}')
@@ -513,10 +559,10 @@ Check 'renewal through the daemon: a new intermediate, the server restarts to us
     until ((Get-Date) -gt $deadline)
     Expect 'via cgi-fcgi' $page
 }
-Check 'the renewal''s restart left the sites unanswered for under a second (ADR 0034)' {
-    Say "     longest time without an answer: $script:renewalGap ms"
+Check 'the renewal''s restart kept the web server from accepting connections for under a second (ADR 0034)' {
+    Say "     longest time not accepting connections: $script:renewalGap ms"
     if ($null -eq $script:renewalGap -or $script:renewalGap -lt 0 -or $script:renewalGap -ge 1000) {
-        throw "longest time without an answer: $script:renewalGap ms"
+        throw "longest time not accepting connections: $script:renewalGap ms"
     }
 }
 Check 'daemon status counts the renewal' { Expect 'Renewals by the daemon: 1' (Kiln daemon status) }

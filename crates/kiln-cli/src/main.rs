@@ -233,6 +233,14 @@ enum ServiceAction {
     Stop { names: Vec<String> },
     /// Stop and start a service again.
     Restart { name: String },
+    /// Move a service to other ports, e.g. `kiln service port mailpit-1 smtp=2525`. A
+    /// running service restarts on them; its data stays.
+    Port {
+        name: String,
+        /// New ports by role.
+        #[arg(value_name = "ROLE=PORT", required = true)]
+        ports: Vec<String>,
+    },
     /// Show a service's recent output.
     Logs {
         name: String,
@@ -732,6 +740,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),
         ServiceAction::Restart { name } => service::restart(&name),
+        ServiceAction::Port { name, ports } => service::port(&name, &ports),
         ServiceAction::Logs { name, lines } => service::logs(&name, lines),
         ServiceAction::Remove { name, delete_data } => service::remove(&name, delete_data),
     }

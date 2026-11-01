@@ -142,8 +142,66 @@ pub(crate) fn is_free(port: u16) -> bool {
         && (!ipv6 || TcpListener::bind((Ipv6Addr::LOCALHOST, port)).is_ok())
 }
 
+/// The database, cache and mail services the system has ([ADR 0037] §5): Windows services
+/// from `sc.exe query`, systemd units from `systemctl list-units`. Empty where neither
+/// answers. Read-only.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+pub(crate) fn system_services() -> Vec<kiln_coexist::SystemService> {
+    let output = if cfg!(windows) {
+        std::process::Command::new("sc.exe")
+            .args(["query", "type=", "service", "state=", "all"])
+            .output()
+    } else {
+        std::process::Command::new("systemctl")
+            .args([
+                "list-units",
+                "--type=service",
+                "--all",
+                "--plain",
+                "--no-legend",
+                "--no-pager",
+            ])
+            .output()
+    };
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    if cfg!(windows) {
+        kiln_coexist::parse_sc_query(&text)
+    } else {
+        kiln_coexist::parse_systemctl_units(&text)
+    }
+}
+
+/// Why a service's port can't be used ([ADR 0037] §2): who holds it. When that program
+/// can't be inspected (on Linux, a system service running as another user), a running
+/// system service of a kind that uses this port is named instead.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+pub(crate) fn why_busy_service(
+    listeners: &Listeners,
+    port: u16,
+    services: &[kiln_coexist::SystemService],
+) -> String {
+    let inspected = listeners.holder(port).is_some_and(|h| h.image.is_some());
+    if !inspected
+        && let Some(usual) = kiln_coexist::service_port(port)
+        && let Some(service) = services
+            .iter()
+            .find(|s| s.running && usual.kinds.contains(&s.kind))
+    {
+        return format!(
+            "probably used by the system's {} service ({})",
+            service.kind, service.name
+        );
+    }
+    why_busy(listeners, port)
+}
+
 /// "used by Laravel Herd (nginx.exe)", or why else it can't be used.
-fn why_busy(listeners: &Listeners, port: u16) -> String {
+pub(crate) fn why_busy(listeners: &Listeners, port: u16) -> String {
     match listeners.holder(port) {
         Some(holder) => format!("used by {}", holder.describe()),
         None => match first_unprivileged_port() {

@@ -254,6 +254,45 @@ restarted_service() {
 }
 check "service restart: a new process, the same data" restarted_service
 check "service logs shows its output" contains "127.0.0.1:1025" "$K" service logs mailpit-1
+# Ports next to other programs (P3-03, ADR 0037).
+second_instance() {
+    "$K" service add mailpit --name mail-two > "$WORK/mail-two.txt" 2>&1 || { cat "$WORK/mail-two.txt"; return 1; }
+    grep -q "Port 1025 (SMTP, where apps send mail) is used by Kiln's mailpit-1; using 1026." "$WORK/mail-two.txt" &&
+        grep -q "running as mail-two: smtp 127.0.0.1:1026, http 127.0.0.1:8026" "$WORK/mail-two.txt" &&
+        "$K" service remove mail-two --delete-data > /dev/null
+}
+check "a second instance moves off the first one's ports and says whose they are (P3-03)" second_instance
+# A plain program on 127.0.0.1:1025 stands in for another tool's mail catcher. Like real
+# servers it sets SO_REUSEADDR: the earlier checks' SMTP connections leave sockets in
+# TIME_WAIT on 1025, which refuse a bind without it.
+"$K" service stop mailpit-1 > /dev/null
+python3 -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1",1025)); s.listen(); time.sleep(300)' &
+squatter=$!
+sleep 1
+kill -0 "$squatter" 2> /dev/null || echo "     (the stand-in program couldn't take port 1025)"
+refused_start() {
+    if "$K" service start mailpit-1 > "$WORK/conflict.txt" 2>&1; then echo "it started"; return 1; fi
+    grep -q "mailpit-1 can't start: port 1025 (smtp) is used by .*python3" "$WORK/conflict.txt" &&
+        grep -q "kiln service port mailpit-1 smtp=<port>" "$WORK/conflict.txt"
+}
+check "service start refuses a port another program took, naming it (P3-03)" refused_start
+doctor_names_it() {
+    "$K" doctor > "$WORK/doctor.txt" 2>&1
+    grep -q "mailpit-1 can't run: port 1025 (smtp) is used by .*python3" "$WORK/doctor.txt" &&
+        grep -q "a service port is in use by .*python3.*127.0.0.1:1025" "$WORK/doctor.txt"
+}
+check "kiln doctor warns about the instance and lists the other program" doctor_names_it
+moved() {
+    "$K" service port mailpit-1 smtp=1027 > /dev/null || return 1
+    printf 'Subject: moved\r\n\r\nto 1027\r\n' > "$WORK/mail2.txt"
+    curl -fsS smtp://127.0.0.1:1027 --mail-from app@example.test --mail-rcpt you@example.test -T "$WORK/mail2.txt" &&
+        mail_total 2
+}
+check "service port moves it to 1027, where mail arrives" moved
+kill "$squatter" 2> /dev/null
+wait "$squatter" 2> /dev/null
+check "and back to 1025 once the other program is gone" \
+    sh -c "'$K' service port mailpit-1 smtp=1025 > /dev/null && '$K' service list | grep -q 'mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running'"
 
 echo "== kilnd (ADR 0026)"
 caddy_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-caddy" {print $1}'; }

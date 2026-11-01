@@ -109,37 +109,137 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
 }
 
 /// Brings the running services in line with the enabled instances: starts or updates the
-/// supervisor, or stops it when nothing should run.
+/// supervisor, or stops it when nothing should run. Refuses first if another program has
+/// taken one of their ports ([ADR 0037] §3).
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
 fn apply(store: &StateStore) -> Result<(), String> {
     let pools = desired(store)?;
     let supervisor = supervisor()?;
+    // What ran before, to wait for what no longer should: the supervisor stops programs in
+    // the background, and a stopped service must really be gone before the command ends.
+    let before = supervisor.pools().ok().flatten().unwrap_or_default();
     if pools.pools.is_empty() {
         supervisor.stop().map_err(|e| e.to_string())?;
-        return Ok(());
+    } else {
+        check_ports(store)?;
+        supervisor.start(&pools).map_err(|e| e.to_string())?;
     }
-    supervisor.start(&pools).map_err(|e| e.to_string())?;
+    let wanted: Vec<u16> = pools
+        .ready_addresses()
+        .iter()
+        .map(std::net::SocketAddr::port)
+        .collect();
+    let gone: Vec<u16> = before
+        .ready_addresses()
+        .iter()
+        .map(std::net::SocketAddr::port)
+        .filter(|p| !wanted.contains(p))
+        .collect();
+    if !wait_released(&gone) {
+        println!("Note: port(s) {gone:?} are still open; a service is taking long to stop.");
+    }
     Ok(())
+}
+
+/// Waits until every port in `ports` is free again, for as long as a graceful stop may take
+/// (the supervisor's own limit). Returns whether they all are.
+fn wait_released(ports: &[u16]) -> bool {
+    let deadline = std::time::Instant::now() + kiln_supervisor::handle::PROGRAM_STOP_TIMEOUT;
+    loop {
+        if ports.iter().all(|&p| is_free(p)) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn is_free(port: u16) -> bool {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
 }
 
+/// Whether `holder` is one of Kiln's own service programs (in `<services>/bin`).
+fn is_ours(holder: &kiln_coexist::Holder) -> bool {
+    let Ok(bin) = services_dir().map(|s| s.join("bin")) else {
+        return false;
+    };
+    holder.image.as_ref().is_some_and(|image| {
+        if cfg!(windows) {
+            image
+                .to_string_lossy()
+                .to_lowercase()
+                .starts_with(&bin.to_string_lossy().to_lowercase())
+        } else {
+            image.starts_with(&bin)
+        }
+    })
+}
+
+/// Every port of every instance that should run is free, or held by Kiln's own instance
+/// ([ADR 0037] §3); otherwise who holds it, and the two ways out.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+fn check_ports(store: &StateStore) -> Result<(), String> {
+    let listeners = crate::coexist::Listeners::now();
+    let mut problems = Vec::new();
+    for record in store.services().map_err(|e| e.to_string())? {
+        if !record.enabled {
+            continue;
+        }
+        for (role, &port) in &record.ports {
+            if is_free(port) || listeners.holder(port).is_some_and(|h| is_ours(&h)) {
+                continue;
+            }
+            let why = crate::coexist::why_busy_service(
+                &listeners,
+                port,
+                &crate::coexist::system_services(),
+            );
+            problems.push(format!(
+                "{} can't start: port {port} ({role}) is {why}. Stop that program, or move {} with `kiln service port {} {role}=<port>`.",
+                record.name, record.name, record.name
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
+}
+
 /// Ports for a new instance ([ADR 0036] §7): what the user asked for, else the usual port if
-/// it is free and no other instance has it, else the next free one above it.
+/// it is free and no other instance has it, else the next free one above it. A move says
+/// who holds the usual port ([ADR 0037] §2). `taken` maps other instances' ports to their
+/// names.
 ///
 /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
 fn choose_ports(
     provider: &dyn ServiceProvider,
     asked: &BTreeMap<String, u16>,
-    taken_by_instances: &[u16],
+    taken: &BTreeMap<u16, String>,
 ) -> Result<BTreeMap<String, u16>, String> {
     let mut chosen = BTreeMap::new();
     for role in provider.ports() {
         if let Some(&port) = asked.get(role.role) {
-            if !is_free(port) || taken_by_instances.contains(&port) {
+            if let Some(owner) = taken.get(&port) {
                 return Err(format!(
-                    "port {port} for {} is in use; pick another with --port {}=<n>",
+                    "port {port} for {} is Kiln's {owner}'s; pick another with --port {}=<n>",
+                    role.role, role.role
+                ));
+            }
+            if !is_free(port) {
+                let why = crate::coexist::why_busy_service(
+                    &crate::coexist::Listeners::now(),
+                    port,
+                    &crate::coexist::system_services(),
+                );
+                return Err(format!(
+                    "port {port} for {} is {why}; pick another with --port {}=<n>",
                     role.role, role.role
                 ));
             }
@@ -147,9 +247,7 @@ fn choose_ports(
             continue;
         }
         let port = (role.usual..role.usual.saturating_add(PORT_SEARCH))
-            .find(|&p| {
-                is_free(p) && !taken_by_instances.contains(&p) && !chosen.values().any(|&c| c == p)
-            })
+            .find(|&p| is_free(p) && !taken.contains_key(&p) && !chosen.values().any(|&c| c == p))
             .ok_or_else(|| {
                 format!(
                     "no free port between {} and {} for {}",
@@ -159,8 +257,16 @@ fn choose_ports(
                 )
             })?;
         if port != role.usual {
+            let why = match taken.get(&role.usual) {
+                Some(owner) => format!("used by Kiln's {owner}"),
+                None => crate::coexist::why_busy_service(
+                    &crate::coexist::Listeners::now(),
+                    role.usual,
+                    &crate::coexist::system_services(),
+                ),
+            };
             println!(
-                "Port {} ({}) is taken; using {port} instead.",
+                "Port {} ({}) is {why}; using {port}.",
                 role.usual, role.what
             );
         }
@@ -178,6 +284,84 @@ fn choose_ports(
         ));
     }
     Ok(chosen)
+}
+
+/// The ports of every instance but `except`, with the instance's name.
+fn ports_of_others(store: &StateStore, except: &str) -> Result<BTreeMap<u16, String>, String> {
+    Ok(store
+        .services()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| s.name != except)
+        .flat_map(|s| {
+            s.ports
+                .values()
+                .map(|&port| (port, s.name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
+/// `kiln service port <name> <role>=<port>…` ([ADR 0037] §4): new ports for an instance,
+/// which must be free; a running instance restarts on them, and its data stays.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+pub fn port(name: &str, values: &[String]) -> Result<(), String> {
+    let mut store = crate::web::open_store()?;
+    let mut record = record_of(&store, name)?;
+    let provider = provider_of(&record.kind)?;
+    let asked = parse_ports(values)?;
+    if asked.is_empty() {
+        return Err(format!(
+            "give the new ports, e.g. `kiln service port {name} {}=<port>`",
+            provider.ports().first().map_or("port", |p| p.role)
+        ));
+    }
+    let others = ports_of_others(&store, name)?;
+    let listeners = crate::coexist::Listeners::now();
+    for (role, &port) in &asked {
+        if !provider.ports().iter().any(|p| p.role == role.as_str()) {
+            let roles: Vec<_> = provider.ports().iter().map(|p| p.role).collect();
+            return Err(format!(
+                "{} has no port called {role}; its ports are: {}",
+                provider.kind(),
+                roles.join(", ")
+            ));
+        }
+        if let Some(owner) = others.get(&port) {
+            return Err(format!("port {port} is Kiln's {owner}'s"));
+        }
+        // Its own current port is fine; anything else must be free.
+        let own = record.ports.get(role) == Some(&port);
+        if !own && !is_free(port) {
+            return Err(format!(
+                "port {port} is {}",
+                crate::coexist::why_busy_service(
+                    &listeners,
+                    port,
+                    &crate::coexist::system_services()
+                )
+            ));
+        }
+    }
+    record.ports.extend(asked);
+    store.put_service(&record).map_err(|e| e.to_string())?;
+    if record.enabled {
+        apply(&store)?;
+    }
+    println!(
+        "{name} now uses {}{}.",
+        describe_ports(provider, &record.ports),
+        if record.enabled {
+            " and is running there"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "Projects wired to its old ports need their .env changed (`kiln env use` comes with P3-08)."
+    );
+    Ok(())
 }
 
 /// `--port role=N` values.
@@ -314,13 +498,11 @@ pub fn add(
         ));
     }
 
-    let taken: Vec<u16> = store
-        .services()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .flat_map(|s| s.ports.values().copied())
-        .collect();
-    let chosen = choose_ports(provider, &parse_ports(ports)?, &taken)?;
+    let chosen = choose_ports(
+        provider,
+        &parse_ports(ports)?,
+        &ports_of_others(&store, "")?,
+    )?;
 
     install_binaries(provider, release, &dirs.bin)?;
 
@@ -353,8 +535,11 @@ pub fn add(
     Ok(())
 }
 
-/// Whether the instance answers on its main port.
-fn answers(record: &ServiceRecord) -> bool {
+/// Whether the instance runs: its main port answers, and Kiln's own program holds it. Another
+/// program on that port answers too, and isn't this instance ([ADR 0037] §3).
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+fn answers(record: &ServiceRecord, listeners: &crate::coexist::Listeners) -> bool {
     let Some(provider) = kiln_services::provider(&record.kind) else {
         return false;
     };
@@ -368,6 +553,7 @@ fn answers(record: &ServiceRecord) -> bool {
                 Duration::from_millis(300),
             )
             .is_ok()
+                && listeners.holder(port).is_some_and(|h| is_ours(&h))
         })
 }
 
@@ -386,12 +572,13 @@ pub fn list() -> Result<(), String> {
         );
         return Ok(());
     }
+    let listeners = crate::coexist::Listeners::now();
     let running = matches!(
         supervisor()?.status().map_err(|e| e.to_string())?,
         ProcStatus::Running { .. }
     );
     for record in &records {
-        let state = match (record.enabled, running && answers(record)) {
+        let state = match (record.enabled, running && answers(record, &listeners)) {
             (true, true) => "running",
             (true, false) => "not running (`kiln services up` starts it)",
             (false, _) => "stopped",
@@ -498,10 +685,22 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
     store.remove_service(name).map_err(|e| e.to_string())?;
 
     if delete_data {
-        match std::fs::remove_dir_all(dirs.instance()) {
-            Ok(()) => println!("Deleted {} and its data.", dirs.instance().display()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("cannot delete {}: {e}", dirs.instance().display())),
+        // Windows can keep a stopped program's files open for a moment after it exits.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(dirs.instance()) {
+                Ok(()) => {
+                    println!("Deleted {} and its data.", dirs.instance().display());
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(e) => {
+                    return Err(format!("cannot delete {}: {e}", dirs.instance().display()));
+                }
+            }
         }
     } else {
         println!(
@@ -525,6 +724,69 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
     }
     println!("Removed {name}.");
     Ok(())
+}
+
+/// What `kiln doctor` reports about Kiln's instances ([ADR 0037] §5): whether each runs, and
+/// which of its ports another program holds.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+pub(crate) fn doctor_facts(
+    store: Option<&StateStore>,
+    listeners: &crate::coexist::Listeners,
+    system: &[kiln_coexist::SystemService],
+) -> kiln_doctor::ServicesFacts {
+    let kinds = kiln_services::providers()
+        .iter()
+        .map(|p| p.kind().to_owned())
+        .collect();
+    // An older state database has no services table: nothing to report.
+    let records = store.and_then(|s| s.services().ok()).unwrap_or_default();
+    let instances = records
+        .iter()
+        .map(|record| {
+            let provider = kiln_services::provider(&record.kind);
+            let running = record.enabled && answers(record, listeners);
+            let conflicts = if record.enabled && !running {
+                record
+                    .ports
+                    .iter()
+                    .filter(|&(_, &port)| {
+                        !is_free(port) && !listeners.holder(port).is_some_and(|h| is_ours(&h))
+                    })
+                    .map(|(role, &port)| {
+                        (
+                            port,
+                            role.clone(),
+                            crate::coexist::why_busy_service(listeners, port, system),
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            kiln_doctor::InstanceFacts {
+                name: record.name.clone(),
+                what: format!(
+                    "{} {}",
+                    provider.map_or(record.kind.as_str(), |p| p.display_name()),
+                    record.version
+                ),
+                ports: provider.map_or_else(
+                    || format!("{:?}", record.ports),
+                    |p| describe_ports(p, &record.ports),
+                ),
+                enabled: record.enabled,
+                running,
+                conflicts,
+            }
+        })
+        .collect();
+    kiln_doctor::ServicesFacts { instances, kinds }
+}
+
+/// Whether `pid` runs one of Kiln's own service programs.
+pub(crate) fn is_ours_pid(pid: u32) -> bool {
+    is_ours(&crate::coexist::holder(pid))
 }
 
 /// Every service data folder with something in it, also of removed instances whose data was
@@ -573,18 +835,31 @@ mod tests {
     #[test]
     fn ports_skip_what_is_taken_and_refuse_unknown_roles() {
         let mailpit = kiln_services::provider("mailpit").unwrap();
-        // Hold the usual SMTP port's neighbour range start, if we can, to force a move.
+        // A port another program holds, for the asked-for case.
         let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let held_port = held.local_addr().unwrap().port();
-        let chosen = choose_ports(mailpit, &BTreeMap::new(), &[1025, 8025]).unwrap();
+        let others = BTreeMap::from([
+            (1025, "mailpit-1".to_owned()),
+            (8025, "mailpit-1".to_owned()),
+        ]);
+        let chosen = choose_ports(mailpit, &BTreeMap::new(), &others).unwrap();
         assert_ne!(chosen["smtp"], 1025, "taken by another instance");
         assert_ne!(chosen["http"], 8025, "taken by another instance");
         assert_ne!(chosen["smtp"], chosen["http"]);
 
         let asked = BTreeMap::from([("smtp".into(), held_port)]);
-        assert!(choose_ports(mailpit, &asked, &[]).is_err(), "port in use");
+        assert!(
+            choose_ports(mailpit, &asked, &BTreeMap::new()).is_err(),
+            "port in use"
+        );
+        let asked = BTreeMap::from([("smtp".into(), 1025)]);
+        let err = choose_ports(mailpit, &asked, &others).unwrap_err();
+        assert!(err.contains("Kiln's mailpit-1"), "{err}");
         let asked = BTreeMap::from([("imap".into(), 1143)]);
-        assert!(choose_ports(mailpit, &asked, &[]).is_err(), "no such role");
+        assert!(
+            choose_ports(mailpit, &asked, &BTreeMap::new()).is_err(),
+            "no such role"
+        );
         drop(held);
     }
 }

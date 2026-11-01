@@ -34,6 +34,7 @@ pub enum Area {
     Dns,
     Certificates,
     Shims,
+    Services,
     OtherTools,
 }
 
@@ -50,6 +51,7 @@ impl Area {
             Self::Dns => "DNS",
             Self::Certificates => "Certificates",
             Self::Shims => "Shims",
+            Self::Services => "Services",
             Self::OtherTools => "Other tools",
         }
     }
@@ -96,6 +98,7 @@ pub struct Facts {
     /// Only gathered when a site uses HTTPS.
     pub certificates: Option<CertFacts>,
     pub shims: ShimFacts,
+    pub services: ServicesFacts,
     pub others: OtherToolsFacts,
     /// How this machine resolves names (Linux; `None` elsewhere).
     pub resolver: Option<ResolverFacts>,
@@ -147,6 +150,40 @@ pub struct OtherToolsFacts {
     /// (tool, path) when `php` on this terminal's PATH is another tool's.
     pub php_on_path: Option<(String, PathBuf)>,
     pub herd_installed: bool,
+    /// (who, addresses): other programs on the usual service ports (3306, 5432, …)
+    /// ([ADR 0037] §5).
+    ///
+    /// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+    pub service_listeners: Vec<(String, Vec<SocketAddr>)>,
+    /// The system's database, cache and mail services: (name, kind, running).
+    pub system_services: Vec<(String, String, bool)>,
+}
+
+/// Kiln's service instances ([ADR 0036], [ADR 0037]).
+///
+/// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+#[derive(Debug, Clone, Default)]
+pub struct ServicesFacts {
+    pub instances: Vec<InstanceFacts>,
+    /// The kinds Kiln can add, for the hint when there are none.
+    pub kinds: Vec<String>,
+}
+
+/// One service instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceFacts {
+    pub name: String,
+    /// e.g. "Mailpit 1.31.6".
+    pub what: String,
+    /// "smtp 127.0.0.1:1025, http 127.0.0.1:8025".
+    pub ports: String,
+    /// Should run (`kiln service start`).
+    pub enabled: bool,
+    /// Answers on its main port.
+    pub running: bool,
+    /// Its ports another program holds: (port, role, why), e.g. "used by XAMPP (mysqld.exe)".
+    pub conflicts: Vec<(u16, String, String)>,
 }
 
 /// A Kiln site name another program also puts in the hosts file.
@@ -266,6 +303,7 @@ pub fn diagnose(facts: &Facts) -> Report {
         findings.extend(certificates(certs));
     }
     findings.extend(shims(&facts.shims));
+    findings.extend(services(&facts.services));
     findings.extend(other_tools(&facts.others));
     findings.sort_by_key(|f| f.area);
     Report { findings }
@@ -896,10 +934,80 @@ fn shims(facts: &ShimFacts) -> Vec<Finding> {
     out
 }
 
+/// Kiln's service instances ([ADR 0037] §5): running as they should, stopped on purpose, or
+/// kept from running, with the reason and the fix.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
+fn services(facts: &ServicesFacts) -> Vec<Finding> {
+    let area = Area::Services;
+    if facts.instances.is_empty() {
+        let mut none = finding(area, Status::Ok, "no services yet");
+        if !facts.kinds.is_empty() {
+            none = with_fix(
+                none,
+                format!("kiln service add <kind>  ({})", facts.kinds.join(", ")),
+            );
+        }
+        return vec![none];
+    }
+    let mut out = Vec::new();
+    for i in &facts.instances {
+        let f = match (i.enabled, i.running) {
+            (true, true) => finding(
+                area,
+                Status::Ok,
+                format!("{} ({}) runs on {}", i.name, i.what, i.ports),
+            ),
+            (false, _) => finding(
+                area,
+                Status::Info,
+                format!("{} ({}) is stopped", i.name, i.what),
+            ),
+            (true, false) if !i.conflicts.is_empty() => {
+                let held: Vec<String> = i
+                    .conflicts
+                    .iter()
+                    .map(|(port, role, why)| format!("port {port} ({role}) is {why}"))
+                    .collect();
+                let (port, role, _) = &i.conflicts[0];
+                with_fix(
+                    finding(
+                        area,
+                        Status::Warn,
+                        format!("{} can't run: {}", i.name, held.join("; ")),
+                    ),
+                    format!(
+                        "stop that program, or move it: kiln service port {} {role}=<port>  (now {port})",
+                        i.name
+                    ),
+                )
+            }
+            (true, false) => with_fix(
+                finding(
+                    area,
+                    Status::Warn,
+                    format!(
+                        "{} ({}) should run on {} but doesn't answer",
+                        i.name, i.what, i.ports
+                    ),
+                ),
+                format!(
+                    "kiln services up; kiln service logs {} shows why it stopped",
+                    i.name
+                ),
+            ),
+        };
+        out.push(f);
+    }
+    out
+}
+
 /// Never a failure: other tools are fine to have. Only a shared site name is a warning, since
-/// it can open the wrong site ([ADR 0019] §4–5).
+/// it can open the wrong site ([ADR 0019] §4–5). Other services are information
+/// ([ADR 0037] §5).
 ///
 /// [ADR 0019]: ../../../docs/adr/0019-coexistence.md
+/// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
 fn other_tools(facts: &OtherToolsFacts) -> Vec<Finding> {
     let area = Area::OtherTools;
     let mut out = Vec::new();
@@ -952,6 +1060,27 @@ fn other_tools(facts: &OtherToolsFacts) -> Vec<Finding> {
             area,
             Status::Info,
             "Laravel Herd stops every nginx.exe when it starts; Kiln's server is kiln-caddy.exe, so it isn't affected",
+        ));
+    }
+    // Other services are information, never a fault ([ADR 0037] §5).
+    for (who, addrs) in &facts.service_listeners {
+        let addrs: Vec<String> = addrs.iter().map(ToString::to_string).collect();
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("a service port is in use by {who}: {}", addrs.join(", ")),
+        ));
+    }
+    for (name, kind, running) in &facts.system_services {
+        let state = if *running {
+            "running"
+        } else {
+            "installed, not running"
+        };
+        out.push(finding(
+            area,
+            Status::Info,
+            format!("the system's {kind} service {name} is {state}"),
         ));
     }
     if out.is_empty() {
@@ -1156,6 +1285,95 @@ mod tests {
     }
 
     #[test]
+    fn services_report_running_stopped_and_blocked_instances() {
+        let report = diagnose(&base());
+        let none = of(&report, Area::Services);
+        assert_eq!(none.len(), 1);
+        assert_eq!(none[0].status, Status::Ok);
+
+        let mailpit = |name: &str| InstanceFacts {
+            name: name.into(),
+            what: "Mailpit 1.31.6".into(),
+            ports: "smtp 127.0.0.1:1025, http 127.0.0.1:8025".into(),
+            enabled: true,
+            running: true,
+            conflicts: Vec::new(),
+        };
+        let mut facts = base();
+        facts.services.instances = vec![
+            mailpit("mail-a"),
+            InstanceFacts {
+                enabled: false,
+                running: false,
+                ..mailpit("mail-b")
+            },
+            InstanceFacts {
+                running: false,
+                conflicts: vec![(1025, "smtp".into(), "used by XAMPP (mailpit.exe)".into())],
+                ..mailpit("mail-c")
+            },
+            InstanceFacts {
+                running: false,
+                ..mailpit("mail-d")
+            },
+        ];
+        let report = diagnose(&facts);
+        let found = of(&report, Area::Services);
+        let statuses: Vec<_> = found.iter().map(|f| f.status).collect();
+        assert_eq!(
+            statuses,
+            [Status::Ok, Status::Info, Status::Warn, Status::Warn]
+        );
+        assert!(
+            found[2]
+                .message
+                .contains("port 1025 (smtp) is used by XAMPP")
+        );
+        assert!(
+            found[2]
+                .fix
+                .as_deref()
+                .unwrap()
+                .contains("kiln service port mail-c smtp=<port>")
+        );
+        assert!(
+            found[3]
+                .fix
+                .as_deref()
+                .unwrap()
+                .contains("kiln service logs mail-d")
+        );
+        assert!(report.render().contains("Services\n"));
+    }
+
+    #[test]
+    fn other_services_are_information() {
+        let mut facts = base();
+        facts.others.service_listeners = vec![(
+            "MySQL (C:\\mysql\\bin\\mysqld.exe), PID 40".into(),
+            vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 3306))],
+        )];
+        facts.others.system_services = vec![
+            ("MySQL80".into(), "MySQL".into(), true),
+            ("postgresql-x64-16".into(), "PostgreSQL".into(), false),
+        ];
+        let report = diagnose(&facts);
+        let others = of(&report, Area::OtherTools);
+        assert!(others.iter().all(|f| f.status == Status::Info));
+        assert!(others.iter().any(|f| f.message.contains("127.0.0.1:3306")));
+        assert!(
+            others
+                .iter()
+                .any(|f| f.message == "the system's MySQL service MySQL80 is running")
+        );
+        assert!(
+            others
+                .iter()
+                .any(|f| f.message.contains("installed, not running"))
+        );
+    }
+
+    #[test]
     fn other_tools_are_reported_and_only_shared_names_warn() {
         let report = diagnose(&base());
         let others = of(&report, Area::OtherTools);
@@ -1176,6 +1394,7 @@ mod tests {
             }],
             php_on_path: Some(("Laravel Herd".into(), PathBuf::from("php.bat"))),
             herd_installed: true,
+            ..OtherToolsFacts::default()
         };
         let report = diagnose(&facts);
         let others = of(&report, Area::OtherTools);
