@@ -6,6 +6,7 @@ function Status($text) { Set-Content $status $text -Encoding ascii }
 function Check($desc, [scriptblock] $test) {
     Say "     ... $(Get-Date -Format HH:mm:ss) $desc"   # shows which step a stuck run is in
     $started = Get-Date
+    $global:LASTEXITCODE = 0   # a block that runs no program mustn't inherit an earlier failure
     try {
         $out = & $test 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { throw "exit code $LASTEXITCODE`n$out" }

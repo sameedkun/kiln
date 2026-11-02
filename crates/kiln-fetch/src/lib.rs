@@ -21,8 +21,9 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256, Sha512};
 
-/// Largest single download Kiln accepts.
-pub const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
+/// Largest single download Kiln accepts. MongoDB's Windows archive is about 1 GB, most of it
+/// debug symbols Kiln doesn't keep (ADR 0042 §4).
+pub const MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Longest a single body may take to arrive.
 pub const BODY_TIMEOUT: Duration = Duration::from_hours(1);

@@ -294,10 +294,15 @@ function S3($method, $path, [byte[]] $body = @()) {
     if ($body.Length) { $params.Body = $body }
     Invoke-WebRequest @params
 }
+# An object's text: Windows PowerShell gives a text response as a string, anything else as bytes.
+function S3Text($path) {
+    $content = (S3 GET $path).Content
+    if ($content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($content) } else { $content }
+}
 Check 'a bucket is made, an object stored and read back' {
     S3 PUT '/kiln-ci' | Out-Null
     S3 PUT '/kiln-ci/hello.txt' ([Text.Encoding]::UTF8.GetBytes('kept by kiln')) | Out-Null
-    $read = [Text.Encoding]::UTF8.GetString((S3 GET '/kiln-ci/hello.txt').Content)
+    $read = S3Text '/kiln-ci/hello.txt'
     if ($read -ne 'kept by kiln') { throw "read back: $read" }
 }
 Check 'the console answers' {
@@ -306,7 +311,7 @@ Check 'the console answers' {
 }
 Check 'RustFS data survives a restart' {
     Kiln service restart rustfs-1 | Out-Null
-    $read = [Text.Encoding]::UTF8.GetString((S3 GET '/kiln-ci/hello.txt').Content)
+    $read = S3Text '/kiln-ci/hello.txt'
     if ($read -ne 'kept by kiln') { throw "read back: $read" }
 }
 
