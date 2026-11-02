@@ -169,6 +169,53 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
     Expect 'kept' (Psql 'postgres-17' 'kiln_ci' 'SELECT v FROM t;')
 }
 
+Say '== Redis (ADR 0041)'
+function Redis($instance, $database, $commands) {
+    ($commands | & $Kiln db $instance $database 2>&1 | ForEach-Object { "$_" }) -join "`n"
+}
+$script:redisPort = 0
+Check 'service add redis: from redis-windows, running on loopback' {
+    $out = Kiln service add redis
+    Expect 'running as redis-8.10' $out
+    $script:redisPort = PortOf $out 'redis'
+}
+Check 'service add redis --version 8.8: beside it, on another port' {
+    $out = Kiln service add redis --version 8.8
+    Expect 'running as redis-8.8' $out
+    if ((PortOf $out 'redis') -eq $script:redisPort) { throw "same port as redis-8.10:`n$out" }
+}
+Check 'Redis listens on 127.0.0.1 only' {
+    $listening = Get-NetTCPConnection -State Listen | Where-Object {
+        (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName -eq 'kiln-redis'
+    }
+    if (@($listening).Count -lt 2) { throw "kiln-redis listens on $(@($listening).Count) port(s)" }
+    $wide = $listening | Where-Object LocalAddress -ne '127.0.0.1'
+    if ($wide) { throw "listening beyond loopback: $(($wide | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
+}
+Check 'kiln db redis-8.10: keys in database 0 and 1 stay apart' {
+    Redis 'redis-8.10' $null 'SET where zero' | Out-Null
+    Redis 'redis-8.10' 1 'SET where one' | Out-Null
+    Expect 'zero' (Redis 'redis-8.10' $null 'GET where')
+    Expect 'one' (Redis 'redis-8.10' 1 'GET where')
+}
+# Laravel's cache (database 1) uses Lua scripts; Garnet ran them in database 0 (I-75).
+Check 'a Lua script run in database 1 acts on database 1' {
+    Redis 'redis-8.10' 1 "EVAL `"return redis.call('SET', KEYS[1], ARGV[1])`" 1 lua kept" | Out-Null
+    Expect 'kept' (Redis 'redis-8.10' 1 'GET lua')
+    $zero = Redis 'redis-8.10' $null 'EXISTS lua'
+    if ($zero.Trim() -ne '0') { throw "the script wrote to database 0: $zero" }
+}
+Check 'Redis data survives a restart (saved at shutdown)' {
+    Kiln service restart redis-8.10 | Out-Null
+    Expect 'kept' (Redis 'redis-8.10' 1 'GET lua')
+}
+Check 'a stop shuts Redis down cleanly (its log says so)' {
+    Kiln service stop redis-8.8 | Out-Null
+    $out = Kiln service logs redis-8.8 --lines 8
+    if ($out -notmatch 'ready to exit, bye bye') { throw "no clean shutdown in:`n$out" }
+    Kiln service start redis-8.8 | Out-Null
+}
+
 Say '== uninstall'
 Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"

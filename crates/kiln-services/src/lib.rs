@@ -13,6 +13,7 @@ pub mod install;
 mod mailpit;
 mod mysql;
 mod postgres;
+mod redis;
 
 pub use install::{InstallError, install};
 
@@ -249,11 +250,12 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 4] = [
+    static PROVIDERS: [&dyn ServiceProvider; 5] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
         &postgres::Postgres,
+        &redis::Redis,
     ];
     &PROVIDERS
 }
@@ -375,6 +377,18 @@ mod contract {
         }
     }
 
+    /// A config line's setting and value: `key=value` (MySQL), `key = 'value'`
+    /// (PostgreSQL) or `key value` (Redis), with quotes taken off.
+    fn setting(line: &str) -> Option<(&str, &str)> {
+        if line.starts_with('#') {
+            return None;
+        }
+        let (key, value) = line
+            .split_once('=')
+            .or_else(|| line.split_once(char::is_whitespace))?;
+        Some((key.trim(), value.trim().trim_matches(['\'', '"'])))
+    }
+
     #[test]
     fn instances_listen_on_loopback_and_stay_in_their_folders() {
         let services = Path::new("/k/services");
@@ -417,15 +431,16 @@ mod contract {
                     "{}: {line}",
                     provider.kind()
                 );
-                let address = line
-                    .strip_prefix("bind-address=")
-                    .or_else(|| line.strip_prefix("listen_addresses="));
-                if let Some(address) = address {
-                    assert!(
-                        ["127.0.0.1", "::1", "'127.0.0.1'", "'::1'"].contains(&address),
-                        "{}: {line}",
-                        provider.kind()
-                    );
+                if let Some((key, value)) = setting(line)
+                    && ["bind-address", "listen_addresses", "bind"].contains(&key)
+                {
+                    for address in value.split([' ', ',']).filter(|a| !a.is_empty()) {
+                        assert!(
+                            ["127.0.0.1", "::1"].contains(&address),
+                            "{}: {line}",
+                            provider.kind()
+                        );
+                    }
                     listens = true;
                 }
             }
@@ -437,7 +452,10 @@ mod contract {
             // Every port it was given appears in its command line or its config.
             for port in sample_ports(*provider).values() {
                 let in_args = launch.args.iter().any(|a| a.ends_with(&format!(":{port}")));
-                let in_config = config.lines().any(|l| l.trim() == format!("port={port}"));
+                let in_config = config
+                    .lines()
+                    .filter_map(|l| setting(l.trim()))
+                    .any(|(key, value)| key == "port" && value == port.to_string());
                 assert!(
                     in_args || in_config,
                     "{}: port {port} unused",
