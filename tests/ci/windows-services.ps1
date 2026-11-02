@@ -7,9 +7,6 @@
 # assuming the usual one: another service on it is a coexistence check for free.
 param([Parameter(Mandatory)] [string] $Kiln)
 $ErrorActionPreference = 'Continue'
-# What is piped to a program (`kiln db`) goes as UTF-8 without a byte-order mark: Windows
-# PowerShell sends one by default, and redis-cli reads it as part of the first command.
-$OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $dir = Join-Path $env:RUNNER_TEMP 'kiln-ci'
 $log = Join-Path $dir 'scenario.log'
 $status = Join-Path $dir 'status'
@@ -173,8 +170,15 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
 }
 
 Say '== Redis (ADR 0041)'
+# Commands go through files, not a pipe: Windows PowerShell puts a byte-order mark in front of
+# what it pipes to a program, and redis-cli reads it as part of the first command.
 function Redis($instance, $database, $commands) {
-    ($commands | & $Kiln db $instance $database 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $in = Join-Path $dir 'redis-in.txt'; $out = Join-Path $dir 'redis-out.txt'
+    [IO.File]::WriteAllText($in, $commands + "`n")
+    $arguments = @('db', $instance) + @($database | Where-Object { $null -ne $_ })
+    Start-Process $Kiln -ArgumentList $arguments -RedirectStandardInput $in -RedirectStandardOutput $out `
+        -NoNewWindow -Wait
+    [IO.File]::ReadAllText($out)
 }
 $script:redisPort = 0
 Check 'service add redis: from redis-windows, running on loopback' {
