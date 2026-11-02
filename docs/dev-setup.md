@@ -159,6 +159,12 @@ host these VMs.
     `~/kiln/target/debug/kiln uninstall --yes` in the VM first.
   - After a host restart the VM's address changes. Find it by its MAC, and check that its
     host key matches the one in `known_hosts` before adding the new address.
+- **On CI (Windows, ADR 0039):** `.github/workflows/scenario.yml` runs
+  `tests/ci/windows-services.ps1 -Kiln <kiln.exe>` on `windows-latest` on every push to
+  `main`: services, ports, data and uninstall, with the VM's snapshot before and after. Its
+  log and snapshots are kept as the run's `windows-scenario` artifact. There's no desktop
+  and no Herd, so Herd coexistence and the certificate dialog stay with the VM, checked by
+  hand before a release.
 - **Windows:** `tests/vm/windows/run.ps1 -Bin <folder>` from an elevated PowerShell (Hyper-V).
   - Build the binaries first, with the C runtime linked in:
     `$env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win`.

@@ -25,8 +25,10 @@ $thumbprints = @(Get-ChildItem $own -ErrorAction SilentlyContinue | ForEach-Obje
 foreach ($t in $thumbprints) { "  $t" }
 
 # Login items (P2-02): every value in the user's Run key, with what it runs.
-$run = Get-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-foreach ($name in ($run.GetValueNames() | Sort-Object)) { "run key: $name = $($run.GetValue($name))" }
+# A fresh CI runner has no Run key at all.
+$run = Get-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+if (-not $run) { 'run key: absent' }
+else { foreach ($name in ($run.GetValueNames() | Sort-Object)) { "run key: $name = $($run.GetValue($name))" } }
 
 foreach ($d in @("$env:APPDATA\Kiln", "$env:LOCALAPPDATA\Kiln")) {
     if (Test-Path $d) { "dir $d present" } else { "dir $d absent" }
