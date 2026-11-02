@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (4 of 12 tasks done; ADRs 0035–0038; Windows first, Linux on hold; next: re-plan) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (4 of 16 tasks done; ADRs 0035–0039; Windows first, Linux on hold (ADR 0039); next: P3-13) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0038 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0039 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1467,7 +1467,7 @@ VMs.**
   - The P2-02 reboot scripts (`autostart.ps1`, `autostart.sh`) stay, for quick checks and
     `-HardReset`.
 
-## Phase 3: services (in progress)
+## Phase 3: services, Windows first (in progress)
 
 Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux). Planned
 2026-10-31, with [ADR 0035](adr/0035-services.md) for instances, providers, ports, data and
@@ -1487,14 +1487,18 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | **done** 2026-11-01 | [spike 03](spikes/results/03-windows-cache.md); see below. Garnet once it fixes Lua ignoring `SELECT` (I-75) |
 | P3-03 | Ports and coexistence for services | **done** 2026-11-01 | [ADR 0037](adr/0037-service-ports-and-coexistence.md); see below. VM-checked on Windows and Ubuntu |
 | P3-04 | MySQL and MariaDB | **done** 2026-11-02 (Windows) | [ADR 0038](adr/0038-mysql-and-mariadb.md); see below. VM-checked on Windows; Linux built and unit-tested, its VM run stopped (Linux on hold) |
-| P3-05 | PostgreSQL (own Linux builds) | planned | |
-| P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
+| P3-05 | PostgreSQL on Windows (EDB) | planned | Linux waits for containers |
+| P3-06 | Redis on Windows | planned | zkteco port or Kiln-built Valkey |
 | P3-07 | Mailpit's UI at `mail.test`, `MAIL_*` wiring | planned | the provider came with P3-01 |
 | P3-08 | `.env` wiring with byte-exact undo | planned | ADR 0035 §9 |
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | planned | |
 | P3-10 | `kilnd` and services | planned | |
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
-| P3-12 | VM scenarios for Phase 3 | planned | extends ADR 0024 |
+| P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | planned | ADR 0039 |
+| P3-13 | Windows scenario on GitHub Actions | next | ADR 0039 §3 |
+| P3-14 | Meilisearch, RustFS, MongoDB | planned | official Windows releases |
+| P3-15 | phpMyAdmin and Adminer as Kiln sites | planned | |
+| P3-16 | Laravel Reverb per project | planned | |
 
 ### P3-01 delivered (2026-10-31)
 
@@ -1777,6 +1781,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-01 | **P3-02 done:** spike 03. Garnet 2.2.3 on Windows passed 19 of 22 Laravel checks (Valkey control: 22 of 22). Its Lua scripts ignore `SELECT` (microsoft/garnet#2258, fix open), which breaks `Cache::add`, tag flushes and the rate limiter on Laravel's cache database. Using one database would pass but make `cache:clear` delete queued jobs, so it isn't done. Garnet also needs .NET 10, which Kiln would keep privately. ADR 0035 §8 amended: Windows gets Garnet once a release with the fix passes the spike; until then, no Windows cache (I-75). |
 | 2026-11-01 | **P3-03 done:** ADR 0037. A busy service port names its holder (database, cache, mail and Docker programs recognized; a running system service of that kind when the holder can't be inspected); a start refuses a port another program took, and `kiln service port` moves the instance; stop and remove wait until the program has let go of its ports; doctor gains a Services area and lists other services and system services (`sc.exe`, `systemctl`). ADR 0034 §2 amended: Windows times the restart with bare TCP connects (397 ms; HTTP read 1,331 ms through Windows' connect retries). Scenarios: Windows 92 checks, Ubuntu 92. |
 | 2026-11-02 | **P3-04 done (Windows):** ADR 0038. MySQL 8.4/9.7 and MariaDB 11.8/12.3 from their vendors (MySQL pins after checking Oracle's GPG signatures); whole archives unpacked without the extras, the server hard-linked under a Kiln name; a loopback-only config; root for 127.0.0.1 and ::1 at first start; stop waits for the pid file to go; `kiln db`. I-74 fixed: downloads resume. Windows VM: 99 checks. Linux unit-tested; its VM run stopped as Linux goes on hold. |
+| 2026-11-02 | **Phase 3 re-planned:** ADR 0039. Windows first; Linux on hold (its code keeps building and passing unit tests; its services will run as rootless Podman containers, like Lerd, when it resumes). The Windows catalog follows Herd Pro: PostgreSQL, Redis, MongoDB, Meilisearch, RustFS, Reverb, plus phpMyAdmin and Adminer; MinIO publishes source only now. Integration tests move from local VMs to GitHub Actions' Windows runners (P3-13); Herd coexistence is checked by hand before releases. Tasks P3-13 to P3-16 added. Next: P3-13. |
 
 ## How to update this file
 

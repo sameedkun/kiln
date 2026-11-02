@@ -1,6 +1,6 @@
 # 0007. Platform delivery order: Windows and Linux first, macOS from Phase 3
 
-- **Status:** accepted; amended 2026-10-31: macOS moves out of Phase 3 into its own Phase 4b (see the end)
+- **Status:** accepted; amended 2026-10-31: macOS moves out of Phase 3 into its own Phase 4b (see the end); Linux put on hold in Phase 3 by [ADR 0039](0039-windows-first-and-services-catalog.md)
 - **Date:** 2026-10-19
 
 ## Context

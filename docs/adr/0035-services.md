@@ -1,6 +1,6 @@
 # 0035. Services: instances, providers, ports, data and `.env` wiring
 
-- **Status:** accepted; §8 amended 2026-11-01 by spike 03 (Windows' cache waits for a Garnet fix)
+- **Status:** accepted; §8 amended 2026-11-01 by spike 03 (Windows' cache waits for a Garnet fix); platform and catalog re-planned by [ADR 0039](0039-windows-first-and-services-catalog.md) (Windows first, Herd Pro's services)
 - **Date:** 2026-10-31
 - **Task:** Phase 3 (P3-01 to P3-12) · Builds on [ADR 0003](0003-license-and-dependency-policy.md), [0004](0004-reversible-operation-engine.md), [0013](0013-downloads-and-php-runtimes.md), [0014](0014-php-cgi-supervisor.md), [0019](0019-coexistence.md), [0025](0025-own-static-linux-php-builds.md), [0026](0026-kilnd-daemon-and-local-api.md), [0027](0027-project-config-kiln-toml.md), [0032](0032-proxy-sites.md)
 

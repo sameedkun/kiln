@@ -25,7 +25,7 @@ previewed and undone.
 | **0** | Foundations: repo, CI, operation engine, key decisions via spikes | all (CI) | 2–3 weeks | **done** (one optional recheck open) |
 | **1** | MVP CLI: serve PHP sites over trusted HTTPS, per-site PHP, clean uninstall | Windows, Linux | 6–8 weeks | **done** 2026-10-27: exit criteria met in both VMs |
 | **2** | Developer tooling: Node, Composer, Laravel installer, `kiln.toml`, daemon + local API | Windows, Linux | 4–5 weeks | **done** 2026-10-31: exit criteria met in both VMs |
-| **3** | Services: MySQL, MariaDB, PostgreSQL, a Redis-compatible cache, Mailpit; `.env` wiring | Windows, Linux | 6–8 weeks | **planned** 2026-10-31 ([ADR 0035](adr/0035-services.md)) |
+| **3** | Services: MySQL, MariaDB, PostgreSQL, Redis, MongoDB, Meilisearch, RustFS, Mailpit, phpMyAdmin/Adminer, Reverb; `.env` wiring | Windows first (Linux on hold, [ADR 0039](adr/0039-windows-first-and-services-catalog.md)) | 6–8 weeks | **in progress** (4 of 16 tasks done) |
 | 4 | Tauri GUI, log viewer, dev processes, Xdebug on demand, dump capture | Windows, Linux (macOS in 4b) | 6–8 weeks | later |
 | 4b | macOS bring-up: resolver file, Keychain, launchd, privileged helper, PHP, services and the GUI on macOS ([ADR 0007](adr/0007-platform-delivery-order.md), amended) | macOS | 5–7 weeks | later; needs Apple hardware for testing |
 | 5 | Installers, signed updates, MCP server, share tunnels, external security review → 1.0 | all | 4–6 weeks | later |
@@ -121,32 +121,40 @@ order, and P2-11 last.
   ([I-59](issues.md#i-59)).
 - [I-39](issues.md#i-39): the optional Edge DoH recheck.
 
-## Phase 3: services (Windows + Linux)
+## Phase 3: services (Windows first)
 
-Design: [ADR 0035](adr/0035-services.md). macOS moved to Phase 4b
-([ADR 0007](adr/0007-platform-delivery-order.md), amended).
+Design: [ADR 0035](adr/0035-services.md). Re-planned 2026-11-02 by
+[ADR 0039](adr/0039-windows-first-and-services-catalog.md):
+- **Windows first.** Linux is on hold; it keeps building and passing its unit tests, and its
+  services will run as rootless Podman containers when it resumes.
+- **Herd Pro's services** on Windows.
+- **Integration tests** on GitHub Actions' Windows runners.
 
-**Exit criteria**
+macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
+
+**Exit criteria** (Windows)
 
 - **Databases.** MySQL, MariaDB and PostgreSQL run as Kiln instances, two versions of one
   kind side by side. A new Laravel app migrates and serves pages against each.
-- **Cache and mail.** On Linux, Laravel's cache, sessions and queue work against Valkey. On
-  Windows they work against the cache the spike chose, or Kiln says plainly that Windows has
-  no cache service yet. Mail sent by the app is caught by Mailpit, whose UI is at
-  `https://mail.test`.
-- **Next to other tools.** Herd (with its services where available), XAMPP or a system
-  MySQL/PostgreSQL keep their ports, processes and data. Kiln takes the next free port and
-  says why.
+- **The rest of the catalog:**
+  - **Redis:** Laravel's cache, sessions and queue work against it.
+  - **Meilisearch, RustFS and MongoDB** run and answer their clients.
+  - **phpMyAdmin and Adminer** open on Kiln's databases.
+  - **Mail** sent by the app is caught by Mailpit, whose UI is at `https://mail.test`.
+  - **Laravel Reverb** runs for a project.
+- **Next to other tools.** Herd, XAMPP or a Windows MySQL/PostgreSQL service keep their
+  ports, processes and data. Kiln takes the next free port and says why.
 - **Wiring.** `kiln env use` changes only the needed `.env` keys, after a preview, and
-  `kiln undo` restores `.env` byte for byte. A project with `[services]` in `kiln.toml`
-  (or a `herd.yml` with services) is brought up by `kiln services up`.
+  `kiln undo` restores `.env` byte for byte. A project with `[services]` in `kiln.toml` (or
+  a `herd.yml` with services) is brought up by `kiln services up`.
 - **Lifecycle.** Services survive `kiln web stop`. With `kilnd`, they come back after a
   crash and after a reboot.
 - **Data.** No command deletes a database without `--delete-data`. `kiln db dump` and
   `restore` round-trip a database.
 - **Uninstall.** With `--delete-data`, the machine is as it was. With `--keep-data`, the
-  only thing left is the named data folder. The VM scenarios on Windows (with Herd) and
-  Ubuntu verify all of the above.
+  only thing left is the named data folder.
+- **Verification:** all of the above is checked by the Windows scenario on CI. Herd
+  coexistence is checked by hand in the VM before a release.
 
 **Tasks** (status is tracked in [progress.md](progress.md#phase-3))
 
@@ -156,17 +164,21 @@ Design: [ADR 0035](adr/0035-services.md). macOS moved to Phase 4b
 | P3-02 | Spike: a Redis-compatible cache on Windows. Garnet against Laravel's cache (locks, tags), sessions, queue (Lua) and rate limiter | — | **Done** 2026-11-01, [spike 03](spikes/results/03-windows-cache.md): Garnet passes 19 of 22. Its Lua scripts ignore `SELECT` ([microsoft/garnet#2258](https://github.com/microsoft/garnet/issues/2258)), so Windows gets Garnet once a release fixes that; until then, no Windows cache |
 | P3-03 | Port choice and coexistence for services: usual port, else the next free one; `kiln doctor` names other tools' services | P3-01 | **Done** 2026-11-01, [ADR 0037](adr/0037-service-ports-and-coexistence.md), extends [ADR 0019](adr/0019-coexistence.md): a busy port names its holder; a start refuses a port another program took, and `kiln service port` moves the instance; doctor has a Services area and lists other services |
 | P3-04 | MySQL and MariaDB providers: vendor downloads (pinned digests, license shown), data folder set-up, graceful stop, `kiln db` client | P3-01 | **Done** 2026-11-02, [ADR 0038](adr/0038-mysql-and-mariadb.md): MySQL 8.4/9.7 and MariaDB 11.8/12.3 from their vendors; loopback-only config; root for 127.0.0.1 and ::1 at first start; Linux libaio linked from Ubuntu's renamed copy, else the package is named. Downloads now resume (I-74) |
-| P3-05 | PostgreSQL provider: EDB archives on Windows; Kiln's own relocatable Linux builds from the PHP build pipeline | P3-01 | ADR 0035 §8, [ADR 0025](adr/0025-own-static-linux-php-builds.md); `trust` on loopback only |
-| P3-06 | Cache provider: Valkey on Linux. On Windows, Garnet on a private .NET runtime once a Garnet release passes spike 03; until then, a clear "not yet on Windows" | P3-01, P3-02 | [ADR 0035](adr/0035-services.md) §8 (amended) |
-| P3-07 | Mailpit's UI served as `https://mail.test` through a proxy site, and the `MAIL_*` wiring (the provider itself came with P3-01) | P3-01, P3-08 | [ADR 0032](adr/0032-proxy-sites.md) |
+| P3-13 | The Windows scenario on GitHub Actions (`windows-latest`) on every push to `main`: the services checks, ports, data and uninstall with the before/after comparison. No Herd, no desktop | — | [ADR 0039](adr/0039-windows-first-and-services-catalog.md) §3; replaces per-task VM runs |
+| P3-05 | PostgreSQL provider on Windows: EDB's binaries, `initdb`, `trust` on loopback only, `pg_ctl` stop, `psql` for `kiln db`; two versions side by side | P3-01 | ADR 0035 §8; Linux PostgreSQL waits for the container design |
+| P3-06 | Redis on Windows: choose between `zkteco-home/redis-windows` (downloaded at the user's request, its terms shown) and Valkey built by Kiln; Laravel's cache, sessions and queue checked as in spike 03 | P3-01 | [ADR 0039](adr/0039-windows-first-and-services-catalog.md) §2; Garnet stays a fallback ([I-75](issues.md#i-75)) |
+| P3-14 | Meilisearch, RustFS and MongoDB: official Windows releases, one provider each, one ADR | P3-01 | MongoDB is SSPL: from its vendor at the user's request (ADR 0003) |
+| P3-15 | phpMyAdmin and Adminer: pinned releases served as Kiln sites (`pma.test`, `adminer.test`), pointed at Kiln's instances | P3-04 | They're PHP apps; no new process |
+| P3-07 | Mailpit's UI served as `https://mail.test` through a proxy site, and the `MAIL_*` wiring | P3-01, P3-08 | [ADR 0032](adr/0032-proxy-sites.md) |
 | P3-08 | `.env` wiring: `kiln env use <instance>`, a journaled key-level operation with preview and byte-exact undo; creates the project's database; `kiln new --db` | P3-04 | ADR 0035 §9 |
 | P3-09 | Project config: `[services]` in `kiln.toml`, `kiln services up` in a project, `herd.yml` services in `kiln import herd` | P3-08 | Finishes [ADR 0027](adr/0027-project-config-kiln-toml.md) |
+| P3-16 | Laravel Reverb for a project: `php artisan reverb:start` run and kept up by Kiln, `REVERB_*` wiring | P3-08 | A per-project process, not a server binary |
 | P3-10 | `kilnd` and services: the watchdog restarts the services supervisor after a crash or reboot; `service.*` API methods | P3-01 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |
-| P3-11 | Data safety: `kiln db dump/restore`; `service remove` and `uninstall` keep data unless `--delete-data`; `--keep-data` moves it out | P3-04 | ADR 0035 §7 |
-| P3-12 | VM scenarios for the Phase 3 exit criteria, on Windows (with Herd) and Ubuntu, including a system MySQL or PostgreSQL to coexist with | all | Extends [ADR 0024](adr/0024-integration-test-vms.md); adding that service to the test VMs' `clean` checkpoints needs approval first |
+| P3-11 | Data safety: `kiln db dump/restore`; `--keep-data` at uninstall moves data out | P3-04 | ADR 0035 §7 |
+| P3-12 | The Phase 3 exit run: the CI scenario covering every criterion, plus a by-hand Herd coexistence check in the Windows VM | all | Extends [ADR 0024](adr/0024-integration-test-vms.md) |
 
-**Suggested order:** P3-01 and the P3-02 spike first, then P3-03, then the providers P3-04
-→ P3-05 → P3-06 → P3-07, then P3-08 → P3-09, P3-10 and P3-11, and P3-12 last.
+**Order:** the table's: P3-13 first (tests on CI), then PostgreSQL, Redis, the other
+services, the admin UIs, the wiring tasks, Reverb, `kilnd`, data safety, and P3-12 last.
 
 ## Phase 3–5 scope (summary)
 
