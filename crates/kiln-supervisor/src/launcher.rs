@@ -76,10 +76,7 @@ impl PhpCgiLauncher {
         let spec = pool.program_spec.clone().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "a program needs program_spec")
         })?;
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&spec.log)?;
+        let log = open_log(&spec.log)?;
         let cwd = spec
             .cwd
             .clone()
@@ -92,7 +89,7 @@ impl PhpCgiLauncher {
             .current_dir(&cwd)
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
-            .stderr(log);
+            .stderr(log.try_clone()?);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -109,7 +106,12 @@ impl PhpCgiLauncher {
             let _ = child.wait();
             return Err(e);
         }
-        Ok(Box::new(ProgramWorker { child, spec, cwd }))
+        Ok(Box::new(ProgramWorker {
+            child,
+            spec,
+            cwd,
+            log,
+        }))
     }
 }
 
@@ -233,6 +235,8 @@ struct ProgramWorker {
     child: Child,
     spec: crate::pools::ProgramSpec,
     cwd: std::path::PathBuf,
+    /// Its output file, shared with its stop command (see [`open_log`]).
+    log: File,
 }
 
 /// How long a program gets to exit after each way of asking it to.
@@ -257,10 +261,7 @@ impl Worker for ProgramWorker {
             .as_ref()
             .and_then(|c| c.split_first())
         {
-            let log = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.spec.log);
+            let log = self.log.try_clone();
             let mut command = Command::new(program);
             command
                 .args(args)
@@ -295,4 +296,21 @@ impl Worker for ProgramWorker {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// A program's output file, opened for writing at its end rather than in append mode. On
+/// Windows an append-mode handle has no plain write access, and programs built on the
+/// MSYS2 or Cygwin runtime (Redis, [ADR 0041]) write nothing through it. Every writer gets
+/// a clone of this one handle, so they share one position and don't overwrite each other.
+///
+/// [ADR 0041]: ../../../docs/adr/0041-redis.md
+fn open_log(path: &Path) -> io::Result<File> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    file.seek(SeekFrom::End(0))?;
+    Ok(file)
 }

@@ -7,6 +7,9 @@
 # assuming the usual one: another service on it is a coexistence check for free.
 param([Parameter(Mandatory)] [string] $Kiln)
 $ErrorActionPreference = 'Continue'
+# What is piped to a program (`kiln db`) goes as UTF-8 without a byte-order mark: Windows
+# PowerShell sends one by default, and redis-cli reads it as part of the first command.
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $dir = Join-Path $env:RUNNER_TEMP 'kiln-ci'
 $log = Join-Path $dir 'scenario.log'
 $status = Join-Path $dir 'status'
