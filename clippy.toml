@@ -4,6 +4,7 @@ disallowed-methods = [
     # with os error 17. kiln-sys is the only place allowed to call it.
     { path = "std::fs::rename", reason = "use kiln_sys::rename_replace (or replace_file to keep ACLs); see I-44" },
 ]
-# Proper names, not code, in doc comments ("OpenPGP" in the Node signature check, ADR 0028).
+# Proper names, not code, in doc comments ("OpenPGP" in the Node signature check, ADR 0028;
+# "RustFS" and "WiredTiger" for services, ADR 0042).
 # ".." keeps clippy's built-in list.
-doc-valid-idents = ["OpenPGP", "EdDSA", ".."]
+doc-valid-idents = ["OpenPGP", "EdDSA", "RustFS", "WiredTiger", ".."]

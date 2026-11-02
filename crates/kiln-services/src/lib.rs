@@ -11,11 +11,14 @@ use std::path::{Path, PathBuf};
 
 pub mod install;
 mod mailpit;
+mod meilisearch;
+mod mongodb;
 mod mysql;
 mod postgres;
 mod redis;
+mod rustfs;
 
-pub use install::{InstallError, install};
+pub use install::{InstallError, install, install_companion};
 
 /// `.exe` on Windows, nothing elsewhere.
 pub const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
@@ -138,6 +141,13 @@ impl InstanceDirs {
     }
 }
 
+/// Where `companion` is unpacked in a version's `bin`: a folder named after its archive's top
+/// folder (e.g. `mongosh-2.14.1-win32-x64`).
+#[must_use]
+pub fn companion_dir(bin: &Path, companion: &Release) -> PathBuf {
+    bin.join(companion.tree.unwrap_or(companion.archive))
+}
+
 /// `<services>/bin/<kind>/<version>`.
 #[must_use]
 pub fn bin_dir(services: &Path, kind: &str, version: &str) -> PathBuf {
@@ -236,6 +246,15 @@ pub trait ServiceProvider: Sync {
         vec![dirs.log.clone()]
     }
 
+    /// Other archives `release` needs, each unpacked into its own folder in `bin`
+    /// ([`companion_dir`]): a server's shell, for its clean shutdown and `kiln db` ([ADR 0042]
+    /// §1). None by default.
+    ///
+    /// [ADR 0042]: ../../../docs/adr/0042-meilisearch-rustfs-mongodb.md
+    fn companions(&self, _release: &Release) -> &'static [Release] {
+        &[]
+    }
+
     /// The client to open on an instance (`kiln db`), if there is one.
     fn client(
         &self,
@@ -250,12 +269,15 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 5] = [
+    static PROVIDERS: [&dyn ServiceProvider; 8] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
         &postgres::Postgres,
         &redis::Redis,
+        &meilisearch::Meilisearch,
+        &rustfs::Rustfs,
+        &mongodb::Mongodb,
     ];
     &PROVIDERS
 }
@@ -344,7 +366,13 @@ mod contract {
     fn pins_are_well_formed() {
         for provider in providers() {
             assert!(!provider.releases().is_empty(), "{}", provider.kind());
-            for r in provider.releases() {
+            // Companions are pinned the same way, and unpack into a folder of their own.
+            let companions = provider
+                .releases()
+                .iter()
+                .flat_map(|r| provider.companions(r))
+                .inspect(|c| assert!(c.tree.is_some(), "{c:?}"));
+            for r in provider.releases().iter().chain(companions) {
                 assert_eq!(r.sha256.len(), 64, "{r:?}");
                 assert!(
                     r.sha256
@@ -451,7 +479,10 @@ mod contract {
             );
             // Every port it was given appears in its command line or its config.
             for port in sample_ports(*provider).values() {
-                let in_args = launch.args.iter().any(|a| a.ends_with(&format!(":{port}")));
+                let in_args = launch
+                    .args
+                    .iter()
+                    .any(|a| a.ends_with(&format!(":{port}")) || a.ends_with(&format!("={port}")));
                 let in_config = config
                     .lines()
                     .filter_map(|l| setting(l.trim()))

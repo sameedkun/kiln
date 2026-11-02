@@ -170,10 +170,10 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
 }
 
 Say '== Redis (ADR 0041)'
-# Commands go through files, not a pipe: Windows PowerShell puts a byte-order mark in front of
-# what it pipes to a program, and redis-cli reads it as part of the first command.
-function Redis($instance, $database, $commands) {
-    $in = Join-Path $dir 'redis-in.txt'; $out = Join-Path $dir 'redis-out.txt'
+# A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark
+# in front of what it pipes to a program, and redis-cli reads it as part of the first command.
+function Client($instance, $database, $commands) {
+    $in = Join-Path $dir 'client-in.txt'; $out = Join-Path $dir 'client-out.txt'
     [IO.File]::WriteAllText($in, $commands + "`n")
     $arguments = @('db', $instance) + @($database | Where-Object { $null -ne $_ })
     Start-Process $Kiln -ArgumentList $arguments -RedirectStandardInput $in -RedirectStandardOutput $out `
@@ -200,27 +200,138 @@ Check 'Redis listens on 127.0.0.1 only' {
     if ($wide) { throw "listening beyond loopback: $(($wide | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
 }
 Check 'kiln db redis-8.10: keys in database 0 and 1 stay apart' {
-    Redis 'redis-8.10' $null 'SET where zero' | Out-Null
-    Redis 'redis-8.10' 1 'SET where one' | Out-Null
-    Expect 'zero' (Redis 'redis-8.10' $null 'GET where')
-    Expect 'one' (Redis 'redis-8.10' 1 'GET where')
+    Client 'redis-8.10' $null 'SET where zero' | Out-Null
+    Client 'redis-8.10' 1 'SET where one' | Out-Null
+    Expect 'zero' (Client 'redis-8.10' $null 'GET where')
+    Expect 'one' (Client 'redis-8.10' 1 'GET where')
 }
 # Laravel's cache (database 1) uses Lua scripts; Garnet ran them in database 0 (I-75).
 Check 'a Lua script run in database 1 acts on database 1' {
-    Redis 'redis-8.10' 1 "EVAL `"return redis.call('SET', KEYS[1], ARGV[1])`" 1 lua kept" | Out-Null
-    Expect 'kept' (Redis 'redis-8.10' 1 'GET lua')
-    $zero = Redis 'redis-8.10' $null 'EXISTS lua'
+    Client 'redis-8.10' 1 "EVAL `"return redis.call('SET', KEYS[1], ARGV[1])`" 1 lua kept" | Out-Null
+    Expect 'kept' (Client 'redis-8.10' 1 'GET lua')
+    $zero = Client 'redis-8.10' $null 'EXISTS lua'
     if ($zero.Trim() -ne '0') { throw "the script wrote to database 0: $zero" }
 }
 Check 'Redis data survives a restart (saved at shutdown)' {
     Kiln service restart redis-8.10 | Out-Null
-    Expect 'kept' (Redis 'redis-8.10' 1 'GET lua')
+    Expect 'kept' (Client 'redis-8.10' 1 'GET lua')
 }
 Check 'a stop shuts Redis down cleanly (its log says so)' {
     Kiln service stop redis-8.8 | Out-Null
     $out = Kiln service logs redis-8.8 --lines 8
     if ($out -notmatch 'ready to exit, bye bye') { throw "no clean shutdown in:`n$out" }
     Kiln service start redis-8.8 | Out-Null
+}
+
+# Whether only 127.0.0.1 listens for the program `name`, on at least `count` ports.
+function OnlyLoopback($name, $count) {
+    $listening = Get-NetTCPConnection -State Listen | Where-Object {
+        (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName -eq $name
+    }
+    if (@($listening).Count -lt $count) { throw "$name listens on $(@($listening).Count) port(s)" }
+    $wide = $listening | Where-Object LocalAddress -ne '127.0.0.1'
+    if ($wide) { throw "listening beyond loopback: $(($wide | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
+}
+
+Say '== Meilisearch (ADR 0042)'
+$script:meili = 0
+Check 'service add meilisearch: from GitHub, running on loopback' {
+    $out = Kiln service add meilisearch
+    Expect 'running as meilisearch-1' $out
+    $script:meili = PortOf $out 'http'
+}
+Check 'Meilisearch listens on 127.0.0.1 only' { OnlyLoopback 'kiln-meilisearch' 1 }
+function Meili($method, $path, $body) {
+    $params = @{ Method = $method; Uri = "http://127.0.0.1:$($script:meili)$path"; TimeoutSec = 10 }
+    if ($body) { $params.Body = $body; $params.ContentType = 'application/json' }
+    Invoke-RestMethod @params
+}
+function MeiliTask($task) {
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 300
+        $state = (Meili GET "/tasks/$($task.taskUid)").status
+    } while ($state -in 'enqueued', 'processing' -and (Get-Date) -lt $deadline)
+    if ($state -ne 'succeeded') { throw "task $($task.taskUid): $state" }
+}
+Check 'a document is indexed and found' {
+    MeiliTask (Meili POST '/indexes/books/documents' '[{"id": 1, "title": "kept by kiln"}]')
+    $hits = (Meili POST '/indexes/books/search' '{"q": "kept"}').hits
+    if ($hits.Count -ne 1 -or $hits[0].title -ne 'kept by kiln') { throw "hits: $($hits | ConvertTo-Json -Compress)" }
+}
+Check 'Meilisearch data survives a restart' {
+    Kiln service restart meilisearch-1 | Out-Null
+    $hits = (Meili POST '/indexes/books/search' '{"q": "kept"}').hits
+    if ($hits.Count -ne 1) { throw "hits after the restart: $($hits.Count)" }
+}
+
+Say '== RustFS (ADR 0042)'
+$script:s3 = 0; $script:console = 0
+Check 'service add rustfs: from GitHub, running on loopback' {
+    $out = Kiln service add rustfs
+    Expect 'running as rustfs-1' $out
+    $script:s3 = PortOf $out 's3'; $script:console = PortOf $out 'console'
+}
+Check 'RustFS listens on 127.0.0.1 only (S3 and console)' { OnlyLoopback 'kiln-rustfs' 2 }
+# One S3 request, signed with AWS Signature Version 4 and the credentials Kiln sets.
+function S3($method, $path, [byte[]] $body = @()) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $hex = { param($bytes) -join ($bytes | ForEach-Object { $_.ToString('x2') }) }
+    $hmac = { param([byte[]] $key, $text) ([Security.Cryptography.HMACSHA256]::new($key)).ComputeHash([Text.Encoding]::UTF8.GetBytes($text)) }
+    $now = [DateTime]::UtcNow; $date = $now.ToString('yyyyMMdd'); $stamp = $now.ToString("yyyyMMdd'T'HHmmss'Z'")
+    $hostPort = "127.0.0.1:$($script:s3)"; $payload = & $hex $sha.ComputeHash($body)
+    $canonical = "$method`n$path`n`nhost:$hostPort`nx-amz-content-sha256:$payload`nx-amz-date:$stamp`n`nhost;x-amz-content-sha256;x-amz-date`n$payload"
+    $scope = "$date/us-east-1/s3/aws4_request"
+    $toSign = "AWS4-HMAC-SHA256`n$stamp`n$scope`n$(& $hex $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical)))"
+    $key = [Text.Encoding]::UTF8.GetBytes('AWS4rustfsadmin')
+    foreach ($part in $date, 'us-east-1', 's3', 'aws4_request') { $key = & $hmac $key $part }
+    $signature = & $hex (& $hmac $key $toSign)
+    $headers = @{
+        'x-amz-date' = $stamp; 'x-amz-content-sha256' = $payload
+        Authorization = "AWS4-HMAC-SHA256 Credential=rustfsadmin/$scope, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=$signature"
+    }
+    $params = @{ Method = $method; Uri = "http://$hostPort$path"; Headers = $headers; TimeoutSec = 10; UseBasicParsing = $true }
+    if ($body.Length) { $params.Body = $body }
+    Invoke-WebRequest @params
+}
+Check 'a bucket is made, an object stored and read back' {
+    S3 PUT '/kiln-ci' | Out-Null
+    S3 PUT '/kiln-ci/hello.txt' ([Text.Encoding]::UTF8.GetBytes('kept by kiln')) | Out-Null
+    $read = [Text.Encoding]::UTF8.GetString((S3 GET '/kiln-ci/hello.txt').Content)
+    if ($read -ne 'kept by kiln') { throw "read back: $read" }
+}
+Check 'the console answers' {
+    $status = (Invoke-WebRequest "http://127.0.0.1:$($script:console)/" -UseBasicParsing -TimeoutSec 10).StatusCode
+    if ($status -ne 200) { throw "status $status" }
+}
+Check 'RustFS data survives a restart' {
+    Kiln service restart rustfs-1 | Out-Null
+    $read = [Text.Encoding]::UTF8.GetString((S3 GET '/kiln-ci/hello.txt').Content)
+    if ($read -ne 'kept by kiln') { throw "read back: $read" }
+}
+
+Say '== MongoDB (ADR 0042)'
+Check 'service add mongodb: from MongoDB, with mongosh, running on loopback' {
+    $out = Kiln service add mongodb
+    Expect 'running as mongodb-9' $out
+    Expect 'mongosh-2.14.1-win32-x64.zip' $out
+}
+Check 'MongoDB listens on 127.0.0.1 only' { OnlyLoopback 'kiln-mongod' 1 }
+Check 'kiln db mongodb-9: a document in, the same document out' {
+    $out = Client 'mongodb-9' 'kiln_ci' "db.t.insertOne({ v: 'kept by kiln' }); print('found: ' + db.t.findOne().v)"
+    Expect 'found: kept by kiln' $out
+}
+Check 'a stop shuts MongoDB down through mongosh (its log says so), and its data survives' {
+    Kiln service stop mongodb-9 | Out-Null
+    $out = Kiln service logs mongodb-9 --lines 30
+    if ($out -notmatch 'Now exiting') { throw "no clean shutdown in:`n$out" }
+    Kiln service start mongodb-9 | Out-Null
+    Expect 'found: kept by kiln' (Client 'mongodb-9' 'kiln_ci' "print('found: ' + db.t.findOne().v)")
+}
+Check 'mongosh left nothing outside Kiln''s folders and sent no usage data' {
+    foreach ($d in "$env:APPDATA\mongodb", "$env:LOCALAPPDATA\mongodb") {
+        if (Test-Path $d) { throw "$d exists" }
+    }
 }
 
 Say '== uninstall'

@@ -106,16 +106,66 @@ pub fn install(
         return Ok(dest);
     }
 
-    let executable = read_file(archive, release.archive, release.executable).map_err(bad)?;
     fs::create_dir_all(bin).map_err(io_err(format!("cannot create {}", bin.display())))?;
     let temp = dest.with_extension("partial");
-    fs::write(&temp, &executable).map_err(io_err(format!("cannot write {}", temp.display())))?;
+    if release.archive == release.executable {
+        // The download is the executable itself (Meilisearch's): copied, not read into memory.
+        fs::copy(archive, &temp).map_err(io_err(format!("cannot write {}", temp.display())))?;
+    } else {
+        let mut out =
+            File::create(&temp).map_err(io_err(format!("cannot write {}", temp.display())))?;
+        let copied = copy_file(archive, release.archive, release.executable, &mut out);
+        drop(out);
+        if let Err(detail) = copied {
+            let _ = fs::remove_file(&temp);
+            return Err(bad(detail));
+        }
+    }
     make_executable(&temp).map_err(io_err(format!("cannot make {} executable", temp.display())))?;
     kiln_sys::rename_replace(&temp, &dest)
         .map_err(io_err(format!("cannot install {}", dest.display())))?;
     Ok(dest)
 }
 
+/// Checks `archive` against `companion` and unpacks it into its folder in `bin`
+/// ([`crate::companion_dir`]), replacing what was there ([ADR 0042] §1). Returns its
+/// executable.
+///
+/// [ADR 0042]: ../../../docs/adr/0042-meilisearch-rustfs-mongodb.md
+pub fn install_companion(
+    companion: &Release,
+    archive: &Path,
+    bin: &Path,
+) -> Result<PathBuf, InstallError> {
+    let actual =
+        sha256_of_file(archive).map_err(io_err(format!("cannot read {}", archive.display())))?;
+    if actual != companion.sha256 {
+        return Err(InstallError::Unverified {
+            archive: companion.archive.to_owned(),
+            actual,
+            expected: companion.sha256.to_owned(),
+        });
+    }
+    let dest = crate::companion_dir(bin, companion);
+    let _ = fs::remove_dir_all(&dest);
+    let top = companion.tree.unwrap_or_default();
+    let unpacked = unpack_tree(archive, companion.archive, top, &dest, &|_| true).and_then(|()| {
+        if dest.join(companion.executable).is_file() {
+            Ok(())
+        } else {
+            Err("not in the archive".into())
+        }
+    });
+    if let Err(detail) = unpacked {
+        let _ = fs::remove_dir_all(&dest);
+        return Err(InstallError::BadArchive {
+            archive: companion.archive.to_owned(),
+            executable: companion.executable.to_owned(),
+            detail,
+        });
+    }
+    Ok(dest.join(companion.executable))
+}
 #[cfg(unix)]
 fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -129,7 +179,7 @@ fn make_executable(_: &Path) -> io::Result<()> {
 }
 
 /// Whether the archive named `name` is of the type ending in `suffix`, in any case.
-fn is_type(name: &str, suffix: &str) -> bool {
+pub(crate) fn is_type(name: &str, suffix: &str) -> bool {
     name.to_ascii_lowercase().ends_with(suffix)
 }
 
@@ -145,15 +195,14 @@ fn tar_stream(archive: &Path, name: &str) -> Result<Box<dyn Read>, String> {
     }
 }
 
-/// The file at `inside` in the archive.
-fn read_file(archive: &Path, name: &str, inside: &str) -> Result<Vec<u8>, String> {
-    let mut buffer = Vec::new();
+/// Copies the file at `inside` in the archive to `out`, in pieces.
+fn copy_file(archive: &Path, name: &str, inside: &str, out: &mut File) -> Result<(), String> {
     if is_type(name, ".zip") {
         let file = File::open(archive).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
         let mut entry = zip.by_name(inside).map_err(|e| e.to_string())?;
-        entry.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-        return Ok(buffer);
+        io::copy(&mut entry, out).map_err(|e| e.to_string())?;
+        return Ok(());
     }
     let mut tar = tar::Archive::new(tar_stream(archive, name)?);
     for entry in tar.entries().map_err(|e| e.to_string())? {
@@ -163,8 +212,8 @@ fn read_file(archive: &Path, name: &str, inside: &str) -> Result<Vec<u8>, String
                 .path()
                 .is_ok_and(|p| p == Path::new(inside) || p == Path::new(".").join(inside));
         if is_it {
-            entry.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-            return Ok(buffer);
+            io::copy(&mut entry, out).map_err(|e| e.to_string())?;
+            return Ok(());
         }
     }
     Err("not in the archive".into())
@@ -355,6 +404,62 @@ mod tests {
 
     fn digest(path: &Path) -> &'static str {
         Box::leak(sha256_of_file(path).unwrap().into())
+    }
+
+    #[test]
+    fn a_download_that_is_the_executable_is_installed_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("fake.exe");
+        fs::write(&archive, b"the program").unwrap();
+        let provider = Fake("");
+        let bin = dir.path().join("bin");
+        let installed = install(
+            &provider,
+            &release("fake.exe", digest(&archive)),
+            &archive,
+            &bin,
+        )
+        .unwrap();
+        assert_eq!(fs::read(installed).unwrap(), b"the program");
+    }
+
+    #[test]
+    fn a_companion_is_unpacked_into_its_own_folder_only_if_it_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("shell.zip");
+        fs::write(
+            &archive,
+            zip_with(&[
+                ("shell-1/bin/shell.exe", b"shell"),
+                ("shell-1/LICENSE", b"L"),
+            ]),
+        )
+        .unwrap();
+        let companion = Release {
+            executable: "bin/shell.exe",
+            tree: Some("shell-1"),
+            ..release("shell.zip", digest(&archive))
+        };
+        let bin = dir.path().join("bin");
+        let installed = install_companion(&companion, &archive, &bin).unwrap();
+        assert_eq!(installed, bin.join("shell-1").join("bin").join("shell.exe"));
+        assert_eq!(fs::read(&installed).unwrap(), b"shell");
+        assert!(bin.join("shell-1").join("LICENSE").is_file());
+
+        let wrong = Release {
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+            ..companion
+        };
+        assert!(matches!(
+            install_companion(&wrong, &archive, &bin),
+            Err(InstallError::Unverified { .. })
+        ));
+        let missing = Release {
+            executable: "bin/other.exe",
+            ..companion
+        };
+        assert!(install_companion(&missing, &archive, &bin).is_err());
+        assert!(!bin.join("shell-1").exists(), "a failed unpack is removed");
     }
 
     #[test]

@@ -487,27 +487,46 @@ fn install_binaries(
             provider.display_name(),
             release.version
         );
-        return Ok(());
+    } else {
+        let archive = download(release)?;
+        kiln_services::install(provider, release, &archive, bin).map_err(|e| e.to_string())?;
+        println!(
+            "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
+            release.archive,
+            provider.display_name(),
+            release.version,
+        );
+        println!("License: {}.", provider.license());
     }
+    // After the server: installing it clears `bin`, companions included.
+    for companion in provider.companions(release) {
+        let dir = kiln_services::companion_dir(bin, companion);
+        if dir.join(companion.executable).is_file() {
+            continue;
+        }
+        let archive = download(companion)?;
+        kiln_services::install_companion(companion, &archive, bin).map_err(|e| e.to_string())?;
+        println!(
+            "Verified {} (SHA-256 matches the pinned release) and installed it with {}.",
+            companion.archive,
+            provider.display_name(),
+        );
+    }
+    Ok(())
+}
+
+/// Downloads `release`'s archive (or takes it from the cache), checked against its pin.
+fn download(release: &kiln_services::Release) -> Result<std::path::PathBuf, String> {
     let expected = kiln_fetch::Expected::sha256(release.sha256).map_err(|e| e.to_string())?;
     let label = format!("Downloading {}", release.archive);
-    let archive = crate::php::fetcher()?
+    crate::php::fetcher()?
         .fetch(
             release.url,
             release.archive,
             &expected,
             &mut crate::php::progress_printer(&label),
         )
-        .map_err(|e| e.to_string())?;
-    kiln_services::install(provider, release, &archive, bin).map_err(|e| e.to_string())?;
-    println!(
-        "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
-        release.archive,
-        provider.display_name(),
-        release.version,
-    );
-    println!("License: {}.", provider.license());
-    Ok(())
+        .map_err(|e| e.to_string())
 }
 
 /// `kiln service add <kind> [--version] [--name] [--port role=N]`.
