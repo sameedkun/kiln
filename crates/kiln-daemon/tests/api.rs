@@ -101,7 +101,9 @@ fn bad_input_gets_an_error_not_a_hang() {
 
     // A line over the limit is refused and the connection closed.
     let long = "x".repeat(kiln_daemon::proto::MAX_LINE + 10);
-    writeln!(writer, "{long}").unwrap();
+    // The daemon may answer and close before the whole line is written: a broken pipe here is
+    // the refusal arriving early, and the answer is still there to read.
+    let _ = writeln!(writer, "{long}");
     answer.clear();
     reader.read_line(&mut answer).unwrap();
     assert!(answer.contains("line too long"), "{answer}");

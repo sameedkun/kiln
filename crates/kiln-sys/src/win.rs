@@ -28,8 +28,10 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    CreateRestrictedToken, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    ACL, CreateRestrictedToken, GetSecurityDescriptorDacl, GetTokenInformation,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, SetTokenInformation,
+    TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_QUERY,
+    TOKEN_USER, TokenDefaultDacl, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
@@ -482,7 +484,7 @@ fn token_without_admin() -> io::Result<OwnedHandle> {
     let ok = unsafe {
         OpenProcessToken(
             me,
-            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY,
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
             &raw mut token,
         )
     };
@@ -536,7 +538,67 @@ fn token_without_admin() -> io::Result<OwnedHandle> {
     if ok == 0 {
         return Err(error);
     }
-    Ok(owned(restricted))
+    let restricted = owned(restricted);
+    give_user_default_dacl(&restricted)?;
+    Ok(restricted)
+}
+
+/// Makes `token`'s default DACL grant its user and SYSTEM full access, as `pg_ctl` does. An
+/// elevated token's default DACL grants Administrators instead of the user; with that group
+/// deny-only, a process started with the token couldn't open its own process and thread
+/// objects, and would fail to start (`STATUS_DLL_INIT_FAILED`).
+fn give_user_default_dacl(token: &OwnedHandle) -> io::Result<()> {
+    let sddl = format!("D:(A;;GA;;;{})(A;;GA;;;SY)", current_user_sid()?);
+    let sddl = wide(OsStr::new(&sddl));
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `sddl` is NUL-terminated; `descriptor` is a valid out pointer; the size
+    // out-parameter is optional.
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &raw mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: `descriptor` was just created; the out pointers are valid.
+    let ok = unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor,
+            &raw mut present,
+            &raw mut acl,
+            &raw mut defaulted,
+        )
+    };
+    let result = if ok == 0 || present == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        let dacl = TOKEN_DEFAULT_DACL { DefaultDacl: acl };
+        // SAFETY: `token` is a valid token handle with TOKEN_ADJUST_DEFAULT; `dacl` points
+        // to an ACL inside `descriptor`, which is still alive.
+        let ok = unsafe {
+            SetTokenInformation(
+                raw(token),
+                TokenDefaultDacl,
+                (&raw const dacl).cast::<c_void>(),
+                u32::try_from(std::mem::size_of::<TOKEN_DEFAULT_DACL>()).unwrap_or(0),
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    };
+    // SAFETY: allocated with LocalAlloc by the conversion above, freed once after its last use.
+    unsafe { LocalFree(descriptor) };
+    result
 }
 
 /// Starts `program` with `args` in `cwd` without administrator rights ([`token_without_admin`]),
