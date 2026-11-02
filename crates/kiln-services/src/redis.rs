@@ -59,19 +59,17 @@ fn port_of(ports: &BTreeMap<String, u16>) -> u16 {
     ports.get(PORTS[0].role).copied().unwrap_or(PORTS[0].usual)
 }
 
-/// A path for the config file: forward slashes, quoted, which the MSYS2 build reads as the
-/// Windows path it is.
-fn conf_path(path: &Path) -> String {
-    format!("\"{}\"", path.to_string_lossy().replace('\\', "/"))
-}
+/// [`InstanceDirs::config`]'s file name, which the server opens from the instance folder.
+const CONFIG_NAME: &str = "kiln.cnf";
 
 fn tool(bin: &Path, name: &str) -> PathBuf {
     bin.join(format!("{name}{EXE_SUFFIX}"))
 }
 
-/// The server writes this at start and removes it once it has saved its data and exited.
+/// The server writes this at start and removes it once it has saved its data and exited. It is
+/// in the data folder: the config names it relative to `dir`, which Redis has moved into by then.
 fn pid_file(dirs: &InstanceDirs) -> PathBuf {
-    dirs.instance().join("server.pid")
+    dirs.data.join("server.pid")
 }
 
 fn client_args(ports: &BTreeMap<String, u16>) -> Vec<String> {
@@ -117,25 +115,26 @@ impl ServiceProvider for Redis {
         version.splitn(3, '.').take(2).collect::<Vec<_>>().join(".")
     }
 
+    /// Every path is relative to the instance folder, where it runs: the MSYS2 build reads
+    /// `C:/...` as a relative path and puts its current folder in front ([ADR 0041] §3).
+    ///
     /// Redis's defaults, written out where Kiln depends on them: snapshots in the data
     /// folder at the default save points and at shutdown, so queued jobs and sessions
     /// survive a restart; the log on standard output, which is the instance's log.
-    fn config(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Option<String> {
+    fn config(&self, _dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Option<String> {
         Some(format!(
             "# Written by Kiln (ADR 0041); rewritten before every start.\n\
              bind 127.0.0.1\n\
              port {}\n\
              protected-mode yes\n\
              daemonize no\n\
-             dir {}\n\
+             dir data\n\
              dbfilename dump.rdb\n\
              save 3600 1 300 100 60 10000\n\
              appendonly no\n\
-             pidfile {}\n\
+             pidfile server.pid\n\
              logfile \"\"\n",
             port_of(ports),
-            conf_path(&dirs.data),
-            conf_path(&pid_file(dirs)),
         ))
     }
 
@@ -145,7 +144,7 @@ impl ServiceProvider for Redis {
         stop.push("shutdown".to_owned());
         Launch {
             program: self.executable(&dirs.bin),
-            args: vec![dirs.config().to_string_lossy().replace('\\', "/")],
+            args: vec![CONFIG_NAME.to_owned()],
             env: BTreeMap::new(),
             cwd: Some(dirs.instance().to_path_buf()),
             stop_command: Some(stop),
@@ -212,8 +211,8 @@ mod tests {
             "bind 127.0.0.1",
             "port 6380",
             "protected-mode yes",
-            "dir \"/k/services/redis-8.10/data\"",
-            "pidfile \"/k/services/redis-8.10/server.pid\"",
+            "dir data",
+            "pidfile server.pid",
             "logfile \"\"",
         ] {
             assert!(config.lines().any(|l| l == line), "{line} in:\n{config}");
@@ -226,7 +225,12 @@ mod tests {
         let ports = BTreeMap::from([("redis".to_owned(), 6380)]);
         let launch = Redis.launch(&dirs(), &ports);
         assert!(launch.program.ends_with(format!("kiln-redis{EXE_SUFFIX}")));
-        assert_eq!(launch.args, ["/k/services/redis-8.10/kiln.cnf"]);
+        assert_eq!(launch.args, ["kiln.cnf"]);
+        assert_eq!(dirs().config(), dirs().instance().join(CONFIG_NAME));
+        assert_eq!(
+            launch.cwd.as_deref(),
+            Some(Path::new("/k/services/redis-8.10"))
+        );
         let stop = launch.stop_command.unwrap();
         assert!(stop[0].ends_with(&format!("redis-cli{EXE_SUFFIX}")));
         assert_eq!(stop[1..], ["-h", "127.0.0.1", "-p", "6380", "shutdown"]);
