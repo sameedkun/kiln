@@ -220,6 +220,15 @@ pub trait ServiceProvider: Sync {
         true
     }
 
+    /// Whether a running instance accepts work. A database may open its port before it
+    /// accepts sessions ([ADR 0040] §6), so a listening port alone doesn't say. True by
+    /// default.
+    ///
+    /// [ADR 0040]: ../../../docs/adr/0040-postgresql.md
+    fn ready(&self, _dirs: &InstanceDirs) -> bool {
+        true
+    }
+
     /// The files `kiln service logs` shows, in order: the instance's output by default; a
     /// server with its own error log adds it.
     fn logs(&self, dirs: &InstanceDirs) -> Vec<PathBuf> {

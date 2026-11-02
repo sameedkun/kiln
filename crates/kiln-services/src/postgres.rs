@@ -72,6 +72,12 @@ fn conf_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Whether `postmaster.pid`'s contents say the server accepts sessions: its eighth line is
+/// the status, `ready` once start-up is over (`starting`, `stopping` or `standby` otherwise).
+fn is_ready(pid_file: &str) -> bool {
+    pid_file.lines().nth(7).is_some_and(|s| s.trim() == "ready")
+}
+
 fn tool(bin: &Path, name: &str) -> PathBuf {
     bin.join("bin").join(format!("{name}{EXE_SUFFIX}"))
 }
@@ -208,6 +214,13 @@ impl ServiceProvider for Postgres {
         !pid_file(dirs).exists()
     }
 
+    /// The server opens its port while it is still starting up, and refuses sessions until
+    /// it has finished; then it writes `ready` as the pid file's status line, which is what
+    /// `pg_ctl start -w` waits for.
+    fn ready(&self, dirs: &InstanceDirs) -> bool {
+        fs::read_to_string(pid_file(dirs)).is_ok_and(|text| is_ready(&text))
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,
@@ -293,6 +306,19 @@ mod tests {
         ] {
             assert!(Postgres.keep(path), "{path}");
         }
+    }
+
+    #[test]
+    fn ready_once_the_pid_files_status_says_so() {
+        let pid = |status: &str| {
+            format!(
+                "4242\nC:/k/data\n1762084800\n5432\n\n127.0.0.1\n  5432001     65536\n{status}\n"
+            )
+        };
+        assert!(is_ready(&pid("ready   ")));
+        assert!(!is_ready(&pid("starting")));
+        assert!(!is_ready(&pid("stopping")));
+        assert!(!is_ready("4242\nC:/k/data\n"));
     }
 
     #[test]

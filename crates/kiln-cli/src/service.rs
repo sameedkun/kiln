@@ -141,6 +141,29 @@ fn apply(store: &StateStore) -> Result<(), String> {
     } else {
         check_ports(store)?;
         supervisor.start(&pools).map_err(|e| e.to_string())?;
+        // Listening isn't always accepting work yet (a database still starting up).
+        let starting: Vec<_> = pools
+            .pools
+            .iter()
+            .filter_map(|p| store.service(&p.id).ok().flatten())
+            .filter_map(|record| {
+                Some((
+                    record.name.clone(),
+                    provider_of(&record.kind).ok()?,
+                    dirs_of(&record).ok()?,
+                ))
+            })
+            .collect();
+        let deadline = std::time::Instant::now() + READY_TIMEOUT;
+        while let Some((name, ..)) = starting.iter().find(|(_, p, d)| !p.ready(d)) {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "{name} is listening but not ready after {} s. See `kiln service logs {name}`.",
+                    READY_TIMEOUT.as_secs()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     let wanted: Vec<u16> = pools
         .ready_addresses()
