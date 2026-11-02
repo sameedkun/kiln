@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (7 of 16 tasks done; ADRs 0035–0041; Windows first, Linux on hold (ADR 0039); next: P3-14) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (8 of 16 tasks done; ADRs 0035–0042; Windows first, Linux on hold (ADR 0039); next: P3-15) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0041 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0042 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1496,8 +1496,8 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
 | P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | planned | ADR 0039 |
 | P3-13 | Windows scenario on GitHub Actions | **done** | ADR 0039 §3; `scenario.yml`, `tests/ci/windows-services.ps1`; 17 checks + before/after, green in about 5 minutes |
-| P3-14 | Meilisearch, RustFS, MongoDB | next | official Windows releases |
-| P3-15 | phpMyAdmin and Adminer as Kiln sites | planned | |
+| P3-14 | Meilisearch, RustFS, MongoDB | **done** | ADR 0042; mongosh as a companion; CI scenario 45 checks |
+| P3-15 | phpMyAdmin and Adminer as Kiln sites | next | |
 | P3-16 | Laravel Reverb per project | planned | |
 
 ### P3-01 delivered (2026-10-31)
@@ -1785,6 +1785,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-02 | **P3-13 done:** the Windows services scenario runs on `windows-latest` on every push to `main` (`.github/workflows/scenario.yml`, `tests/ci/windows-services.ps1`, reusing the VM's `lib.ps1` and `snapshot.ps1`). Mailpit with SMTP, a second instance moving ports, a squatter refused and named by `service start` and `doctor`, MySQL 8.4 and MariaDB 11.8 side by side on loopback with `kiln db`, restart and clean stop, uninstall refused then `--delete-data`, and the machine identical before and after. Green on the first run in about 5 minutes (Windows Server 2025). Ports are read from Kiln's output, since a runner may have its own services. The snapshot now tolerates a missing `Run` key. Next: P3-05 PostgreSQL. |
 | 2026-11-02 | **P3-05 done:** PostgreSQL on Windows ([ADR 0040](adr/0040-postgresql.md)). EDB's 18.6 and 17.11 builds, pinned by Kiln's own SHA-256 since EDB publishes none, keeping about 140 MB of each 960 MB archive (pgAdmin, Stack Builder, docs and headers left out). `initdb` with `--auth=trust` (loopback lines only), UTF-8 and the C locale; superuser `postgres`; Kiln's `kiln.cnf` includes `initdb`'s config and sets `listen_addresses='127.0.0.1'` and the port; `pg_ctl stop -m fast`; `kiln db` opens `psql`. PostgreSQL refuses admin rights, so the services supervisor now starts with a restricted token (Administrators and Power Users deny-only, the user in its default DACL), as `pg_ctl` does: every service runs with least rights, elevated or not ([I-76](issues.md#i-76)). Providers gain `ready()`: PostgreSQL is ready when `postmaster.pid` says so, not when its port opens ([I-78](issues.md#i-78)). A daemon test race fixed ([I-77](issues.md#i-77)). The CI scenario (elevated runner) now has 24 checks, green. Next: P3-06 Redis. |
 | 2026-11-02 | **P3-06 done:** Redis on Windows ([ADR 0041](adr/0041-redis.md)). `zkteco-home/redis-windows` was rejected: its binaries are committed with no source for the Windows port and no build workflow, and are labelled MIT though Redis 8 is RSALv2/SSPLv1/AGPLv3. Kiln uses `redis-windows/redis-windows`' MSYS2 builds instead: upstream tags built by a public workflow, digests matching GitHub's. Redis 8.10.3 and 8.8.3, downloaded at the user's request and not redistributed; relative paths in a Kiln-written config ([I-80](issues.md#i-80)); `redis-cli shutdown` saves; `kiln db redis-8.10 [n]`. The supervisor now opens program logs for writing at the end, not append-only, which MSYS2 programs couldn't write through ([I-79](issues.md#i-79)). CI checks databases 0 and 1, a Lua script in database 1 (Garnet's I-75 case), data across a restart and a clean shutdown: 31 checks, green. Laravel's own cache, session and queue checks move to P3-08 with `.env` wiring. Next: P3-14 (Meilisearch, RustFS, MongoDB). |
+| 2026-11-02 | **P3-14 done:** Meilisearch, RustFS and MongoDB on Windows ([ADR 0042](adr/0042-meilisearch-rustfs-mongodb.md)). Meilisearch 1.56.1 (Community Edition, development mode, no analytics); RustFS 1.0.4 (both addresses pinned to 127.0.0.1, as its defaults listen everywhere; relative volume, as it splits paths at spaces; credentials `rustfsadmin`); MongoDB 9.0.4 and 8.0.34 (SSPL, from MongoDB at the user's request; debug symbols, mongos and installers left out; 256 MB WiredTiger cache). Providers gain companion archives: MongoDB brings `mongosh` for its clean shutdown (`mongod --shutdown` is Linux-only) and `kiln db`, kept inside the instance folder and with telemetry and update checks off. Single-file installs now stream to disk, and downloads may be up to 2 GB ([I-81](issues.md#i-81)). CI round trips: Meilisearch index and search, S3 bucket and object over signed requests, MongoDB through `kiln db` and a clean shutdown: 45 checks, green. Windows now has Herd Pro's services except Reverb (P3-16). Next: P3-15 (phpMyAdmin and Adminer). |
 
 ## How to update this file
 

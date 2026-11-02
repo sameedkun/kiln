@@ -90,6 +90,7 @@ commits and PRs.
 | [I-78](#i-78) | services | PostgreSQL answered "the database system is starting up" right after a restart: its port opens before it accepts sessions | fixed (P3-05) |
 | [I-79](#i-79) | supervisor | Redis (an MSYS2 program) wrote nothing to its log: the supervisor gave programs append-only handles, which the MSYS2 runtime can't write through | fixed (P3-06) |
 | [I-80](#i-80) | services | The MSYS2 Redis read `C:/…` config paths as relative and failed to start ("can't open config file '/cygdrive/…/C:/…'") | fixed (P3-06) |
+| [I-81](#i-81) | fetch | MongoDB's Windows archive (989 MB) was refused: downloads were capped at 512 MB | fixed (P3-14) |
 
 ---
 
@@ -1154,3 +1155,19 @@ commits and PRs.
   part of the first command ("unknown command '﻿GET'"). `mysql` and `psql` skip it. The CI
   script passes Redis commands through a file instead. A user piping into `kiln db` from
   Windows PowerShell can hit the same; PowerShell 7 doesn't add the mark.
+
+## P3-14: Meilisearch, RustFS and MongoDB
+
+### I-81: MongoDB's archive was over the download limit (fixed)
+
+- **Seen:** the first CI run with MongoDB: `kiln service add mongodb` stopped with "… is
+  larger than the 536870912 bytes allowed".
+- **Why:** `kiln-fetch` refused single downloads over 512 MB. MongoDB's Windows zips are
+  808 MB (8.0) and 989 MB (9.0), mostly debug symbols, and there is no smaller official
+  archive.
+- **Fix:** the limit is 2 GB. The pinned digest still checks every byte, and the one-hour
+  body limit allows down to about 280 KB/s for 1 GB.
+- **Also:** two test-script faults, not Kiln's.
+  - Windows PowerShell gives an S3 object served as text as a string, not bytes.
+  - `Check` read a stale `$LASTEXITCODE` from an earlier failed check when its own block
+    ran no program. It now resets the code first.
