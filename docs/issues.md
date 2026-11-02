@@ -88,6 +88,8 @@ commits and PRs.
 | [I-76](#i-76) | services | Services started without admin rights failed with `STATUS_DLL_INIT_FAILED` on an elevated machine: the restricted token kept a default DACL that granted only Administrators | fixed (P3-05) |
 | [I-77](#i-77) | daemon | `bad_input_gets_an_error_not_a_hang` failed once on Linux CI: the daemon refused the oversized line and closed before the test finished writing it (broken pipe) | fixed (P3-05, test only) |
 | [I-78](#i-78) | services | PostgreSQL answered "the database system is starting up" right after a restart: its port opens before it accepts sessions | fixed (P3-05) |
+| [I-79](#i-79) | supervisor | Redis (an MSYS2 program) wrote nothing to its log: the supervisor gave programs append-only handles, which the MSYS2 runtime can't write through | fixed (P3-06) |
+| [I-80](#i-80) | services | The MSYS2 Redis read `C:/…` config paths as relative and failed to start ("can't open config file '/cygdrive/…/C:/…'") | fixed (P3-06) |
 
 ---
 
@@ -1079,8 +1081,9 @@ commits and PRs.
   merged on 2026-11-01. v2.2.5 doesn't have it.
 - **Not worked around:** with the cache in database 0, all 22 checks pass. But
   `cache:clear` (`FLUSHDB`) would then also delete queued jobs and sessions.
-- **Until it is fixed:** Windows has no cache service, and `kiln service add cache` says
-  so (P3-06). Linux uses Valkey.
+- **Until it is fixed:** Garnet isn't used. Since P3-06, Windows has Redis from
+  `redis-windows/redis-windows` ([ADR 0041](adr/0041-redis.md)), which runs Lua in the
+  selected database (checked in CI). Linux uses Valkey.
 - **To close:** when a Garnet release contains the fix, pin it, rerun
   `spikes/windows-cache/run-windows.ps1`, and require 22 of 22 with Laravel's defaults.
 
@@ -1122,3 +1125,32 @@ commits and PRs.
   after. Kiln only writes that key with its `Kiln` value, and the run before had passed
   with the same steps. The snapshot now compares the key's values, which are what start
   programs, so an absent key and an empty one look the same.
+
+## P3-06: Redis
+
+### I-79: an MSYS2 program wrote nothing to its log (fixed)
+
+- **Seen:** in CI, Redis ran and answered, but `kiln service logs` said it hadn't written
+  anything, so the clean-shutdown check failed.
+- **Why:** the supervisor opened each program's log in append mode. On Windows that grants
+  `FILE_APPEND_DATA` without `FILE_WRITE_DATA`. Native and Go programs write through such a
+  handle; the MSYS2 runtime doesn't.
+- **Fix:** the log is opened for writing and positioned at its end. The program and its stop
+  command get clones of that one handle, so they share one position and don't overwrite
+  each other.
+
+### I-80: the MSYS2 Redis read Windows paths as relative (fixed)
+
+- **Seen:** the first CI run with Redis: neither instance started within the time limit.
+  By hand, Redis said "can't open config file
+  '/cygdrive/d/…/C:/Users/…/kiln.cnf'".
+- **Why:** Redis makes a config path absolute by putting its current folder in front of
+  anything that doesn't start with `/`, and `C:/…` doesn't.
+- **Fix:** every path Redis sees is relative to the instance folder, where it runs: the
+  config is `kiln.cnf`, with `dir data` and `pidfile server.pid`
+  ([ADR 0041](adr/0041-redis.md) §3).
+- **Also:** Windows PowerShell 5.1 puts a byte-order mark in front of text it pipes to a
+  program, even with `$OutputEncoding` set to UTF-8 without one. `redis-cli` read it as
+  part of the first command ("unknown command '﻿GET'"). `mysql` and `psql` skip it. The CI
+  script passes Redis commands through a file instead. A user piping into `kiln db` from
+  Windows PowerShell can hit the same; PowerShell 7 doesn't add the mark.
