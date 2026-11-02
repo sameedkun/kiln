@@ -117,6 +117,58 @@ pub fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
 
 pub use platform::{create_private_dir, is_ours, spawn_background, terminate};
 
+/// A background process just started, watched while it comes up.
+#[derive(Debug)]
+pub enum Started {
+    Child(std::process::Child),
+    #[cfg(windows)]
+    Process(crate::win::Process, u32),
+}
+
+impl Started {
+    #[must_use]
+    pub fn id(&self) -> u32 {
+        match self {
+            Self::Child(child) => child.id(),
+            #[cfg(windows)]
+            Self::Process(_, pid) => *pid,
+        }
+    }
+
+    /// How it ended, if it has.
+    pub fn exited(&mut self) -> Option<String> {
+        match self {
+            Self::Child(child) => child.try_wait().ok().flatten().map(|s| s.to_string()),
+            #[cfg(windows)]
+            Self::Process(process, _) => process
+                .wait(Duration::ZERO)
+                .ok()
+                .flatten()
+                .map(|code| format!("exit code: {code}")),
+        }
+    }
+}
+
+/// [`spawn_background`], but without administrator rights on Windows even when Kiln was
+/// started elevated ([ADR 0040] §3): `command`'s program, arguments and folder are used, and it
+/// gets no standard handles. Elsewhere the same as [`spawn_background`].
+///
+/// [ADR 0040]: ../../../docs/adr/0040-postgresql.md
+pub fn spawn_background_without_admin(command: &mut std::process::Command) -> io::Result<Started> {
+    #[cfg(windows)]
+    {
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let program = Path::new(command.get_program());
+        let (process, pid) =
+            crate::win::spawn_without_admin(program, &args, command.get_current_dir())?;
+        Ok(Started::Process(process, pid))
+    }
+    #[cfg(not(windows))]
+    {
+        spawn_background(command).map(Started::Child)
+    }
+}
+
 #[cfg(windows)]
 mod platform {
     use std::io;

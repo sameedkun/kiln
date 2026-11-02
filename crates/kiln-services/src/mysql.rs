@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use crate::{EXE_SUFFIX, InstanceDirs, Launch, PortRole, Release, ServiceProvider};
+use crate::{
+    EXE_SUFFIX, InstanceDirs, Launch, PortRole, Release, STATUS_DLL_NOT_FOUND, ServiceProvider,
+    needs_vc_runtime, run, tail,
+};
 
 /// MySQL or MariaDB: what differs between the two.
 pub struct Flavor {
@@ -34,9 +36,6 @@ const PORTS: &[PortRole] = &[PortRole {
     usual: 3306,
     what: "MySQL protocol, where apps connect",
 }];
-
-/// Windows' "a DLL was not found" exit status, from a program that couldn't start.
-const STATUS_DLL_NOT_FOUND: i32 = 0xC000_0135_u32.cast_signed();
 
 const MYSQL_RELEASES: &[Release] = &[
     Release {
@@ -230,32 +229,6 @@ impl Flavor {
             BTreeMap::new()
         }
     }
-
-    fn run(bin: &Path, program: &Path, args: &[String]) -> Result<(i32, String), String> {
-        let mut command = Command::new(program);
-        command.args(args).envs(Self::env(bin));
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        let output = command
-            .output()
-            .map_err(|e| format!("cannot run {}: {e}", program.display()))?;
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok((output.status.code().unwrap_or(-1), text))
-    }
-
-    /// The last lines of `text`, for an error message.
-    fn tail(text: &str, lines: usize) -> String {
-        let all: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-        all[all.len().saturating_sub(lines)..].join("\n")
-    }
 }
 
 impl ServiceProvider for Flavor {
@@ -376,35 +349,35 @@ impl ServiceProvider for Flavor {
                  GRANT ALL PRIVILEGES ON *.* TO 'root'@'::1' WITH GRANT OPTION;\n",
             )
             .map_err(|e| format!("cannot write {}: {e}", init.display()))?;
-            let result = Self::run(
-                &dirs.bin,
+            let result = run(
                 &self.executable(&dirs.bin),
                 &[
                     config,
                     "--initialize-insecure".to_owned(),
                     format!("--init-file={}", init.display()),
                 ],
+                &Self::env(&dirs.bin),
             );
             let _ = fs::remove_file(&init);
             result?
         } else if cfg!(windows) {
-            Self::run(
-                &dirs.bin,
+            run(
                 &Self::tool(&dirs.bin, "mariadb-install-db"),
                 &[
                     format!("--datadir={}", dirs.data.display()),
                     format!("--port={}", port_of(ports)),
                 ],
+                &Self::env(&dirs.bin),
             )?
         } else {
-            Self::run(
-                &dirs.bin,
+            run(
                 &dirs.bin.join("scripts").join("mariadb-install-db"),
                 &[
                     config,
                     "--auth-root-authentication-method=normal".to_owned(),
                     "--skip-test-db".to_owned(),
                 ],
+                &Self::env(&dirs.bin),
             )?
         };
         if code != 0 {
@@ -412,7 +385,7 @@ impl ServiceProvider for Flavor {
             return Err(format!(
                 "setting up {}'s data folder failed (exit code {code}):\n{}",
                 self.display,
-                Self::tail(&format!("{output}\n{log}"), 12)
+                tail(&format!("{output}\n{log}"), 12)
             ));
         }
         Ok(())
@@ -420,7 +393,7 @@ impl ServiceProvider for Flavor {
 
     fn check(&self, bin: &Path) -> Result<(), String> {
         let server = self.executable(bin);
-        let version = || Self::run(bin, &server, &["--version".to_owned()]);
+        let version = || run(&server, &["--version".to_owned()], &Self::env(bin));
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))] // changed on Linux only
         let (mut code, mut output) = version()?;
         // Ubuntu 24.04 renamed libaio.so.1 to libaio.so.1t64: link the old name to it in
@@ -439,12 +412,7 @@ impl ServiceProvider for Flavor {
             (code, output) = version()?;
         }
         if cfg!(windows) && code == STATUS_DLL_NOT_FOUND {
-            return Err(format!(
-                "{} needs Microsoft's Visual C++ runtime (2015–2022, x64), which this computer \
-                 lacks. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and try \
-                 again. Kiln doesn't install system components itself.",
-                self.display
-            ));
+            return Err(needs_vc_runtime(self.display));
         }
         if let Some(library) = missing_library(&output) {
             return Err(format!(
@@ -459,7 +427,7 @@ impl ServiceProvider for Flavor {
             return Err(format!(
                 "{} didn't start its check (exit code {code}):\n{}",
                 self.display,
-                Self::tail(&output, 8)
+                tail(&output, 8)
             ));
         }
         Ok(())

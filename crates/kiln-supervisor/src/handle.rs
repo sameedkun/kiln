@@ -7,10 +7,10 @@ use std::fs;
 use std::io;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use kiln_sys::background::{self, PidFile, ProcStatus};
+use kiln_sys::background::{self, PidFile, ProcStatus, Started};
 
 use crate::pools::Pools;
 
@@ -68,6 +68,8 @@ pub struct SupervisorHandle {
     what: &'static str,
     ready_timeout: Duration,
     stop_timeout: Duration,
+    /// Started without administrator rights (ADR 0040 §3): services are, PHP workers aren't.
+    without_admin: bool,
 }
 
 impl SupervisorHandle {
@@ -80,6 +82,7 @@ impl SupervisorHandle {
             what: "PHP workers",
             ready_timeout: READY_TIMEOUT,
             stop_timeout: STOP_TIMEOUT,
+            without_admin: false,
         }
     }
 
@@ -100,6 +103,7 @@ impl SupervisorHandle {
             what,
             ready_timeout,
             stop_timeout: PROGRAM_STOP_TIMEOUT,
+            without_admin: true,
         }
     }
 
@@ -158,8 +162,12 @@ impl SupervisorHandle {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let mut child = background::spawn_background(&mut command)
-            .map_err(io_err(format!("cannot start {}", self.exe.display())))?;
+        let spawned = if self.without_admin {
+            background::spawn_background_without_admin(&mut command)
+        } else {
+            background::spawn_background(&mut command).map(Started::Child)
+        };
+        let mut child = spawned.map_err(io_err(format!("cannot start {}", self.exe.display())))?;
         let pid = child.id();
         self.pid_file()
             .write(pid)
@@ -183,13 +191,13 @@ impl SupervisorHandle {
     fn wait_ready(
         &self,
         pools: &Pools,
-        mut child: Option<&mut Child>,
+        mut child: Option<&mut Started>,
         log_start: u64,
     ) -> Result<(), SupervisorError> {
         let deadline = Instant::now() + self.ready_timeout;
         loop {
             if let Some(child) = child.as_deref_mut()
-                && let Ok(Some(status)) = child.try_wait()
+                && let Some(status) = child.exited()
             {
                 return Err(SupervisorError::Exited(format!(
                     "{status}\n{}",

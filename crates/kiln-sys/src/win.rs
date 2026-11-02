@@ -24,11 +24,12 @@ use windows_sys::Win32::Networking::WinSock::{
     WSADATA, WSAGetLastError, WSAStartup, closesocket, connect, socket,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+    ConvertStringSidToSidW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-    TokenUser,
+    CreateRestrictedToken, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
@@ -55,9 +56,11 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateProcessAsUserW,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
+    WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -425,6 +428,182 @@ impl Process {
     pub fn wait(&self, timeout: Duration) -> io::Result<Option<u32>> {
         wait_for_exit(&self.handle, timeout)
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Processes without administrator rights (ADR 0040 §3)
+// ---------------------------------------------------------------------------------------------
+
+/// `BUILTIN\Administrators` and `BUILTIN\Power Users`: the groups PostgreSQL refuses to run
+/// with, and the ones `pg_ctl` disables for the same reason.
+const ADMIN_GROUPS: [&str; 2] = ["S-1-5-32-544", "S-1-5-32-547"];
+
+/// One argument quoted for a Windows command line, as `CommandLineToArgvW` and the C runtime
+/// read it back.
+fn quote_arg(arg: &OsStr) -> Vec<u16> {
+    let units: Vec<u16> = arg.encode_wide().collect();
+    let plain = !units.is_empty()
+        && !units
+            .iter()
+            .any(|&u| u == u16::from(b' ') || u == u16::from(b'\t') || u == u16::from(b'"'));
+    if plain {
+        return units;
+    }
+    let mut out = vec![u16::from(b'"')];
+    let mut backslashes = 0;
+    for &unit in &units {
+        if unit == u16::from(b'\\') {
+            backslashes += 1;
+            continue;
+        }
+        // Backslashes before a quote are doubled, and the quote is escaped.
+        let repeat = if unit == u16::from(b'"') {
+            backslashes * 2 + 1
+        } else {
+            backslashes
+        };
+        out.extend(std::iter::repeat_n(u16::from(b'\\'), repeat));
+        out.push(unit);
+        backslashes = 0;
+    }
+    // Backslashes before the closing quote are doubled too.
+    out.extend(std::iter::repeat_n(u16::from(b'\\'), backslashes * 2));
+    out.push(u16::from(b'"'));
+    out
+}
+
+/// A copy of this process's token with the administrator groups set to deny-only, so a
+/// program started with it has no administrator rights even when Kiln was started elevated.
+fn token_without_admin() -> io::Result<OwnedHandle> {
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing.
+    let me = unsafe { GetCurrentProcess() };
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `me` is a valid process handle; `token` is a valid out pointer.
+    let ok = unsafe {
+        OpenProcessToken(
+            me,
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY,
+            &raw mut token,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = owned(token);
+    let mut sids: Vec<PSID> = Vec::new();
+    for text in ADMIN_GROUPS {
+        let text = wide(OsStr::new(text));
+        let mut sid: PSID = std::ptr::null_mut();
+        // SAFETY: `text` is a NUL-terminated wide string; `sid` is a valid out pointer.
+        if unsafe { ConvertStringSidToSidW(text.as_ptr(), &raw mut sid) } == 0 {
+            let error = io::Error::last_os_error();
+            for sid in sids {
+                // SAFETY: allocated by ConvertStringSidToSidW, freed once.
+                unsafe { LocalFree(sid) };
+            }
+            return Err(error);
+        }
+        sids.push(sid);
+    }
+    let disable: Vec<SID_AND_ATTRIBUTES> = sids
+        .iter()
+        .map(|&sid| SID_AND_ATTRIBUTES {
+            Sid: sid,
+            Attributes: 0,
+        })
+        .collect();
+    let mut restricted: HANDLE = std::ptr::null_mut();
+    // SAFETY: `token` is valid with TOKEN_DUPLICATE; `disable` holds `len` entries whose SIDs
+    // stay alive until after the call; no privileges or restricting SIDs are passed.
+    let ok = unsafe {
+        CreateRestrictedToken(
+            raw(&token),
+            0,
+            u32::try_from(disable.len()).unwrap_or(0),
+            disable.as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            &raw mut restricted,
+        )
+    };
+    let error = io::Error::last_os_error();
+    for sid in sids {
+        // SAFETY: allocated by ConvertStringSidToSidW, freed once, after its last use above.
+        unsafe { LocalFree(sid) };
+    }
+    if ok == 0 {
+        return Err(error);
+    }
+    Ok(owned(restricted))
+}
+
+/// Starts `program` with `args` in `cwd` without administrator rights ([`token_without_admin`]),
+/// with no console window, in its own process group, no standard handles and no inherited
+/// handles, and out of the caller's job where that's allowed. Returns its handle and PID.
+pub fn spawn_without_admin(
+    program: &Path,
+    args: &[&OsStr],
+    cwd: Option<&Path>,
+) -> io::Result<(Process, u32)> {
+    let token = token_without_admin()?;
+    let mut line = quote_arg(program.as_os_str());
+    for arg in args {
+        line.push(u16::from(b' '));
+        line.extend(quote_arg(arg));
+    }
+    line.push(0);
+    let application = wide(program.as_os_str());
+    let directory = cwd.map(|dir| wide(dir.as_os_str()));
+    // SAFETY: plain C structs for which all-zero is a valid "unset" value.
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
+    // No standard handles: null ones, so it gets none of Kiln's (I-60).
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    let flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
+    let mut result = Err(io::Error::other("not started"));
+    for flags in [flags | CREATE_BREAKAWAY_FROM_JOB, flags] {
+        // SAFETY: all-zero is a valid out value.
+        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `token` is a primary token made from this process's own token (so no
+        // special privilege is needed); the strings are NUL-terminated and outlive the call,
+        // and `line` is writable as the API requires; `startup` and `info` are valid.
+        let ok = unsafe {
+            CreateProcessAsUserW(
+                raw(&token),
+                application.as_ptr(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                flags,
+                std::ptr::null(),
+                directory.as_ref().map_or(std::ptr::null(), Vec::as_ptr),
+                &raw const startup,
+                &raw mut info,
+            )
+        };
+        if ok != 0 {
+            drop(owned(info.hThread));
+            result = Ok((
+                Process {
+                    handle: owned(info.hProcess),
+                },
+                info.dwProcessId,
+            ));
+            break;
+        }
+        result = Err(io::Error::last_os_error());
+        // A job that forbids breakaway refuses the flag; start inside it instead.
+        if result
+            .as_ref()
+            .is_err_and(|e| e.kind() != io::ErrorKind::PermissionDenied)
+        {
+            break;
+        }
+    }
+    result
 }
 
 fn wait_for_exit(handle: &OwnedHandle, timeout: Duration) -> io::Result<Option<u32>> {
@@ -1155,6 +1334,54 @@ mod tests {
         assert_eq!(process.wait(Duration::from_secs(5)).unwrap(), Some(9));
         assert!(!process.is_running().unwrap());
         let _ = child.wait();
+    }
+
+    #[test]
+    fn arguments_are_quoted_as_windows_reads_them() {
+        let quoted = |s: &str| String::from_utf16(&quote_arg(OsStr::new(s))).unwrap();
+        assert_eq!(quoted("--dir"), "--dir");
+        assert_eq!(quoted(r"C:\a b\c"), r#""C:\a b\c""#);
+        assert_eq!(quoted(r"C:\a b\"), r#""C:\a b\\""#);
+        assert_eq!(quoted(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(quoted(""), r#""""#);
+    }
+
+    #[test]
+    fn a_process_started_without_admin_has_the_admin_groups_deny_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("groups.csv");
+        let system = system_directory().unwrap();
+        let cmd = system.join("cmd.exe");
+        let err = dir.path().join("err.txt");
+        let script = format!(
+            "{} /groups /fo csv > {} 2> {}",
+            system.join("whoami.exe").display(),
+            out.display(),
+            err.display()
+        );
+        let (process, pid) = spawn_without_admin(
+            &cmd,
+            &[OsStr::new("/d"), OsStr::new("/c"), OsStr::new(&script)],
+            Some(dir.path()),
+        )
+        .unwrap();
+        assert_ne!(pid, 0);
+        let code = process.wait(Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            code,
+            Some(0),
+            "{:?}",
+            std::fs::read_to_string(dir.path().join("err.txt"))
+        );
+        let groups = std::fs::read_to_string(&out).unwrap();
+        assert!(groups.contains("S-1-5-32-545"), "{groups}"); // Users: still there
+        for line in groups.lines().filter(|l| l.contains("S-1-5-32-544")) {
+            // Present only for an administrator, and then for deny only.
+            assert!(
+                line.contains("Deny") || line.contains("deny"),
+                "administrators still enabled: {line}"
+            );
+        }
     }
 
     #[test]

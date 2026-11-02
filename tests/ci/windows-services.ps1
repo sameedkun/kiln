@@ -125,6 +125,50 @@ Check 'a stop shuts it down cleanly (its own log says so), and start brings it b
     Expect 'kept' (Sql 'mariadb-11.8' 'SELECT v FROM kiln_ci.t;')
 }
 
+Say '== PostgreSQL (ADR 0040)'
+function Psql($instance, $database, $statement) {
+    ($statement | & $Kiln db $instance $database 2>&1 | ForEach-Object { "$_" }) -join "`n"
+}
+$script:pgPort = 0
+# The runner runs elevated, which PostgreSQL refuses: this passes only if services run
+# without administrator rights (ADR 0040 §3).
+Check 'service add postgres --version 17: from EDB, set up and running on loopback' {
+    $out = Kiln service add postgres --version 17
+    Expect 'running as postgres-17' $out
+    $script:pgPort = PortOf $out 'postgres'
+}
+Check 'service add postgres (18): beside it, on another port' {
+    $out = Kiln service add postgres
+    Expect 'running as postgres-18' $out
+    if ((PortOf $out 'postgres') -eq $script:pgPort) { throw "same port as postgres-17:`n$out" }
+}
+Check 'PostgreSQL listens on 127.0.0.1 only and runs without administrator rights' {
+    $listening = Get-NetTCPConnection -State Listen | Where-Object {
+        (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName -eq 'kiln-postgres'
+    }
+    if (-not $listening) { throw 'kiln-postgres listens nowhere' }
+    $wide = $listening | Where-Object LocalAddress -ne '127.0.0.1'
+    if ($wide) { throw "listening beyond loopback: $(($wide | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
+}
+foreach ($instance in 'postgres-17', 'postgres-18') {
+    Check "kiln db $instance`: a database, a table, a row" {
+        Psql $instance $null 'CREATE DATABASE kiln_ci;' | Out-Null
+        $out = Psql $instance 'kiln_ci' "CREATE TABLE t (v text); INSERT INTO t VALUES ('kept'); SELECT v FROM t;"
+        Expect 'kept' $out
+    }
+}
+Check 'PostgreSQL data survives a restart' {
+    Kiln service restart postgres-18 | Out-Null
+    Expect 'kept' (Psql 'postgres-18' 'kiln_ci' 'SELECT v FROM t;')
+}
+Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings it back' {
+    Kiln service stop postgres-17 | Out-Null
+    $out = Kiln service logs postgres-17 --lines 8
+    if ($out -notmatch 'database system is shut down') { throw "no clean shutdown in:`n$out" }
+    Kiln service start postgres-17 | Out-Null
+    Expect 'kept' (Psql 'postgres-17' 'kiln_ci' 'SELECT v FROM t;')
+}
+
 Say '== uninstall'
 Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"

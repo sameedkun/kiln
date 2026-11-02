@@ -12,11 +12,58 @@ use std::path::{Path, PathBuf};
 pub mod install;
 mod mailpit;
 mod mysql;
+mod postgres;
 
 pub use install::{InstallError, install};
 
 /// `.exe` on Windows, nothing elsewhere.
 pub const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
+
+/// Windows' "a DLL was not found" exit status, from a program that couldn't start.
+pub(crate) const STATUS_DLL_NOT_FOUND: i32 = 0xC000_0135_u32.cast_signed();
+
+/// Why a server that exited with [`STATUS_DLL_NOT_FOUND`] can't run ([ADR 0038] §6).
+///
+/// [ADR 0038]: ../../../docs/adr/0038-mysql-and-mariadb.md
+pub(crate) fn needs_vc_runtime(display: &str) -> String {
+    format!(
+        "{display} needs Microsoft's Visual C++ runtime (2015–2022, x64), which this computer \
+         lacks. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and try \
+         again. Kiln doesn't install system components itself."
+    )
+}
+
+/// Runs one of a service's tools to completion, without a console window; returns its exit
+/// code and its output and errors together.
+pub(crate) fn run(
+    program: &Path,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+) -> Result<(i32, String), String> {
+    let mut command = std::process::Command::new(program);
+    command.args(args).envs(env);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", program.display()))?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok((output.status.code().unwrap_or(-1), text))
+}
+
+/// The last `lines` non-empty lines of `text`, for an error message.
+pub(crate) fn tail(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
 
 /// One pinned release archive of a service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,8 +240,12 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 3] =
-        [&mailpit::Mailpit, &mysql::MYSQL, &mysql::MARIADB];
+    static PROVIDERS: [&dyn ServiceProvider; 4] = [
+        &mailpit::Mailpit,
+        &mysql::MYSQL,
+        &mysql::MARIADB,
+        &postgres::Postgres,
+    ];
     &PROVIDERS
 }
 
@@ -344,27 +395,33 @@ mod contract {
             if let Some(path) = &launch.cwd {
                 assert!(path.starts_with(services), "{path:?}");
             }
-            // A config file listens on loopback only too ([ADR 0038] §3).
+            // A config file listens on loopback only too ([ADR 0038] §3): MySQL's
+            // `bind-address` or PostgreSQL's `listen_addresses`.
             let config = provider
                 .config(&dirs, &sample_ports(*provider))
                 .unwrap_or_default();
+            let mut listens = false;
             for line in config.lines() {
                 let line = line.trim();
                 assert!(
-                    !line.contains("0.0.0.0") && !line.contains("::\n"),
+                    !line.contains("0.0.0.0") && !line.contains('*') && !line.ends_with("::"),
                     "{}: {line}",
                     provider.kind()
                 );
-                if let Some(address) = line.strip_prefix("bind-address=") {
+                let address = line
+                    .strip_prefix("bind-address=")
+                    .or_else(|| line.strip_prefix("listen_addresses="));
+                if let Some(address) = address {
                     assert!(
-                        address == "127.0.0.1" || address == "::1",
+                        ["127.0.0.1", "::1", "'127.0.0.1'", "'::1'"].contains(&address),
                         "{}: {line}",
                         provider.kind()
                     );
+                    listens = true;
                 }
             }
             assert!(
-                config.is_empty() || config.contains("bind-address=127.0.0.1"),
+                config.is_empty() || listens,
                 "{}: a config must say where to listen",
                 provider.kind()
             );
