@@ -54,6 +54,10 @@ Two rules shape how PostgreSQL runs:
    - This is what PostgreSQL requires, and a sound rule for every local service anyway.
    - Nothing changes for a user who isn't elevated: those groups are already deny-only in
      their token.
+   - The restricted token's default DACL grants the user and SYSTEM, as `pg_ctl` does.
+     An elevated token's default DACL grants Administrators instead of the user. With that
+     group deny-only, a process couldn't open its own objects and failed to start with
+     `STATUS_DLL_INIT_FAILED` ([I-76](../issues.md#i-76)).
    - The PHP supervisor is unchanged.
    - `kiln-sys` gains `spawn_without_admin` (`CreateRestrictedToken` and
      `CreateProcessAsUserW`). A restricted copy of the caller's own token needs no extra
@@ -75,7 +79,12 @@ Two rules shape how PostgreSQL runs:
    - `pg_hba.conf` and `postgresql.auto.conf` stay in the data folder, so `ALTER SYSTEM`
      works.
    - Its log goes to stderr, which is the instance's log.
-6. **Stop:**
+6. **Ready and stopped:**
+   - The server opens its port while it is still starting up, and refuses sessions ("the
+     database system is starting up") until it has finished. It then writes `ready` as the
+     status line of `postmaster.pid`, which `pg_ctl start -w` waits for. Providers gain
+     `ready()`, true by default; Kiln waits for it after the port answers, within the same
+     time limit.
    - `pg_ctl stop -D <data> -m fast -w`: open sessions end, the data is flushed, then the
      server exits.
    - An instance counts as stopped once `postmaster.pid` is gone, as with MySQL's pid file

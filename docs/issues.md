@@ -85,6 +85,9 @@ commits and PRs.
 | [I-73](#i-73) | web | The restart after a CA change left sites unanswered for 8 s on Windows: it also restarted PHP and validated the new config while nothing was serving | ✅ (`WebServer::restart`: only Caddy, validated first; about 0.1 s) |
 | [I-74](#i-74) | fetch | Downloads from GitHub stalled mid-file twice in a row in the Ubuntu VM; Kiln gave up after 60 s without data and had no retry or resume | ✅ (P3-04: a stalled or broken download resumes with a Range request, up to 3 times) |
 | [I-75](#i-75) | services | Garnet's Lua scripts ignore `SELECT` and act on database 0, so Laravel's cache (database 1) breaks for `add`, tag flushes and the rate limiter: no Windows cache service until Garnet fixes it | open (upstream: microsoft/garnet#2258, fix in #2311) |
+| [I-76](#i-76) | services | Services started without admin rights failed with `STATUS_DLL_INIT_FAILED` on an elevated machine: the restricted token kept a default DACL that granted only Administrators | fixed (P3-05) |
+| [I-77](#i-77) | daemon | `bad_input_gets_an_error_not_a_hang` failed once on Linux CI: the daemon refused the oversized line and closed before the test finished writing it (broken pipe) | fixed (P3-05, test only) |
+| [I-78](#i-78) | services | PostgreSQL answered "the database system is starting up" right after a restart: its port opens before it accepts sessions | fixed (P3-05) |
 
 ---
 
@@ -1080,3 +1083,42 @@ commits and PRs.
   so (P3-06). Linux uses Valkey.
 - **To close:** when a Garnet release contains the fix, pin it, rerun
   `spikes/windows-cache/run-windows.ps1`, and require 22 of 22 with Laravel's defaults.
+
+## P3-05: PostgreSQL
+
+### I-76: services without admin rights couldn't start on an elevated machine (fixed)
+
+- **Seen:** the first CI scenario with PostgreSQL. Every service failed to start with exit
+  code `0xC0000142` (`STATUS_DLL_INIT_FAILED`), Mailpit included. The `kiln-sys` unit test
+  for the restricted spawn failed the same way on the runner, and passed on the dev machine.
+- **Why:** the runner is elevated and the dev machine isn't. An elevated token's default
+  DACL, which new processes and threads get, grants Administrators, not the user. With
+  Administrators deny-only, the new process couldn't open its own objects while loading its
+  DLLs.
+- **Fix:** the restricted token's default DACL now grants the user and SYSTEM full access,
+  as `pg_ctl` does (`AddUserToTokenDacl`). The unit test checks the elevated case on every
+  Windows CI run.
+
+### I-77: a daemon API test raced the daemon's refusal (fixed, test only)
+
+- **Seen:** once, on Linux CI: `bad_input_gets_an_error_not_a_hang` panicked with a broken
+  pipe while writing a line over the size limit.
+- **Why:** the daemon reads past the limit, answers "line too long" and closes, sometimes
+  before the test has written the whole line.
+- **Fix:** the test ignores that write's error and checks the answer, which is still there
+  to read. The daemon's behaviour was right.
+
+### I-78: PostgreSQL wasn't ready when its port was (fixed)
+
+- **Seen:** `kiln service restart postgres-18` returned, and the next `kiln db` got "FATAL:
+  the database system is starting up".
+- **Why:** Kiln counted a service as started once its port answered. PostgreSQL listens
+  before it has finished starting up.
+- **Fix:** providers gain `ready()`. PostgreSQL's reads the status line of
+  `postmaster.pid`, which says `ready` once it accepts sessions, as `pg_ctl start -w` does.
+  Kiln waits for it after the port answers, within the same time limit
+  ([ADR 0040](adr/0040-postgresql.md) §6).
+- **Also seen:** the runner had no `HKCU\…\Run` key before the scenario and an empty one
+  after. Kiln only writes that key with its `Kiln` value, and the run before had passed
+  with the same steps. The snapshot now compares the key's values, which are what start
+  programs, so an absent key and an empty one look the same.
