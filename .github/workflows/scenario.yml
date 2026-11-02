@@ -1,0 +1,38 @@
+name: Scenario
+
+# The Windows services scenario on a clean runner (ADR 0039 §3, P3-13): real downloads, real
+# services, uninstall, and the machine compared before and after. Herd coexistence and the
+# certificate dialog need a desktop session and are checked by hand in the Windows VM.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scenario-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: services (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --bins --locked
+      - name: scenario
+        shell: powershell
+        run: tests\ci\windows-services.ps1 -Kiln "$pwd\target\debug\kiln.exe"
+      - name: keep the scenario's log and snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-scenario
+          path: ${{ runner.temp }}/kiln-ci
