@@ -13,7 +13,7 @@
 //! [ADR 0013]: ../../../docs/adr/0013-downloads-and-php-runtimes.md
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -29,6 +29,9 @@ pub const BODY_TIMEOUT: Duration = Duration::from_hours(1);
 
 /// Longest a download may go without receiving any data before it is abandoned (I-48).
 pub const STALL_TIMEOUT: Duration = Duration::from_mins(1);
+
+/// How many times a stalled or broken download resumes before it is abandoned (I-74).
+pub const RESUME_ATTEMPTS: u32 = 3;
 
 /// A digest the downloaded bytes must match, as lowercase hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +150,7 @@ pub struct Fetcher {
     cache_dir: PathBuf,
     https_only: bool,
     stall_timeout: Duration,
+    resume_attempts: u32,
 }
 
 impl Fetcher {
@@ -188,6 +192,7 @@ impl Fetcher {
             cache_dir,
             https_only,
             stall_timeout: STALL_TIMEOUT,
+            resume_attempts: RESUME_ATTEMPTS,
         }
     }
 
@@ -196,6 +201,14 @@ impl Fetcher {
     #[must_use]
     pub fn with_stall_timeout(mut self, timeout: Duration) -> Self {
         self.stall_timeout = timeout;
+        self
+    }
+
+    /// Another number of resumes: only for tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_resume_attempts(mut self, attempts: u32) -> Self {
+        self.resume_attempts = attempts;
         self
     }
 
@@ -299,43 +312,63 @@ impl Fetcher {
         let dest = self.cache_dir.join(name);
         let partial = self.cache_dir.join(format!("{name}.partial"));
 
-        let response = self.get(url)?;
-        let total = response.body().content_length();
-        if total.is_some_and(|n| n > MAX_DOWNLOAD) {
-            return Err(FetchError::TooLarge {
-                url: url.to_owned(),
-                limit: MAX_DOWNLOAD,
-            });
-        }
-        let chunks = read_in_background(response);
         let result = (|| {
             let mut out = File::create(&partial)
                 .map_err(io_err(format!("cannot create {}", partial.display())))?;
             let mut hasher = expected.hasher();
             let mut done = 0u64;
+            let mut total = None;
+            let mut resumes = 0;
+            // A stalled or broken download resumes where it stopped (I-74), with a Range
+            // request; the digest still covers the whole file.
             loop {
-                let chunk = match chunks.recv_timeout(self.stall_timeout) {
-                    Ok(chunk) => chunk.map_err(|e| FetchError::Http {
-                        url: url.to_owned(),
-                        detail: e.to_string(),
-                    })?,
-                    Err(RecvTimeoutError::Timeout) => {
-                        return Err(FetchError::Stalled {
-                            url: url.to_owned(),
-                            waited: self.stall_timeout,
-                        });
-                    }
-                    // The reader only hangs up after sending the end or an error.
-                    Err(RecvTimeoutError::Disconnected) => Vec::new(),
+                let response = if done == 0 {
+                    self.get(url)?
+                } else {
+                    self.get_from(url, done)?
                 };
-                if chunk.is_empty() {
-                    break;
+                let continues = done > 0
+                    && response.status() == 206
+                    && response
+                        .headers()
+                        .get("content-range")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.starts_with(&format!("bytes {done}-")));
+                if done > 0 && !continues {
+                    // The server sent the whole file again: start over.
+                    out.set_len(0)
+                        .and_then(|()| out.seek(SeekFrom::Start(0)).map(|_| ()))
+                        .map_err(io_err(format!("cannot rewrite {}", partial.display())))?;
+                    hasher = expected.hasher();
+                    done = 0;
                 }
-                hasher.update(&chunk);
-                out.write_all(&chunk)
-                    .map_err(io_err(format!("cannot write {}", partial.display())))?;
-                done += chunk.len() as u64;
-                progress(done, total);
+                let length = response.body().content_length();
+                total = total.or(length.map(|n| n + done));
+                if total.is_some_and(|n| n > MAX_DOWNLOAD) {
+                    return Err(FetchError::TooLarge {
+                        url: url.to_owned(),
+                        limit: MAX_DOWNLOAD,
+                    });
+                }
+                let received = self.receive(
+                    url,
+                    response,
+                    &mut out,
+                    &partial,
+                    &mut hasher,
+                    &mut done,
+                    total,
+                    progress,
+                );
+                match received {
+                    Ok(()) => break,
+                    Err(FetchError::Stalled { .. } | FetchError::Http { .. })
+                        if resumes < self.resume_attempts =>
+                    {
+                        resumes += 1;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             out.sync_all()
                 .map_err(io_err(format!("cannot write {}", partial.display())))?;
@@ -356,6 +389,64 @@ impl Fetcher {
             let _ = fs::remove_file(&partial);
         }
         result.map(|()| dest)
+    }
+
+    /// `url` from byte `from` on (an HTTP Range request).
+    fn get_from(
+        &self,
+        url: &str,
+        from: u64,
+    ) -> Result<ureq::http::Response<ureq::Body>, FetchError> {
+        self.check_url(url)?;
+        self.agent
+            .get(url)
+            .header("Range", format!("bytes={from}-"))
+            .call()
+            .map_err(|e| FetchError::Http {
+                url: url.to_owned(),
+                detail: e.to_string(),
+            })
+    }
+
+    /// Appends `response`'s body to `out`, hashing it and counting it in `done`, until it
+    /// ends, stalls or breaks.
+    #[allow(clippy::too_many_arguments)] // one download's state, threaded through resumes
+    fn receive(
+        &self,
+        url: &str,
+        response: ureq::http::Response<ureq::Body>,
+        out: &mut File,
+        partial: &Path,
+        hasher: &mut Hasher,
+        done: &mut u64,
+        total: Option<u64>,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), FetchError> {
+        let chunks = read_in_background(response);
+        loop {
+            let chunk = match chunks.recv_timeout(self.stall_timeout) {
+                Ok(chunk) => chunk.map_err(|e| FetchError::Http {
+                    url: url.to_owned(),
+                    detail: e.to_string(),
+                })?,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(FetchError::Stalled {
+                        url: url.to_owned(),
+                        waited: self.stall_timeout,
+                    });
+                }
+                // The reader only hangs up after sending the end or an error.
+                Err(RecvTimeoutError::Disconnected) => Vec::new(),
+            };
+            if chunk.is_empty() {
+                return Ok(());
+            }
+            hasher.update(&chunk);
+            out.write_all(&chunk)
+                .map_err(io_err(format!("cannot write {}", partial.display())))?;
+            *done += chunk.len() as u64;
+            progress(*done, total);
+        }
     }
 }
 
@@ -584,7 +675,8 @@ mod tests {
             let _ = wait.recv();
         });
         let fetcher = Fetcher::insecure_for_tests(dir.path().into())
-            .with_stall_timeout(Duration::from_millis(500));
+            .with_stall_timeout(Duration::from_millis(500))
+            .with_resume_attempts(0);
         let expected = Expected::sha256(&"0".repeat(64)).unwrap();
         let mut seen = 0;
         let err = fetcher
@@ -602,6 +694,86 @@ mod tests {
         assert!(!dir.path().join("a.zip.partial").exists());
         release.send(()).unwrap();
         server.join().unwrap();
+    }
+
+    /// A server that stalls the first response after `head`, then answers the next request
+    /// with `second(request)`. Returns the second request's text too.
+    fn stall_then(
+        head: &'static [u8],
+        second: impl FnOnce(&str) -> Vec<u8> + Send + 'static,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = first.read(&mut request);
+            let _ = first.write_all(head);
+            let _ = first.flush();
+            let (mut stream, _) = listener.accept().unwrap();
+            let n = stream.read(&mut request).unwrap_or(0);
+            let text = String::from_utf8_lossy(&request[..n]).into_owned();
+            let _ = stream.write_all(&second(&text));
+            drop(first);
+            text
+        });
+        (base, server)
+    }
+
+    #[test]
+    fn a_stalled_download_resumes_where_it_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = b"hello, the rest of the archive".to_vec();
+        let rest = body[5..].to_vec();
+        let (base, server) = stall_then(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 30\r\n\r\nhello",
+            move |_| {
+                let mut response = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 5-29/30\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    rest.len()
+                )
+                .into_bytes();
+                response.extend_from_slice(&rest);
+                response
+            },
+        );
+        let fetcher = Fetcher::insecure_for_tests(dir.path().into())
+            .with_stall_timeout(Duration::from_millis(500));
+        let expected = Expected::sha256(&sha256_hex(&body)).unwrap();
+        let mut seen = Vec::new();
+        let path = fetcher
+            .fetch(
+                &format!("{base}/a.zip"),
+                "a.zip",
+                &expected,
+                &mut |done, total| {
+                    seen.push((done, total));
+                },
+            )
+            .unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(request.contains("range: bytes=5-"), "{request}");
+        assert_eq!(fs::read(path).unwrap(), body);
+        assert_eq!(seen.last(), Some(&(30, Some(30))));
+    }
+
+    #[test]
+    fn a_server_that_ignores_the_range_sends_it_all_again_and_that_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = b"0123456789".to_vec();
+        let whole = ok(&body);
+        let (base, server) = stall_then(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123",
+            move |_| whole,
+        );
+        let fetcher = Fetcher::insecure_for_tests(dir.path().into())
+            .with_stall_timeout(Duration::from_millis(500));
+        let expected = Expected::sha256(&sha256_hex(&body)).unwrap();
+        let path = fetcher
+            .fetch(&format!("{base}/a.zip"), "a.zip", &expected, &mut |_, _| {})
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(fs::read(path).unwrap(), body, "started over, not appended");
     }
 
     #[test]

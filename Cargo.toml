@@ -59,6 +59,8 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 # Caddy release archives for Linux and macOS (.tar.gz): pure-Rust gzip through zlib-rs.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 tar = { version = "0.4", default-features = false }
+# MySQL's Linux archives (.tar.xz, ADR 0038): pure-Rust xz decoding.
+lzma-rust2 = { version = "=0.21.0", default-features = false, features = ["std", "xz", "optimization"] }
 # Linux: the Secret Service (ADR 0021) over D-Bus: a client only, driven by zbus::block_on.
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 futures-core = { version = "0.3", default-features = false }

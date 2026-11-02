@@ -465,6 +465,50 @@ Check 'and back to 1025 once the other program is gone' {
     Expect 'mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running' (Kiln service list)
 }
 
+Say '== MySQL and MariaDB (P3-04, ADR 0038)'
+function Sql($instance, $statement) { ($statement | & $Kiln db $instance 2>&1 | ForEach-Object { "$_" }) -join "`n" }
+Check 'service add mysql --version 8.4: from Oracle, set up and running on 127.0.0.1:3306' {
+    Expect 'running as mysql-8.4: mysql 127.0.0.1:3306' (Kiln service add mysql --version 8.4)
+}
+Check 'service add mariadb --version 11.8: beside it, on 3307' {
+    $out = Kiln service add mariadb --version 11.8
+    Expect "used by Kiln's mysql-8.4; using 3307" $out
+    Expect 'running as mariadb-11.8: mysql 127.0.0.1:3307' $out
+}
+Check 'only loopback listens on their ports (no X plugin on 33060)' {
+    $open = Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 3306, 3307, 33060 }
+    $wide = $open | Where-Object LocalAddress -ne '127.0.0.1'
+    if ($wide) { throw "listening beyond loopback: $(($wide | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
+    if ($open | Where-Object LocalPort -eq 33060) { throw 'the X plugin is listening' }
+}
+function Migrated($instance, $connection, $port) {
+    Sql $instance 'CREATE DATABASE IF NOT EXISTS kiln_scenario;' | Out-Null
+    $env:DB_CONNECTION = $connection; $env:DB_HOST = '127.0.0.1'; $env:DB_PORT = "$port"
+    $env:DB_DATABASE = 'kiln_scenario'; $env:DB_USERNAME = 'root'; $env:DB_PASSWORD = ''
+    Push-Location "$sites\laravel-app"
+    try { $out = & "$shims\php.exe" artisan migrate --force 2>&1 | Out-String }
+    finally {
+        Pop-Location
+        Remove-Item Env:DB_CONNECTION, Env:DB_HOST, Env:DB_PORT, Env:DB_DATABASE, Env:DB_USERNAME, Env:DB_PASSWORD -ErrorAction SilentlyContinue
+    }
+    if ($LASTEXITCODE -ne 0) { throw "migrate failed:`n$out" }
+    $count = Sql $instance 'SELECT COUNT(*) FROM kiln_scenario.migrations;'
+    if ($count -notmatch '(?m)^[1-9]') { throw "no migrations recorded:`n$count" }
+}
+Check 'the Laravel app migrates against MySQL 8.4 (kiln db made its database)' { Migrated 'mysql-8.4' 'mysql' 3306 }
+Check 'and against MariaDB 11.8' { Migrated 'mariadb-11.8' 'mariadb' 3307 }
+Check 'its data survives a restart' {
+    Kiln service restart mysql-8.4 | Out-Null
+    $count = Sql 'mysql-8.4' 'SELECT COUNT(*) FROM kiln_scenario.migrations;'
+    if ($count -notmatch '(?m)^[1-9]') { throw "gone after the restart:`n$count" }
+}
+Check 'a stop shuts it down cleanly (its own log says so), and start brings it back' {
+    Kiln service stop mysql-8.4 | Out-Null
+    $log = Kiln service logs mysql-8.4 --lines 8
+    if ($log -notmatch 'Shutdown complete|Server - end') { throw "no clean shutdown in:`n$log" }
+    Kiln service start mysql-8.4 | Out-Null
+}
+
 Say '== kilnd (ADR 0026)'
 Check 'daemon start' { Kiln daemon start }
 Check 'daemon status reports the web server running' { Expect 'Web server: running' (Kiln daemon status) }

@@ -21,7 +21,7 @@ function Kiln {
     if ($LASTEXITCODE -ne 0) { throw "kiln $args failed ($LASTEXITCODE): $($out.Trim())" }
     $out
 }
-function Get($url) { curl.exe -sS --ssl-revoke-best-effort $url 2>&1 | Out-String }
+function Get($url) { curl.exe -sS --max-time 60 --ssl-revoke-best-effort $url 2>&1 | Out-String }   # never hang a run
 function Expect($text, $output) { if (-not $output.Contains($text)) { throw "expected '$text' in:`n$output" } }
 
 # Windows asks before it adds a root to the user's store ("Security Warning") and before it

@@ -294,6 +294,34 @@ wait "$squatter" 2> /dev/null
 check "and back to 1025 once the other program is gone" \
     sh -c "'$K' service port mailpit-1 smtp=1025 > /dev/null && '$K' service list | grep -q 'mailpit-1  mailpit 1.31.6  smtp 127.0.0.1:1025, http 127.0.0.1:8025  running'"
 
+echo "== MySQL and MariaDB (P3-04, ADR 0038)"
+# This VM has no libaio, which MySQL needs: Kiln names it and installs nothing.
+mysql_refused() {
+    if "$K" service add mysql --version 8.4 > "$WORK/mysql.txt" 2>&1; then cat "$WORK/mysql.txt"; return 1; fi
+    grep -q "needs libaio.so.1, which this system lacks" "$WORK/mysql.txt" &&
+        grep -q "libaio1t64" "$WORK/mysql.txt" &&
+        ! "$K" service list | grep -q "mysql-8.4"
+}
+check "service add mysql: refused for the missing libaio, with the package to install" mysql_refused
+check "service add mariadb --version 11.8: set up and running on 127.0.0.1:3306" \
+    sh -c "'$K' service add mariadb --version 11.8 > '$WORK/maria1.txt' 2>&1 && grep -q 'running as mariadb-11.8: mysql 127.0.0.1:3306' '$WORK/maria1.txt'"
+check "service add mariadb --version 12.3: beside it, on 3307" \
+    sh -c "'$K' service add mariadb --version 12.3 > '$WORK/maria2.txt' 2>&1 && grep -q \"used by Kiln's mariadb-11.8; using 3307\" '$WORK/maria2.txt' && grep -q 'running as mariadb-12.3: mysql 127.0.0.1:3307' '$WORK/maria2.txt'"
+check "only loopback listens on their ports" \
+    sh -c "ss -ltnH | awk '{print \$4}' | grep -E ':(3306|3307|33060)\$' | grep -v '^127.0.0.1:' | { ! grep -q .; }"
+sql() { printf '%s\n' "$2" | "$K" db "$1" 2>&1; }
+migrated() { # migrated <instance> <port>
+    sql "$1" "CREATE DATABASE IF NOT EXISTS kiln_scenario;" > /dev/null &&
+        (cd "$SITES/laravel-app" && DB_CONNECTION=mariadb DB_HOST=127.0.0.1 DB_PORT="$2" DB_DATABASE=kiln_scenario DB_USERNAME=root DB_PASSWORD= bash -ic 'php artisan migrate --force' > "$WORK/migrate-$1.txt" 2>&1) &&
+        sql "$1" "SELECT COUNT(*) AS n FROM kiln_scenario.migrations;" | grep -qE '^[1-9]'
+}
+check "the Laravel app migrates against MariaDB 11.8 (kiln db made its database)" migrated mariadb-11.8 3306
+check "and against MariaDB 12.3" migrated mariadb-12.3 3307
+check "its data survives a restart" \
+    sh -c "'$K' service restart mariadb-11.8 > /dev/null && printf 'SELECT COUNT(*) FROM kiln_scenario.migrations;\n' | '$K' db mariadb-11.8 | grep -qE '^[1-9]'"
+check "a stop shuts it down cleanly (its own log says so), and start brings it back" \
+    sh -c "'$K' service stop mariadb-12.3 > /dev/null && '$K' service logs mariadb-12.3 --lines 5 | grep -q 'Shutdown complete' && '$K' service start mariadb-12.3 > /dev/null"
+
 echo "== kilnd (ADR 0026)"
 caddy_pid() { ps -u "$(id -u)" -o pid=,comm= | awk '$2 == "kiln-caddy" {print $1}'; }
 restarted() { # restarted <old pid>: waits up to a minute for a new kiln-caddy

@@ -7,11 +7,11 @@
 //! [ADR 0036]: ../../../docs/adr/0036-service-framework.md
 
 use std::collections::BTreeMap;
-use std::io;
 use std::path::{Path, PathBuf};
 
 pub mod install;
 mod mailpit;
+mod mysql;
 
 pub use install::{InstallError, install};
 
@@ -31,8 +31,14 @@ pub struct Release {
     pub url: &'static str,
     /// SHA-256 of the archive, lowercase hex.
     pub sha256: &'static str,
-    /// Path of the executable inside the archive.
+    /// Path of the executable: inside the archive for a single-file install, or inside
+    /// [`Release::tree`] for a whole-tree one.
     pub executable: &'static str,
+    /// For a whole-tree install ([ADR 0038] §2): the archive's top folder, whose contents
+    /// (those [`ServiceProvider::keep`] accepts) become the version's `bin` folder.
+    ///
+    /// [ADR 0038]: ../../../docs/adr/0038-mysql-and-mariadb.md
+    pub tree: Option<&'static str>,
 }
 
 /// A port a service listens on, by its role.
@@ -76,6 +82,12 @@ impl InstanceDirs {
     pub fn instance(&self) -> &Path {
         self.data.parent().unwrap_or(&self.data)
     }
+
+    /// `<services>/<name>/kiln.cnf`: the config Kiln writes for providers that have one.
+    #[must_use]
+    pub fn config(&self) -> PathBuf {
+        self.instance().join("kiln.cnf")
+    }
 }
 
 /// `<services>/bin/<kind>/<version>`.
@@ -115,8 +127,9 @@ pub trait ServiceProvider: Sync {
     ///
     /// [I-11]: ../../../docs/issues.md#i-11
     fn executable_name(&self) -> &'static str;
-    /// Sets up a new instance's data folder.
-    fn init_data(&self, dirs: &InstanceDirs) -> io::Result<()>;
+    /// Sets up a new instance's data folder, after its config ([`ServiceProvider::config`])
+    /// has been written. The error is for people.
+    fn init_data(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Result<(), String>;
     /// How to run an instance with these `ports` (role → port), listening on loopback only.
     fn launch(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Launch;
 
@@ -124,12 +137,65 @@ pub trait ServiceProvider: Sync {
     fn executable(&self, bin: &Path) -> PathBuf {
         bin.join(format!("{}{EXE_SUFFIX}", self.executable_name()))
     }
+
+    /// The config file Kiln writes to [`InstanceDirs::config`] before each start, if the
+    /// provider has one. It is rewritten every time, so a port change takes effect.
+    fn config(&self, _dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Option<String> {
+        None
+    }
+
+    /// For a whole-tree install: whether to keep the file at `path` (relative to the tree,
+    /// `/`-separated). Everything by default.
+    fn keep(&self, _path: &str) -> bool {
+        true
+    }
+
+    /// Checks a freshly installed version runs on this system, and prepares what it needs
+    /// from it ([ADR 0038] §6). The error is for people.
+    ///
+    /// [ADR 0038]: ../../../docs/adr/0038-mysql-and-mariadb.md
+    fn check(&self, _bin: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// The part of `version` that names an instance by default: the major version, e.g.
+    /// `1` for Mailpit 1.31.6.
+    fn series(&self, version: &str) -> String {
+        version.split('.').next().unwrap_or(version).to_owned()
+    }
+
+    /// Whether a stopped instance has finished stopping. A database closes its port first
+    /// and flushes its data after, so the port alone doesn't say ([ADR 0038] §5). True by
+    /// default.
+    ///
+    /// [ADR 0038]: ../../../docs/adr/0038-mysql-and-mariadb.md
+    fn stopped(&self, _dirs: &InstanceDirs) -> bool {
+        true
+    }
+
+    /// The files `kiln service logs` shows, in order: the instance's output by default; a
+    /// server with its own error log adds it.
+    fn logs(&self, dirs: &InstanceDirs) -> Vec<PathBuf> {
+        vec![dirs.log.clone()]
+    }
+
+    /// The client to open on an instance (`kiln db`), if there is one.
+    fn client(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+        _database: Option<&str>,
+    ) -> Option<Launch> {
+        None
+    }
 }
 
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    &[&mailpit::Mailpit]
+    static PROVIDERS: [&dyn ServiceProvider; 3] =
+        [&mailpit::Mailpit, &mysql::MYSQL, &mysql::MARIADB];
+    &PROVIDERS
 }
 
 /// The provider of `kind`.
@@ -278,11 +344,45 @@ mod contract {
             if let Some(path) = &launch.cwd {
                 assert!(path.starts_with(services), "{path:?}");
             }
-            // Every port it was given appears in its command line.
-            for port in sample_ports(*provider).values() {
+            // A config file listens on loopback only too ([ADR 0038] §3).
+            let config = provider
+                .config(&dirs, &sample_ports(*provider))
+                .unwrap_or_default();
+            for line in config.lines() {
+                let line = line.trim();
                 assert!(
-                    launch.args.iter().any(|a| a.ends_with(&format!(":{port}"))),
+                    !line.contains("0.0.0.0") && !line.contains("::\n"),
+                    "{}: {line}",
+                    provider.kind()
+                );
+                if let Some(address) = line.strip_prefix("bind-address=") {
+                    assert!(
+                        address == "127.0.0.1" || address == "::1",
+                        "{}: {line}",
+                        provider.kind()
+                    );
+                }
+            }
+            assert!(
+                config.is_empty() || config.contains("bind-address=127.0.0.1"),
+                "{}: a config must say where to listen",
+                provider.kind()
+            );
+            // Every port it was given appears in its command line or its config.
+            for port in sample_ports(*provider).values() {
+                let in_args = launch.args.iter().any(|a| a.ends_with(&format!(":{port}")));
+                let in_config = config.lines().any(|l| l.trim() == format!("port={port}"));
+                assert!(
+                    in_args || in_config,
                     "{}: port {port} unused",
+                    provider.kind()
+                );
+            }
+            // A stop command runs one of its own programs.
+            if let Some(stop) = &launch.stop_command {
+                assert!(
+                    Path::new(&stop[0]).starts_with(&dirs.bin),
+                    "{}: {stop:?}",
                     provider.kind()
                 );
             }

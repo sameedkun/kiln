@@ -83,7 +83,7 @@ commits and PRs.
 | [I-71](#i-71) | web | Caddy set up its own default CA for a `.internal` site and installed its root into the system and NSS trust stores | ✅ (`local` CA declared with `install_trust: false`) |
 | [I-72](#i-72) | web | The first `kiln web start` never recorded which intermediate issued the site certificates, so the next site change restarted the server | ✅ (recorded whenever Caddy gets the CA) |
 | [I-73](#i-73) | web | The restart after a CA change left sites unanswered for 8 s on Windows: it also restarted PHP and validated the new config while nothing was serving | ✅ (`WebServer::restart`: only Caddy, validated first; about 0.1 s) |
-| [I-74](#i-74) | fetch | Downloads from GitHub stalled mid-file twice in a row in the Ubuntu VM; Kiln gives up after 60 s without data and has no retry or resume | open (worked again within the hour; retry with resume to consider) |
+| [I-74](#i-74) | fetch | Downloads from GitHub stalled mid-file twice in a row in the Ubuntu VM; Kiln gave up after 60 s without data and had no retry or resume | ✅ (P3-04: a stalled or broken download resumes with a Range request, up to 3 times) |
 | [I-75](#i-75) | services | Garnet's Lua scripts ignore `SELECT` and act on database 0, so Laravel's cache (database 1) breaks for `add`, tag flushes and the rate limiter: no Windows cache service until Garnet fixes it | open (upstream: microsoft/garnet#2258, fix in #2311) |
 
 ---
@@ -1033,7 +1033,7 @@ commits and PRs.
 
 ## P3-01: the service framework
 
-### I-74: downloads that stall mid-file fail the whole step (open)
+### I-74: downloads that stall mid-file fail the whole step ✅
 - **Found:** the P3-01 Ubuntu VM runs, 2026-10-31. Two runs in a row, `kiln php install 8.3`
   stopped part-way through `php-8.3.36-fpm-linux-x86_64.tar.gz` from Kiln's GitHub release.
   - It stopped at 23.2 MB of 29 MB, then at 17.4 MB, each time after the scenario's retry
@@ -1048,6 +1048,17 @@ commits and PRs.
   couple of retries would ride out such stalls. The pinned digest still checks the whole
   file, so resuming is safe.
 - **For now:** the scenarios treat such a failure as the network. Rerun.
+- **Fixed in P3-04:** the MariaDB Windows archive (92 MB) then stalled in the Windows VM. It
+  hung 25 minutes on a slow server before the 60 s idle limit gave up, and nothing was kept.
+  - **The fix:** `kiln-fetch` now keeps the partial file and its running digest when a
+    download stalls or breaks, and asks for the rest with `Range: bytes=<received>-`, up to
+    3 times.
+  - **Only an exact continuation** is used: a `206` whose `Content-Range` starts at the
+    received length. A server that sends the whole file again is started over from zero.
+  - **The pinned digest** still covers the whole file.
+  - **Servers:** GitHub, `cdn.mysql.com` and `archive.mariadb.org` all answered Range
+    requests with `206`.
+  - **Tests:** a resumed download, and a server that ignores the range.
 
 ## P3-02: the Windows cache spike
 

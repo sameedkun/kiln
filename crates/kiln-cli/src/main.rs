@@ -161,6 +161,13 @@ enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Open a database service's client (mysql, mariadb) on an instance, as root.
+    Db {
+        /// The instance, e.g. mysql-8.4 (see `kiln service list`).
+        name: String,
+        /// A database to open.
+        database: Option<String>,
+    },
     /// Start or stop all services at once.
     Services {
         #[command(subcommand)]
@@ -620,6 +627,8 @@ fn changes_state(command: &Command) -> bool {
             | Command::Service {
                 action: ServiceAction::List | ServiceAction::Logs { .. }
             }
+            // A client session can last hours and changes nothing of Kiln's.
+            | Command::Db { .. }
     )
 }
 
@@ -761,6 +770,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::History { all } => history::history(all),
         Command::Uninstall { options } => uninstall::uninstall(options),
         Command::Service { action } => run_service(action),
+        Command::Db { name, database } => service::db(&name, database.as_deref()),
         Command::Services { action } => match action {
             ServicesAction::Up => service::start(&[]),
             ServicesAction::Down => service::stop(&[]),

@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-01 · **Current phase:** **Phase 3 in progress** (3 of 12 tasks done; ADRs 0035–0037; next: P3-04) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (4 of 12 tasks done; ADRs 0035–0038; Windows first, Linux on hold; next: re-plan) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0037 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0038 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1486,7 +1486,7 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-01 | Service framework, instances, second supervisor; Mailpit | **done** 2026-10-31 | [ADR 0036](adr/0036-service-framework.md); see below. VM-checked on Windows and Ubuntu |
 | P3-02 | Spike: a Redis-compatible cache on Windows (Garnet) | **done** 2026-11-01 | [spike 03](spikes/results/03-windows-cache.md); see below. Garnet once it fixes Lua ignoring `SELECT` (I-75) |
 | P3-03 | Ports and coexistence for services | **done** 2026-11-01 | [ADR 0037](adr/0037-service-ports-and-coexistence.md); see below. VM-checked on Windows and Ubuntu |
-| P3-04 | MySQL and MariaDB | next | vendor downloads |
+| P3-04 | MySQL and MariaDB | **done** 2026-11-02 (Windows) | [ADR 0038](adr/0038-mysql-and-mariadb.md); see below. VM-checked on Windows; Linux built and unit-tested, its VM run stopped (Linux on hold) |
 | P3-05 | PostgreSQL (own Linux builds) | planned | |
 | P3-06 | Cache (Valkey; Windows per P3-02) | planned | |
 | P3-07 | Mailpit's UI at `mail.test`, `MAIL_*` wiring | planned | the provider came with P3-01 |
@@ -1634,6 +1634,56 @@ amending [ADR 0035](adr/0035-services.md) §8.
   - **Fixed** a doc comment in `kiln-coexist` that the Phase 3 planning commit had
     damaged.
 
+### P3-04 delivered (2026-11-02, Windows)
+
+[ADR 0038](adr/0038-mysql-and-mariadb.md).
+
+- **The kinds `mysql` and `mariadb`:**
+  - MySQL 8.4.13 and 9.7.4, and MariaDB 11.8.9 and 12.3.3: the vendors' archives, pinned by
+    SHA-256.
+  - MySQL's pins were made after checking Oracle's GPG signatures (MySQL Release
+    Engineering's key, fingerprint as in Oracle's manual) and MD5s. MariaDB's come from its
+    downloads API.
+  - Default instance names follow the series, e.g. `mysql-8.4`.
+- **Unpacking:**
+  - Whole archives (`.zip`, `.tar.gz`, and `.tar.xz` through `lzma-rust2`), without debug
+    symbols, static libraries, tests, docs or headers, and without MariaDB's plugins.
+  - The server gets its Kiln name as a hard link: `kiln-mysqld`, `kiln-mariadbd`.
+  - A path that would leave the archive's top folder is refused.
+- **Running:** a config Kiln writes before every start (loopback only, `skip-name-resolve`,
+  no X plugin for MySQL), plus `--no-monitor` for MySQL on Windows.
+  - **First start:** creates `root@127.0.0.1` and `root@::1` without a password, through
+    MySQL's init file or MariaDB's installers.
+  - **Stop:** through `mysqladmin` / `mariadb-admin`, and Kiln waits until the server has
+    removed its pid file, so a stopped database has finished writing.
+- **`kiln db <instance> [database]`** opens the vendor's client. `kiln service logs` shows
+  the server's own error log too.
+- **After installing,** Kiln runs the server once:
+  - On Windows, a missing DLL becomes the VC++ runtime message.
+  - On Linux, a missing `libaio.so.1` is linked from Ubuntu 24.04's renamed `libaio.so.1t64`
+    in Kiln's own folder, and any other missing library is named with its package.
+- **I-74 fixed:** downloads resume after a stall or a broken connection, with a Range request,
+  up to 3 times. MariaDB's 92 MB Windows archive had stalled for 25 minutes on a slow server.
+- **Tests:** whole-tree unpacking (zip and tar.gz, filter, hard link, escape refused), the
+  config, the stop command, `keep`, series names, missing-library parsing, and download
+  resume, including a server that ignores the range. 356 on Windows, 326 on Linux; clippy
+  clean on both.
+- **Windows VM (with Herd): 99 checks passed.**
+  - MySQL 8.4 on 3306 and MariaDB 11.8 beside it on 3307, only on loopback, no X plugin;
+  - the Laravel app migrates against both, in databases `kiln db` made;
+  - data survives a restart;
+  - a stop ends in a clean shutdown.
+
+  The renewal restart measured 656 ms.
+- **On the way:**
+  - The first Windows run caught `stop` returning while MySQL was still flushing: it
+    closes its port first. Hence the pid-file wait.
+  - The run's `Get` helper now has a 60 s limit, after a paused VM left one hanging.
+- **Linux, on hold:** the code is in place and unit-tested, and the libaio handling was
+  checked by hand in the Ubuntu VM. MySQL and MariaDB both ran there, with the private libaio
+  link for MySQL. The Ubuntu scenario run was stopped when Linux was put on hold
+  (2026-11-02). See the Phase 3 re-plan.
+
 ## Open items carried into Phase 1
 
 | Item | Ref | Blocking? |
@@ -1726,6 +1776,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-10-31 | **P3-01 done:** ADR 0036. `kiln service add/list/start/stop/restart/logs/remove` and `kiln services up/down`; instances in a `services` table (schema v7); a second `kiln-supervisor` that now runs programs too, stopped gracefully; the new `kiln-services` crate with contract tests for every provider; Mailpit 1.31.6 as the first provider, running as `kiln-mailpit` on loopback. Uninstall refuses while services hold data unless `--delete-data`. I-74 logged (GitHub downloads stalling mid-file). Scenarios: Windows 87 checks, Ubuntu 87. |
 | 2026-11-01 | **P3-02 done:** spike 03. Garnet 2.2.3 on Windows passed 19 of 22 Laravel checks (Valkey control: 22 of 22). Its Lua scripts ignore `SELECT` (microsoft/garnet#2258, fix open), which breaks `Cache::add`, tag flushes and the rate limiter on Laravel's cache database. Using one database would pass but make `cache:clear` delete queued jobs, so it isn't done. Garnet also needs .NET 10, which Kiln would keep privately. ADR 0035 §8 amended: Windows gets Garnet once a release with the fix passes the spike; until then, no Windows cache (I-75). |
 | 2026-11-01 | **P3-03 done:** ADR 0037. A busy service port names its holder (database, cache, mail and Docker programs recognized; a running system service of that kind when the holder can't be inspected); a start refuses a port another program took, and `kiln service port` moves the instance; stop and remove wait until the program has let go of its ports; doctor gains a Services area and lists other services and system services (`sc.exe`, `systemctl`). ADR 0034 §2 amended: Windows times the restart with bare TCP connects (397 ms; HTTP read 1,331 ms through Windows' connect retries). Scenarios: Windows 92 checks, Ubuntu 92. |
+| 2026-11-02 | **P3-04 done (Windows):** ADR 0038. MySQL 8.4/9.7 and MariaDB 11.8/12.3 from their vendors (MySQL pins after checking Oracle's GPG signatures); whole archives unpacked without the extras, the server hard-linked under a Kiln name; a loopback-only config; root for 127.0.0.1 and ::1 at first start; stop waits for the pid file to go; `kiln db`. I-74 fixed: downloads resume. Windows VM: 99 checks. Linux unit-tested; its VM run stopped as Linux goes on hold. |
 
 ## How to update this file
 

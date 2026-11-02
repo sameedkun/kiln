@@ -69,6 +69,21 @@ fn record_of(store: &StateStore, name: &str) -> Result<ServiceRecord, String> {
         .ok_or_else(|| format!("no service called {name} (see `kiln service list`)"))
 }
 
+/// Writes the provider's config for the instance, if it has one.
+fn write_config(
+    provider: &dyn ServiceProvider,
+    dirs: &InstanceDirs,
+    ports: &BTreeMap<String, u16>,
+) -> Result<(), String> {
+    let Some(text) = provider.config(dirs, ports) else {
+        return Ok(());
+    };
+    let path = dirs.config();
+    std::fs::create_dir_all(dirs.instance())
+        .map_err(|e| format!("cannot create {}: {e}", dirs.instance().display()))?;
+    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// What the supervisor should run: every enabled instance.
 fn desired(store: &StateStore) -> Result<Pools, String> {
     let mut pools = Vec::new();
@@ -78,6 +93,8 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
         }
         let provider = provider_of(&record.kind)?;
         let dirs = dirs_of(&record)?;
+        // Rewritten before every start, so a changed port takes effect.
+        write_config(provider, &dirs, &record.ports)?;
         let launch = provider.launch(&dirs, &record.ports);
         let main = provider
             .ports()
@@ -136,18 +153,28 @@ fn apply(store: &StateStore) -> Result<(), String> {
         .map(std::net::SocketAddr::port)
         .filter(|p| !wanted.contains(p))
         .collect();
-    if !wait_released(&gone) {
-        println!("Note: port(s) {gone:?} are still open; a service is taking long to stop.");
+    // The instances that were stopped, which may still be finishing (a database flushes
+    // its data after closing its port).
+    let stopping: Vec<(&'static dyn ServiceProvider, InstanceDirs)> = before
+        .pools
+        .iter()
+        .filter(|old| !pools.pools.iter().any(|p| p.id == old.id))
+        .filter_map(|old| store.service(&old.id).ok().flatten())
+        .filter_map(|record| Some((provider_of(&record.kind).ok()?, dirs_of(&record).ok()?)))
+        .collect();
+    if !wait_released(&gone, &stopping) {
+        println!("Note: a service is taking long to stop; it may still be finishing.");
     }
     Ok(())
 }
 
-/// Waits until every port in `ports` is free again, for as long as a graceful stop may take
-/// (the supervisor's own limit). Returns whether they all are.
-fn wait_released(ports: &[u16]) -> bool {
+/// Waits until every port in `ports` is free again and every instance in `stopping` has
+/// finished stopping, for as long as a graceful stop may take (the supervisor's own limit).
+/// Returns whether all have.
+fn wait_released(ports: &[u16], stopping: &[(&'static dyn ServiceProvider, InstanceDirs)]) -> bool {
     let deadline = std::time::Instant::now() + kiln_supervisor::handle::PROGRAM_STOP_TIMEOUT;
     loop {
-        if ports.iter().all(|&p| is_free(p)) {
+        if ports.iter().all(|&p| is_free(p)) && stopping.iter().all(|(p, d)| p.stopped(d)) {
             return true;
         }
         if std::time::Instant::now() >= deadline {
@@ -451,12 +478,12 @@ fn install_binaries(
         .map_err(|e| e.to_string())?;
     kiln_services::install(provider, release, &archive, bin).map_err(|e| e.to_string())?;
     println!(
-        "Verified {} (SHA-256 matches the pinned release) and installed {} {} ({} license).",
+        "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
         release.archive,
         provider.display_name(),
         release.version,
-        provider.license()
     );
+    println!("License: {}.", provider.license());
     Ok(())
 }
 
@@ -469,8 +496,8 @@ pub fn add(
 ) -> Result<(), String> {
     let provider = provider_of(kind)?;
     let release = release_of(provider, version)?;
-    let major = release.version.split('.').next().unwrap_or(release.version);
-    let name = name.map_or_else(|| format!("{kind}-{major}"), str::to_owned);
+    let series = provider.series(release.version);
+    let name = name.map_or_else(|| format!("{kind}-{series}"), str::to_owned);
     if name.is_empty()
         || !name
             .chars()
@@ -505,10 +532,15 @@ pub fn add(
     )?;
 
     install_binaries(provider, release, &dirs.bin)?;
+    // Runs on this system? (A missing VC++ runtime or Linux library, ADR 0038 §6.)
+    provider.check(&dirs.bin)?;
 
-    provider
-        .init_data(&dirs)
-        .map_err(|e| format!("cannot set up {}: {e}", dirs.data.display()))?;
+    write_config(provider, &dirs, &chosen)?;
+    if let Err(e) = provider.init_data(&dirs, &chosen) {
+        // Nothing was there before, so nothing of the user's is lost.
+        let _ = std::fs::remove_dir_all(dirs.instance());
+        return Err(e);
+    }
     let record = ServiceRecord {
         name: name.clone(),
         kind: kind.to_owned(),
@@ -655,20 +687,54 @@ pub fn restart(name: &str) -> Result<(), String> {
 pub fn logs(name: &str, lines: usize) -> Result<(), String> {
     let store = crate::web::open_store()?;
     let record = record_of(&store, name)?;
-    let log = dirs_of(&record)?.log;
-    let text = match std::fs::read(&log) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("{name} hasn't written anything yet ({}).", log.display());
-            return Ok(());
+    let provider = provider_of(&record.kind)?;
+    let logs = provider.logs(&dirs_of(&record)?);
+    let mut wrote = false;
+    for log in &logs {
+        let text = match std::fs::read(log) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("cannot read {}: {e}", log.display())),
+        };
+        let all: Vec<&str> = text.lines().collect();
+        if all.is_empty() {
+            continue;
         }
-        Err(e) => return Err(format!("cannot read {}: {e}", log.display())),
-    };
-    let all: Vec<&str> = text.lines().collect();
-    for line in &all[all.len().saturating_sub(lines)..] {
-        println!("{line}");
+        if logs.len() > 1 {
+            println!("== {}", log.display());
+        }
+        for line in &all[all.len().saturating_sub(lines)..] {
+            println!("{line}");
+        }
+        wrote = true;
+    }
+    if !wrote {
+        println!("{name} hasn't written anything yet.");
     }
     Ok(())
+}
+
+/// `kiln db <instance> [database]` ([ADR 0038] §7): the service's client on the instance, in
+/// this terminal.
+///
+/// [ADR 0038]: ../../../docs/adr/0038-mysql-and-mariadb.md
+pub fn db(name: &str, database: Option<&str>) -> Result<(), String> {
+    let store = crate::web::open_store()?;
+    let record = record_of(&store, name)?;
+    let provider = provider_of(&record.kind)?;
+    let client = provider
+        .client(&dirs_of(&record)?, &record.ports, database)
+        .ok_or_else(|| format!("{} has no client to open", provider.display_name()))?;
+    let status = std::process::Command::new(&client.program)
+        .args(&client.args)
+        .envs(&client.env)
+        .status()
+        .map_err(|e| format!("cannot run {}: {e}", client.program.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{} exited with {status}", client.program.display()))
+    }
 }
 
 /// `kiln service remove <name> [--delete-data]` ([ADR 0036] §9): its data stays unless asked.

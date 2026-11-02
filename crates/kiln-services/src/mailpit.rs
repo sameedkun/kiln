@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
 
 use crate::{InstanceDirs, Launch, PortRole, Release, ServiceProvider};
 
@@ -32,6 +31,7 @@ const RELEASES: &[Release] = &[
         url: "https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-windows-amd64.zip",
         sha256: "5d5ad094bfb3bac9004f9d1105d2335fea9f8952c09951df73ae0a280e34d3b1",
         executable: "mailpit.exe",
+        tree: None,
     },
     Release {
         version: "1.31.6",
@@ -41,6 +41,7 @@ const RELEASES: &[Release] = &[
         url: "https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-windows-arm64.zip",
         sha256: "c04c77ac9fd9da27c91259d0484b93b163e8534964682f543204cf3301a6b967",
         executable: "mailpit.exe",
+        tree: None,
     },
     Release {
         version: "1.31.6",
@@ -50,6 +51,7 @@ const RELEASES: &[Release] = &[
         url: "https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-linux-amd64.tar.gz",
         sha256: "10fa12ccc610f653d4ed4df848c1817f9935dcf4e9a6a458a19ab0fa02093f91",
         executable: "mailpit",
+        tree: None,
     },
     Release {
         version: "1.31.6",
@@ -59,6 +61,7 @@ const RELEASES: &[Release] = &[
         url: "https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-linux-arm64.tar.gz",
         sha256: "de07955b783236d9129da76da9a5970f1777834a18b2c07611de957be784dafe",
         executable: "mailpit",
+        tree: None,
     },
 ];
 
@@ -87,9 +90,10 @@ impl ServiceProvider for Mailpit {
         "kiln-mailpit"
     }
 
-    fn init_data(&self, dirs: &InstanceDirs) -> io::Result<()> {
+    fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
         // Mailpit creates its database on first start.
         fs::create_dir_all(&dirs.data)
+            .map_err(|e| format!("cannot create {}: {e}", dirs.data.display()))
     }
 
     fn launch(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Launch {
