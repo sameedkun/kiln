@@ -22,8 +22,24 @@ pub struct Manifest {
     pub php: Option<String>,
     /// A Node version (`22`, `22.11`, `22.11.0`), used by the Node shims.
     pub node: Option<String>,
+    /// The services the project uses ([ADR 0046]), in the file's order.
+    ///
+    /// [ADR 0046]: ../../../docs/adr/0046-project-services.md
+    pub services: Vec<ServiceWant>,
     /// What was ignored, such as unknown keys: shown, not fatal.
     pub warnings: Vec<String>,
+}
+
+/// One entry of `[services]`: `mysql = "8.4"`, `redis = "*"`, or
+/// `mysql = { version = "8.4", port = 3307 }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceWant {
+    /// The kind as written, e.g. `mysql` (the CLI knows which kinds exist).
+    pub kind: String,
+    /// A version such as `8.4`; `None` for `"*"`, any version.
+    pub version: Option<String>,
+    /// Its main port, if the project asks for one.
+    pub port: Option<u16>,
 }
 
 /// Reads `<project>/kiln.toml`: `Ok(None)` if there is none, `Err` with a message naming the
@@ -103,6 +119,7 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
                     }
                     manifest.node = Some(trimmed.to_owned());
                 }
+                ("services", kind) => manifest.services.push(service_want(kind, value, &at)?),
                 ("site" | "php" | "node", _) => {
                     manifest.warnings.push(format!("ignored unknown key {at}"));
                 }
@@ -124,6 +141,60 @@ fn string(value: &toml::Value, at: &str) -> Result<String, String> {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("{at} must be a non-empty string"))
+}
+
+/// A `[services]` entry: a version or `"*"`, or a table with `version` and `port`.
+fn service_want(kind: &str, value: &toml::Value, at: &str) -> Result<ServiceWant, String> {
+    let (version_value, port) = match value {
+        toml::Value::Table(table) => {
+            if let Some(key) = table
+                .keys()
+                .find(|k| !matches!(k.as_str(), "version" | "port"))
+            {
+                return Err(format!(
+                    "{at} has an unknown key `{key}`; it takes version and port"
+                ));
+            }
+            let port = match table.get("port") {
+                None => None,
+                Some(port) => Some(
+                    port.as_integer()
+                        .and_then(|p| u16::try_from(p).ok())
+                        .filter(|p| *p >= 1024)
+                        .ok_or_else(|| format!("{at} port must be a number from 1024 to 65535"))?,
+                ),
+            };
+            (table.get("version"), port)
+        }
+        other => (Some(other), None),
+    };
+    let version = match version_value {
+        None => None,
+        Some(value) => {
+            let text = version(value, at)?;
+            if text == "*" {
+                None
+            } else if is_version(&text, 1..=3) {
+                Some(text)
+            } else {
+                return Err(format!(
+                    "{at} must be a version like \"8.4\", or \"*\" for any, not {text:?}"
+                ));
+            }
+        }
+    };
+    if kind.is_empty()
+        || !kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    {
+        return Err(format!("{at}: a service is named in lowercase, like mysql"));
+    }
+    Ok(ServiceWant {
+        kind: kind.to_owned(),
+        version,
+        port,
+    })
 }
 
 /// A version must be a string: TOML reads `8.10` as the number 8.1.
@@ -178,6 +249,20 @@ pub fn render(manifest: &Manifest, comment: &str) -> String {
     if let Some(node) = &manifest.node {
         let _ = write!(out, "\n[node]\nversion = {}\n", quoted(node));
     }
+    if !manifest.services.is_empty() {
+        out.push_str("\n[services]\n");
+        for want in &manifest.services {
+            let version = quoted(want.version.as_deref().unwrap_or("*"));
+            let _ = match want.port {
+                Some(port) => writeln!(
+                    out,
+                    "{} = {{ version = {version}, port = {port} }}",
+                    want.kind
+                ),
+                None => writeln!(out, "{} = {version}", want.kind),
+            };
+        }
+    }
     out
 }
 
@@ -196,6 +281,11 @@ version = "8.3"
 
 [node]
 version = "v22"
+
+[services]
+mysql = "8.4"
+redis = "*"
+mailpit = { version = "1", port = 2025 }
 "#;
 
     #[test]
@@ -206,15 +296,40 @@ version = "v22"
         assert_eq!(m.aliases, ["admin", "api.test"]);
         assert_eq!(m.php.as_deref(), Some("8.3"));
         assert_eq!(m.node.as_deref(), Some("22"), "a leading v is dropped");
+        assert_eq!(
+            m.services,
+            [
+                ServiceWant {
+                    kind: "mysql".into(),
+                    version: Some("8.4".into()),
+                    port: None
+                },
+                ServiceWant {
+                    kind: "redis".into(),
+                    version: None,
+                    port: None
+                },
+                ServiceWant {
+                    kind: "mailpit".into(),
+                    version: Some("1".into()),
+                    port: Some(2025)
+                },
+            ]
+        );
         assert_eq!(m.warnings, Vec::<String>::new());
         assert_eq!(parse("").unwrap(), Manifest::default());
     }
 
     #[test]
     fn unknown_keys_warn_and_bad_values_fail_with_the_key_named() {
-        let m = parse("[php]\nversion = \"8.4\"\nini = 1\n[services]\nmysql = true\n").unwrap();
+        let m = parse("[php]\nversion = \"8.4\"\nini = 1\n[cache]\nx = 1\n").unwrap();
         assert_eq!(m.php.as_deref(), Some("8.4"));
         assert_eq!(m.warnings.len(), 2, "{:?}", m.warnings);
+        assert!(
+            parse("[services]\nmysql = true\n")
+                .unwrap_err()
+                .contains("[services] mysql")
+        );
         let unquoted = parse("[php]\nversion = 8.10\n").unwrap_err();
         assert!(
             unquoted.contains("[php] version must be quoted"),
@@ -232,6 +347,45 @@ version = "v22"
         );
         assert!(parse("[site]\naliases = \"admin\"\n").is_err());
         assert!(parse("[site\n").is_err(), "not TOML");
+    }
+
+    #[test]
+    fn bad_service_entries_name_the_problem() {
+        for (text, says) in [
+            (
+                "[services]
+mysql = 8.4
+",
+                "must be quoted",
+            ),
+            (
+                "[services]
+mysql = \"latest\"
+",
+                "like \"8.4\"",
+            ),
+            (
+                "[services]
+mysql = { version = \"8.4\", port = 80 }
+",
+                "1024 to 65535",
+            ),
+            (
+                "[services]
+mysql = { tag = \"x\" }
+",
+                "unknown key `tag`",
+            ),
+            (
+                "[services]
+MySQL = \"*\"
+",
+                "lowercase",
+            ),
+        ] {
+            let err = parse(text).unwrap_err();
+            assert!(err.contains(says), "{text:?}: {err}");
+        }
     }
 
     #[test]

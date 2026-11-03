@@ -542,13 +542,13 @@ pub(crate) fn download(release: &kiln_services::Release) -> Result<std::path::Pa
         .map_err(|e| e.to_string())
 }
 
-/// `kiln service add <kind> [--version] [--name] [--port role=N]`.
+/// `kiln service add <kind> [--version] [--name] [--port role=N]`. Returns the instance's name.
 pub fn add(
     kind: &str,
     version: Option<&str>,
     name: Option<&str>,
     ports: &[String],
-) -> Result<(), String> {
+) -> Result<String, String> {
     let provider = provider_of(kind)?;
     let release = release_of(provider, version)?;
     let series = provider.series(release.version);
@@ -623,7 +623,7 @@ pub fn add(
     if let Err(e) = attach_ui(provider, &record) {
         println!("Note: its web UI wasn't served as a site: {e}");
     }
-    Ok(())
+    Ok(name)
 }
 
 /// Whether the instance runs: its main port answers, and Kiln's own program holds it. Another

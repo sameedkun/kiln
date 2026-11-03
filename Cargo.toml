@@ -65,7 +65,7 @@ lzma-rust2 = { version = "=0.21.0", default-features = false, features = ["std",
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 futures-core = { version = "0.3", default-features = false }
 # Project config (ADR 0027): `kiln.toml` parsed to a table, read field by field.
-toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std", "preserve_order"] }
 # `kiln import herd` (ADR 0027 §5): reading a user's herd.yml. Pure Rust.
 yaml-rust2 = { version = "0.13", default-features = false }
 # Node release signatures (ADR 0028 §2): the armored keys, and RSA / Ed25519 checks. Both are

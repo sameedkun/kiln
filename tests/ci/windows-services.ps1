@@ -471,6 +471,38 @@ Check 'kiln undo puts the .env back byte for byte' {
     if ((EnvHash) -ne $script:beforeRedis) { throw 'the .env differs from before the wiring' }
 }
 Check 'kiln history lists the wiring that is still in effect' { Expect 'DB_CONNECTION' (Kiln history) }
+Say '== Project services: kiln.toml [services] and herd.yml (ADR 0046)'
+Check 'kiln import herd maps herd.yml''s services into kiln.toml' {
+    Set-Content (Join-Path $shop 'herd.yml') -Encoding ascii -Value @'
+services:
+    mysql:
+        version: 8.0.36
+        port: '${DB_PORT}'
+    redis:
+        version: 7.0.0
+    minio:
+        version: '2024'
+    mariadb:
+        version: 12.3
+'@
+    $out = Kiln import herd $shop
+    Expect 'services: mysql 8.0, redis 7.0, rustfs 2024, mariadb 12.3' $out
+    Expect 'minio became rustfs' $out
+    Expect '[services]' (Get-Content (Join-Path $shop 'kiln.toml') -Raw)
+}
+Check 'kiln services up in the project: reuses, adds, starts and wires what kiln.toml lists' {
+    $out = Kiln services up --project $shop --yes
+    Expect 'Kiln has no MySQL 8.0; using 8.4.13' $out
+    Expect 'mysql: using mysql-8.4' $out
+    Expect 'redis: using redis-8.10' $out
+    Expect 'rustfs: using rustfs-1' $out
+    Expect 'running as mariadb-12.3' $out
+    Expect 'mariadb-12.3 is a second database' $out
+    $text = Get-Content $envFile -Raw
+    foreach ($line in 'DB_CONNECTION=mysql', "REDIS_PORT=$($script:redisPort)", "AWS_ENDPOINT=http://127.0.0.1:$($script:s3)") {
+        if ($text -notmatch "(?m)^$([regex]::Escape($line))\r?$") { throw "$line isn't in the .env" }
+    }
+}
 
 Check 'servers.json follows the services: instances added after the tools are listed' {
     $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json

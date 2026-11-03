@@ -23,6 +23,7 @@ mod pool;
 mod project;
 mod proxy;
 mod service;
+mod services_up;
 mod tool;
 mod uninstall;
 mod web;
@@ -319,8 +320,16 @@ enum ServiceAction {
 
 #[derive(Debug, Subcommand)]
 enum ServicesAction {
-    /// Start every service.
-    Up,
+    /// In a project whose kiln.toml has [services]: find or add each one, start it and point
+    /// the .env at it (showing the change first). Elsewhere: start every service.
+    Up {
+        /// The project folder (default: the current one).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Do not ask before changing the .env.
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Stop every service. Their data stays.
     Down,
 }
@@ -817,7 +826,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
             version,
             name,
             ports,
-        } => service::add(&kind, version.as_deref(), name.as_deref(), &ports),
+        } => service::add(&kind, version.as_deref(), name.as_deref(), &ports).map(|_| ()),
         ServiceAction::List => service::list(),
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),
@@ -847,7 +856,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Env { action } => run_env(action),
         Command::Tool { action } => run_tool(action),
         Command::Services { action } => match action {
-            ServicesAction::Up => service::start(&[]),
+            ServicesAction::Up { project, yes } => services_up::up(project, yes),
             ServicesAction::Down => service::stop(&[]),
         },
         Command::State {

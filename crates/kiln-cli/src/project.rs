@@ -52,6 +52,17 @@ pub fn import_herd(folder: Option<PathBuf>, force: bool) -> Result<(), String> {
     if !m.aliases.is_empty() {
         println!("  aliases: {}", m.aliases.join(", "));
     }
+    if !m.services.is_empty() {
+        let list: Vec<String> = m
+            .services
+            .iter()
+            .map(|s| format!("{} {}", s.kind, s.version.as_deref().unwrap_or("*")))
+            .collect();
+        println!(
+            "  services: {} (`kiln services up` starts them)",
+            list.join(", ")
+        );
+    }
     for note in &imported.notes {
         println!("Note: {note}");
     }

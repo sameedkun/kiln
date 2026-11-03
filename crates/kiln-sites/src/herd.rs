@@ -5,7 +5,7 @@
 
 use yaml_rust2::{Yaml, YamlLoader};
 
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, ServiceWant};
 
 /// The file's name in a project folder.
 pub const FILE: &str = "herd.yml";
@@ -17,8 +17,8 @@ pub struct Imported {
     pub notes: Vec<String>,
 }
 
-/// Reads a `herd.yml`: `name`, `php`, `secured` and `aliases` carry over; `services` and
-/// `workspaces` are named in the notes.
+/// Reads a `herd.yml`: `name`, `php`, `secured`, `aliases` and `services` carry over
+/// (services as Kiln's kinds); anything else, such as `workspaces`, is named in the notes.
 pub fn parse(text: &str) -> Result<Imported, String> {
     let docs = YamlLoader::load_from_str(text).map_err(|e| e.to_string())?;
     let mut imported = Imported::default();
@@ -57,22 +57,17 @@ pub fn parse(text: &str) -> Result<Imported, String> {
                     .collect::<Result<_, _>>()?;
             }
             "services" => {
-                let names: Vec<String> = value
-                    .as_hash()
-                    .map(|h| {
-                        h.keys()
-                            .filter_map(|k| k.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                imported.notes.push(format!(
-                    "services ({}) aren't imported: Kiln adds services in a later version",
-                    if names.is_empty() {
-                        "none listed".into()
-                    } else {
-                        names.join(", ")
+                let Yaml::Hash(services) = value else {
+                    return Err("`services:` must list services by name".into());
+                };
+                for (name, settings) in services {
+                    let Some(name) = name.as_str() else {
+                        continue;
+                    };
+                    if let Some(want) = service(name, &settings, &mut imported.notes) {
+                        imported.manifest.services.push(want);
                     }
-                ));
+                }
             }
             "workspaces" => imported
                 .notes
@@ -83,6 +78,81 @@ pub fn parse(text: &str) -> Result<Imported, String> {
         }
     }
     Ok(imported)
+}
+
+/// Herd's service names as Kiln's kinds ([ADR 0046] §3). MinIO publishes source only now,
+/// so its place goes to RustFS, the S3-compatible store Kiln runs.
+///
+/// [ADR 0046]: ../../../docs/adr/0046-project-services.md
+fn kind_of(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "mysql" => "mysql",
+        "mariadb" => "mariadb",
+        "postgresql" | "postgres" | "pgsql" => "postgres",
+        "redis" => "redis",
+        "meilisearch" => "meilisearch",
+        "minio" | "rustfs" => "rustfs",
+        "mongodb" => "mongodb",
+        "mailpit" => "mailpit",
+        _ => return None,
+    })
+}
+
+/// One `services:` entry as a [`ServiceWant`], noting what changed or was left out.
+fn service(name: &str, settings: &Yaml, notes: &mut Vec<String>) -> Option<ServiceWant> {
+    let Some(kind) = kind_of(name) else {
+        notes.push(if name == "reverb" {
+            "service reverb isn't imported: Kiln runs Reverb per project in a later version".into()
+        } else {
+            format!("service {name} isn't imported: Kiln has no {name}")
+        });
+        return None;
+    };
+    if name == "minio" {
+        notes.push(
+            "service minio became rustfs: MinIO is source-only now, and RustFS is S3-compatible"
+                .into(),
+        );
+    }
+    // Herd pins a full release (8.0.36); Kiln keeps the line it names (8.0).
+    let version = settings["version"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| match &settings["version"] {
+            Yaml::Real(r) => Some(r.clone()),
+            Yaml::Integer(i) => Some(i.to_string()),
+            _ => None,
+        })
+        .map(|v| {
+            v.trim()
+                .splitn(3, '.')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .filter(|v| {
+            !v.is_empty()
+                && v.split('.')
+                    .all(|n| n.bytes().all(|b| b.is_ascii_digit()) && !n.is_empty())
+        });
+    let port = match &settings["port"] {
+        Yaml::Integer(p) => u16::try_from(*p).ok().filter(|p| *p >= 1024),
+        Yaml::String(s) => {
+            let fixed = s.trim().parse::<u16>().ok().filter(|p| *p >= 1024);
+            if fixed.is_none() {
+                notes.push(format!(
+                    "service {name}: port {s} isn't kept; Kiln picks a free port and `kiln env use` writes it to .env"
+                ));
+            }
+            fixed
+        }
+        _ => None,
+    };
+    Some(ServiceWant {
+        kind: kind.to_owned(),
+        version,
+        port,
+    })
 }
 
 /// A string, number or boolean as text (YAML often leaves strings unquoted).
@@ -116,8 +186,60 @@ mod tests {
         assert_eq!(m.php.as_deref(), Some("8.3"));
         assert_eq!(m.secure, Some(true));
         assert_eq!(m.aliases, ["my-project-alias"]);
+        assert_eq!(
+            m.services,
+            [ServiceWant {
+                kind: "mysql".into(),
+                version: Some("8.0".into()),
+                port: None
+            }]
+        );
         assert_eq!(imported.notes.len(), 2, "{:?}", imported.notes);
-        assert!(imported.notes[0].contains("mysql"));
+        assert!(
+            imported.notes[0].contains("isn't kept"),
+            "the DB_PORT placeholder"
+        );
+        assert!(imported.notes[1].contains("workspaces"));
+    }
+
+    #[test]
+    fn herds_services_become_kilns_kinds() {
+        let imported = parse(
+            "services:
+  postgresql:
+    version: 17.2
+  minio:
+    version: '2024'
+  redis:
+    port: 6390
+  reverb:
+    version: 1
+  typesense:
+    version: 27
+",
+        )
+        .unwrap();
+        let kinds: Vec<_> = imported
+            .manifest
+            .services
+            .iter()
+            .map(|s| (s.kind.as_str(), s.version.as_deref(), s.port))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("postgres", Some("17.2"), None),
+                ("rustfs", Some("2024"), None),
+                ("redis", None, Some(6390)),
+            ]
+        );
+        let notes = imported.notes.join(
+            "
+",
+        );
+        assert!(notes.contains("minio became rustfs"), "{notes}");
+        assert!(notes.contains("reverb"), "{notes}");
+        assert!(notes.contains("Kiln has no typesense"), "{notes}");
     }
 
     #[test]
