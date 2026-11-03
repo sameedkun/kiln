@@ -61,6 +61,7 @@ working name). Start here.
 | [0043](adr/0043-phpmyadmin-and-adminer.md) | phpMyAdmin 5.2.3 and Adminer 6.2.0 served as `pma.test` and `adminer.test` (`kiln tool add`), listing Kiln's instances from a `servers.json` the CLI rewrites after every service change, logged in without a password; tool sites aren't projects for uninstall | accepted (Phase 3) |
 | [0044](adr/0044-service-web-uis.md) | A service's web UI served as a proxy site: Mailpit's inbox at `mailpit.test` (renamed from `mail.test`), following its instance's port and going with it, over HTTPS once Kiln's CA is set up; never takes over an existing name; `MAIL_*` moves to P3-08 | accepted (Phase 3) |
 | [0045](adr/0045-env-wiring.md) | `.env` wiring: `kiln env use <instance>` sets the provider's keys (DB, Redis with `predis`, Mail, Meilisearch, S3, MongoDB) as a journaled key-level edit with preview and byte-exact undo; makes the project's database; `kiln new --db`; uninstall leaves projects' `.env` | accepted (Phase 3) |
+| [0046](adr/0046-project-services.md) | Project services: `[services]` in `kiln.toml`; `kiln services up` in a project reuses or adds each one, starts it and wires the `.env` (first database only), falling back to the major line, then the newest release, with a note; `kiln import herd` maps `herd.yml` services | accepted (Phase 3) |
 
 ## Conventions
 

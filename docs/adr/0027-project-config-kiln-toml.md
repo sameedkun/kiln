@@ -1,6 +1,6 @@
 # 0027. Project config: `kiln.toml`, read live; `herd.yml` import
 
-- **Status:** accepted
+- **Status:** accepted; finished by [ADR 0046](0046-project-services.md): `[services]`, and `herd.yml` services imported
 - **Date:** 2026-10-28
 - **Task:** P2-04 · Builds on [ADR 0015](0015-parked-folders-and-drivers.md), [0016](0016-per-site-php-and-shims.md); recon: feature-parity row "project manifest"
 
