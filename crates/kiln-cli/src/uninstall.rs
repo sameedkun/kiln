@@ -173,7 +173,13 @@ fn build_plan() -> Result<Plan, String> {
         .iter()
         .map(|(dir, size)| (canonical(dir), *size))
         .collect();
-    let canonical_projects: Vec<PathBuf> = projects.iter().map(|p| canonical(p)).collect();
+    // The web tools' sites are Kiln's own files, not projects (ADR 0043).
+    let tools = crate::tool::tools_dir().ok().map(|dir| canonical(&dir));
+    let canonical_projects: Vec<PathBuf> = projects
+        .iter()
+        .map(|p| canonical(p))
+        .filter(|p| tools.as_ref().is_none_or(|tools| !p.starts_with(tools)))
+        .collect();
     plan.folders = check_folders(&canonical_candidates, &canonical_projects);
     plan.key_in_keyring = crate::apply::ca_store()
         .ok()

@@ -215,7 +215,9 @@ Check 'Adminer lists Kiln''s instances and logs in to PostgreSQL without a passw
     if ($page -notmatch 'kiln_ci') {
         $heading = [regex]::Match($page, '<h2>(.*?)</h2>').Groups[1].Value
         $error = [regex]::Match($page, "class='error'>(.*?)</div>").Groups[1].Value
-        throw "no kiln_ci; heading: $heading; error: $error; title: $([regex]::Match($page, '<title>(.*?)</title>').Groups[1].Value)"
+        $trace = Page $script:adminer @('-i', '--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=')
+        $hops = ($trace -split "`n" | Where-Object { $_ -match '^(HTTP/|Location:|Set-Cookie:)' } | ForEach-Object { ($_ -replace '=[^;]*', '=').Trim() }) -join ' | '
+        throw "no kiln_ci; heading: $heading; error: $error; title: $([regex]::Match($page, '<title>(.*?)</title>').Groups[1].Value); hops: $hops"
     }
 }
 Say '== Redis (ADR 0041)'
