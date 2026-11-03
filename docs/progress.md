@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-03 · **Current phase:** **Phase 3 in progress** (9 of 16 tasks done; ADRs 0035–0043; Windows first, Linux on hold (ADR 0039); next: P3-07) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-03 · **Current phase:** **Phase 3 in progress** (10 of 16 tasks done; ADRs 0035–0044; Windows first, Linux on hold (ADR 0039); next: P3-08) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0043 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0044 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1489,8 +1489,8 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-04 | MySQL and MariaDB | **done** 2026-11-02 (Windows) | [ADR 0038](adr/0038-mysql-and-mariadb.md); see below. VM-checked on Windows; Linux built and unit-tested, its VM run stopped (Linux on hold) |
 | P3-05 | PostgreSQL on Windows (EDB) | **done** | ADR 0040; 18.6 and 17.11; services run without admin rights; CI scenario 24 checks |
 | P3-06 | Redis on Windows | **done** | ADR 0041; redis-windows MSYS2 builds, 8.10.3 and 8.8.3; CI scenario 31 checks |
-| P3-07 | Mailpit's UI at `mail.test`, `MAIL_*` wiring | next | the provider came with P3-01 |
-| P3-08 | `.env` wiring with byte-exact undo | planned | ADR 0035 §9 |
+| P3-07 | Mailpit's UI at `mailpit.test` | **done** | ADR 0044; `MAIL_*` moved to P3-08; CI scenario 54 checks |
+| P3-08 | `.env` wiring (`DB_*`, `REDIS_*`, `MAIL_*`) with byte-exact undo | next | ADR 0035 §9 |
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | planned | |
 | P3-10 | `kilnd` and services | planned | |
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
@@ -1787,6 +1787,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-02 | **P3-06 done:** Redis on Windows ([ADR 0041](adr/0041-redis.md)). `zkteco-home/redis-windows` was rejected: its binaries are committed with no source for the Windows port and no build workflow, and are labelled MIT though Redis 8 is RSALv2/SSPLv1/AGPLv3. Kiln uses `redis-windows/redis-windows`' MSYS2 builds instead: upstream tags built by a public workflow, digests matching GitHub's. Redis 8.10.3 and 8.8.3, downloaded at the user's request and not redistributed; relative paths in a Kiln-written config ([I-80](issues.md#i-80)); `redis-cli shutdown` saves; `kiln db redis-8.10 [n]`. The supervisor now opens program logs for writing at the end, not append-only, which MSYS2 programs couldn't write through ([I-79](issues.md#i-79)). CI checks databases 0 and 1, a Lua script in database 1 (Garnet's I-75 case), data across a restart and a clean shutdown: 31 checks, green. Laravel's own cache, session and queue checks move to P3-08 with `.env` wiring. Next: P3-14 (Meilisearch, RustFS, MongoDB). |
 | 2026-11-02 | **P3-14 done:** Meilisearch, RustFS and MongoDB on Windows ([ADR 0042](adr/0042-meilisearch-rustfs-mongodb.md)). Meilisearch 1.56.1 (Community Edition, development mode, no analytics); RustFS 1.0.4 (both addresses pinned to 127.0.0.1, as its defaults listen everywhere; relative volume, as it splits paths at spaces; credentials `rustfsadmin`); MongoDB 9.0.4 and 8.0.34 (SSPL, from MongoDB at the user's request; debug symbols, mongos and installers left out; 256 MB WiredTiger cache). Providers gain companion archives: MongoDB brings `mongosh` for its clean shutdown (`mongod --shutdown` is Linux-only) and `kiln db`, kept inside the instance folder and with telemetry and update checks off. Single-file installs now stream to disk, and downloads may be up to 2 GB ([I-81](issues.md#i-81)). CI round trips: Meilisearch index and search, S3 bucket and object over signed requests, MongoDB through `kiln db` and a clean shutdown: 45 checks, green. Windows now has Herd Pro's services except Reverb (P3-16). Next: P3-15 (phpMyAdmin and Adminer). |
 | 2026-11-03 | **P3-15 done:** phpMyAdmin and Adminer as Kiln sites ([ADR 0043](adr/0043-phpmyadmin-and-adminer.md)). `kiln tool add phpmyadmin|adminer` downloads phpMyAdmin 5.2.3 (its published SHA-256) or Adminer 6.2.0 (GitHub's digest) into `<local data>/tools`, writes Kiln's config beside it and links it as `pma.test` or `adminer.test`; `kiln tool remove` undoes it. Both read `tools/servers.json`, which the CLI rewrites after every service change, so they always list the current instances: phpMyAdmin logs in to each MySQL and MariaDB instance as root, and a small Adminer plugin offers MySQL, MariaDB and PostgreSQL instances by name and logs in without a password (Adminer's CSRF token stays). No PHP pin: CI runs both on PHP 8.5 and fails on any warning or deprecation. Fixed on the way: a failed `servers.json` write blocked service commands ([I-82](issues.md#i-82)); uninstall kept Kiln's folder because a tool's site looked like a project ([I-83](issues.md#i-83)). CI: 52 checks, green. Next: P3-07 (Mailpit at `mail.test`, `MAIL_*` wiring). |
+| 2026-11-03 | **P3-07 done:** Mailpit's inbox at `mailpit.test` ([ADR 0044](adr/0044-service-web-uis.md)), the full name instead of the planned `mail.test`, at the user's request. Providers can name a web UI (a site and a port role); `kiln service add` serves it as a proxy site, over HTTPS once Kiln's CA is set up, and never takes over an existing name (a second Mailpit is told how to proxy it by hand). The site follows `kiln service port` and goes with `kiln service remove`; a proxy the user pointed elsewhere is left alone. `MAIL_*` wiring moves to P3-08 with the other `.env` keys. CI: the inbox and its API through Kiln's web server, and again after a port change: 54 checks, green. Next: P3-08 (`.env` wiring). |
 
 ## How to update this file
 

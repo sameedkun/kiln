@@ -140,7 +140,7 @@ macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
   - **Redis:** Laravel's cache, sessions and queue work against it.
   - **Meilisearch, RustFS and MongoDB** run and answer their clients.
   - **phpMyAdmin and Adminer** open on Kiln's databases.
-  - **Mail** sent by the app is caught by Mailpit, whose UI is at `https://mail.test`.
+  - **Mail** sent by the app is caught by Mailpit, whose UI is at `https://mailpit.test`.
   - **Laravel Reverb** runs for a project.
 - **Next to other tools.** Herd, XAMPP or a Windows MySQL/PostgreSQL service keep their
   ports, processes and data. Kiln takes the next free port and says why.
@@ -169,8 +169,8 @@ macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
 | P3-06 | Redis on Windows: choose between `zkteco-home/redis-windows` (downloaded at the user's request, its terms shown) and Valkey built by Kiln; Laravel's cache, sessions and queue checked as in spike 03 | P3-01 | **Done** 2026-11-02, [ADR 0041](adr/0041-redis.md): Redis 8.10.3 and 8.8.3 from `redis-windows/redis-windows`' MSYS2 builds (zkteco rejected: no source, wrong license); databases, Lua in database 1, restart and clean shutdown checked in CI. Laravel's own cache, session and queue checks (spike 03's 22) move to P3-08, with `.env` wiring |
 | P3-14 | Meilisearch, RustFS and MongoDB: official Windows releases, one provider each, one ADR | P3-01 | **Done** 2026-11-02, [ADR 0042](adr/0042-meilisearch-rustfs-mongodb.md): Meilisearch 1.56.1, RustFS 1.0.4, MongoDB 9.0.4 and 8.0.34 (SSPL, from MongoDB at the user's request) with `mongosh` as a companion for its clean shutdown and `kiln db`; CI checks a round trip for each |
 | P3-15 | phpMyAdmin and Adminer: pinned releases served as Kiln sites (`pma.test`, `adminer.test`), pointed at Kiln's instances | P3-04 | **Done** 2026-11-03, [ADR 0043](adr/0043-phpmyadmin-and-adminer.md): `kiln tool add phpmyadmin|adminer` serves phpMyAdmin 5.2.3 and Adminer 6.2.0 as `pma.test` and `adminer.test`, listing Kiln's instances from `servers.json`, logged in without a password; CI checks both on PHP 8.5 |
-| P3-07 | Mailpit's UI served as `https://mail.test` through a proxy site, and the `MAIL_*` wiring | P3-01, P3-08 | [ADR 0032](adr/0032-proxy-sites.md) |
-| P3-08 | `.env` wiring: `kiln env use <instance>`, a journaled key-level operation with preview and byte-exact undo; creates the project's database; `kiln new --db` | P3-04 | ADR 0035 §9 |
+| P3-07 | Mailpit's UI served as `mailpit.test` through a proxy site that follows its instance | P3-01 | **Done** 2026-11-03, [ADR 0044](adr/0044-service-web-uis.md): providers name a web UI; the site follows port changes and goes with the instance; over HTTPS when Kiln's CA is set up. `MAIL_*` moved to P3-08 |
+| P3-08 | `.env` wiring (`DB_*`, `REDIS_*`, `MAIL_*`): `kiln env use <instance>`, a journaled key-level operation with preview and byte-exact undo; creates the project's database; `kiln new --db` | P3-04 | ADR 0035 §9 |
 | P3-09 | Project config: `[services]` in `kiln.toml`, `kiln services up` in a project, `herd.yml` services in `kiln import herd` | P3-08 | Finishes [ADR 0027](adr/0027-project-config-kiln-toml.md) |
 | P3-16 | Laravel Reverb for a project: `php artisan reverb:start` run and kept up by Kiln, `REVERB_*` wiring | P3-08 | A per-project process, not a server binary |
 | P3-10 | `kilnd` and services: the watchdog restarts the services supervisor after a crash or reboot; `service.*` API methods | P3-01 | [ADR 0026](adr/0026-kilnd-daemon-and-local-api.md) |

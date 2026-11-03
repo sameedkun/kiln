@@ -17,7 +17,7 @@ every service shares, before any database:
 A framework with only fake providers can't be checked in the VMs. Mailpit is the simplest
 real service: one MIT-licensed executable for every platform, with no data folder to set
 up and no graceful-stop protocol. So it becomes the first provider here. P3-07 keeps its UI
-site (`mail.test`) and the `MAIL_*` wiring.
+site (`mailpit.test`, [ADR 0044](0044-service-web-uis.md)) and the `MAIL_*` wiring.
 
 ## Decision
 

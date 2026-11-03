@@ -74,8 +74,9 @@ Five things make services harder than PHP:
 4. **Loopback only** (plan principle 3).
    - Every service listens on `127.0.0.1`, and on `::1` where it can, set in the config file
      Kiln writes. There is no option to listen more widely in Phase 3.
-   - Mailpit's web UI is also served as a Kiln HTTPS site (`mail.test`) through a proxy
-     ([ADR 0032](0032-proxy-sites.md)).
+   - Mailpit's web UI is also served as a Kiln HTTPS site through a proxy
+     ([ADR 0032](0032-proxy-sites.md)): `mailpit.test`, renamed from `mail.test` by
+     [ADR 0044](0044-service-web-uis.md).
 5. **Ports.**
    - Each kind has its usual port: 3306, 5432, 6379, and 1025 and 8025 for Mailpit.
    - If another program holds it, Kiln takes the next free port in that kind's range, says
