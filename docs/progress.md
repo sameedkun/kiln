@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-03 · **Current phase:** **Phase 3 in progress** (12 of 16 tasks done; ADRs 0035–0046; Windows first, Linux on hold (ADR 0039); next: P3-16) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-03 · **Current phase:** **Phase 3 in progress** (13 of 16 tasks done; ADRs 0035–0047; Windows first, Linux on hold (ADR 0039); next: P3-10) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0046 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0047 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1492,13 +1492,13 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-07 | Mailpit's UI at `mailpit.test` | **done** | ADR 0044; `MAIL_*` moved to P3-08; CI scenario 54 checks |
 | P3-08 | `.env` wiring (`DB_*`, `REDIS_*`, `MAIL_*`) with byte-exact undo | **done** | ADR 0035 §9 |
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | **done** | ADR 0046; CI scenario 65 checks |
-| P3-10 | `kilnd` and services | planned | |
+| P3-10 | `kilnd` and services | next | |
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | planned | ADR 0035 §7 |
 | P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | planned | ADR 0039 |
 | P3-13 | Windows scenario on GitHub Actions | **done** | ADR 0039 §3; `scenario.yml`, `tests/ci/windows-services.ps1`; 17 checks + before/after, green in about 5 minutes |
 | P3-14 | Meilisearch, RustFS, MongoDB | **done** | ADR 0042; mongosh as a companion; CI scenario 45 checks |
 | P3-15 | phpMyAdmin and Adminer as Kiln sites | **done** | ADR 0043; `kiln tool add`; CI scenario 52 checks |
-| P3-16 | Laravel Reverb per project | next | |
+| P3-16 | Laravel Reverb per project | **done** | ADR 0047; CI scenario 71 checks |
 
 ### P3-01 delivered (2026-10-31)
 
@@ -1790,6 +1790,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-03 | **P3-07 done:** Mailpit's inbox at `mailpit.test` ([ADR 0044](adr/0044-service-web-uis.md)), the full name instead of the planned `mail.test`, at the user's request. Providers can name a web UI (a site and a port role); `kiln service add` serves it as a proxy site, over HTTPS once Kiln's CA is set up, and never takes over an existing name (a second Mailpit is told how to proxy it by hand). The site follows `kiln service port` and goes with `kiln service remove`; a proxy the user pointed elsewhere is left alone. `MAIL_*` wiring moves to P3-08 with the other `.env` keys. CI: the inbox and its API through Kiln's web server, and again after a port change: 54 checks, green. Next: P3-08 (`.env` wiring). |
 | 2026-11-03 | **P3-08 done:** `.env` wiring ([ADR 0045](adr/0045-env-wiring.md)). `kiln env use <instance>` shows each key's old and new value, then sets the provider's keys as a journaled operation: databases (`mariadb` falls back to `mysql` for Laravel 10 and earlier), Redis (with `REDIS_CLIENT=predis`, as Kiln's Windows PHP has no phpredis; `--cache`, `--session`, `--queue` choose it as Laravel's drivers), Mailpit, Meilisearch, RustFS (`AWS_*`) and MongoDB. Keys are edited where they are: in place, by uncommenting Laravel's `# DB_HOST=` examples, or after their group; line endings and every other byte stay. `kiln undo` writes the old bytes back if the file is untouched since, stops if it was edited, and with `--force` sets back only Kiln's keys. A database instance gets the project's database, made through its client. `kiln new --db mysql|mariadb|pgsql|<instance>` wires a new project and migrates it. Uninstall leaves projects' `.env` alone and lists them, since an edited `.env` would otherwise stop it (ADR 0018 amended). CI: `kiln new --db mysql-8.4`, spike 03's Laravel checks on Kiln's Redis with `failed_jobs` in MySQL, a mail into Mailpit, byte-exact undo, and the wiring kept by uninstall: 63 checks, green on the first run. Next: P3-09 (`[services]` in `kiln.toml`). |
 | 2026-11-03 | **P3-09 done:** project services ([ADR 0046](adr/0046-project-services.md)). `kiln.toml` gains `[services]` (`mysql = "8.4"`, `redis = "*"`, or `{ version, port }`, in the file's order; the `toml` crate's `preserve_order` is on). `kiln services up` in such a project resolves each release (asked, else its major line, else the newest, saying so), reuses an instance of that series or adds one, starts them and wires the `.env` with `kiln env use`, the first database only. Outside a project it starts every instance, as before. `kiln import herd` carries `herd.yml`'s services over as Kiln's kinds (`postgresql` → `postgres`, `minio` → `rustfs`), keeping each version's line and fixed ports, dropping `${…}` placeholders with a note; this finishes ADR 0027. CI imports a `herd.yml` in Herd's documented shape and brings it up: MySQL 8.0 → 8.4 reused, Redis 7.0 → the newest, MinIO → RustFS, MariaDB 12.3 added but not wired: 65 checks, green on the first run. Next: P3-16 (Reverb). |
+| 2026-11-03 | **P3-16 done:** Laravel Reverb ([ADR 0047](adr/0047-reverb.md)), the first service that runs in a project. Providers gain `runs_in_project()` (no releases) and `project_launch(project, php, ports)`; the contract tests check those on their own terms. State schema v8 adds the instance's project folder. `kiln service add reverb [--project]` names the instance after the site (`reverb-shop`), takes the version from `composer.lock`, and runs `php artisan reverb:start --host=127.0.0.1 --port=<port>` with the PHP Kiln picks for that folder, under the services supervisor (without admin rights, restarted on a crash, skipped with a note if the project can't run). `kiln env use reverb-shop` wires its own project: `BROADCAST_CONNECTION=reverb`, `REVERB_SERVER_*` and `REVERB_HOST/PORT/SCHEME` on 127.0.0.1, never the app's keys. `[services]` and `kiln import herd` take `reverb`. Found on the way: Reverb needs `composer require laravel/reverb -W` on Laravel 13 ([I-84](issues.md#i-84)). CI: a WebSocket handshake, a signed broadcast from Laravel, a restart: 71 checks, green. Next: P3-10 (`kilnd` and services). |
 
 ## How to update this file
 

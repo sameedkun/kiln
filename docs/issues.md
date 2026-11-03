@@ -93,6 +93,7 @@ commits and PRs.
 | [I-81](#i-81) | fetch | MongoDB's Windows archive (989 MB) was refused: downloads were capped at 512 MB | fixed (P3-14) |
 | [I-82](#i-82) | tools | A failure to write the web tools' `servers.json` made every service command fail | fixed (P3-15) |
 | [I-83](#i-83) | uninstall | Uninstall kept Kiln's whole local folder because the phpMyAdmin site inside it counted as a project | fixed (P3-15) |
+| [I-84](#i-84) | reverb | `composer require laravel/reverb` fails on a new Laravel 13 app: the app locks `guzzlehttp/psr7` 3.x, and Reverb 1.12 needs 2.x | worked around (P3-16): Kiln says to add `-W` |
 
 ---
 
@@ -1204,3 +1205,21 @@ commits and PRs.
   - `kiln web start` needs `kiln web install` first.
   - Adminer 6 checks a CSRF token on its login form, which a browser sends with the form;
     the test's POST now does too.
+
+## P3-16: Laravel Reverb
+
+### I-84: Reverb doesn't install on a new Laravel 13 app without `-W` (worked around)
+
+- **Seen:** in CI, `composer require laravel/reverb` in an app from `kiln new` stopped with
+  a dependency conflict, and Composer reverted `composer.json`.
+- **Why:** Laravel 13's skeleton locks `guzzlehttp/psr7` 3.x. Reverb 1.12 (the newest, from
+  2026-09-22) requires `^2.6`. Laravel and the Pusher client both accept 2.x, but Composer
+  doesn't change a locked package unless asked.
+- **Workaround:** `composer require laravel/reverb -W` (`--with-all-dependencies`) moves
+  psr7 back to 2.x and installs. Kiln's "install Reverb first" message says so, and CI does
+  it.
+- **To close:** when a Reverb release accepts psr7 3.x, drop `-W` from the message and from
+  CI.
+- **Also:** the CI check for a broadcast passed once without Reverb installed. It looked
+  for the word "broadcast", which the error message also contained. It now looks for a
+  marker only the successful script prints.
