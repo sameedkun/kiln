@@ -188,6 +188,8 @@ fn apply(store: &StateStore) -> Result<(), String> {
     if !wait_released(&gone, &stopping) {
         println!("Note: a service is taking long to stop; it may still be finishing.");
     }
+    // The web tools list the instances as they now are (ADR 0043).
+    crate::tool::write_servers(store)?;
     Ok(())
 }
 
@@ -500,12 +502,12 @@ fn install_binaries(
     }
     // After the server: installing it clears `bin`, companions included.
     for companion in provider.companions(release) {
-        let dir = kiln_services::companion_dir(bin, companion);
+        let dir = kiln_services::release_folder(bin, companion);
         if dir.join(companion.executable).is_file() {
             continue;
         }
         let archive = download(companion)?;
-        kiln_services::install_companion(companion, &archive, bin).map_err(|e| e.to_string())?;
+        kiln_services::install_into_folder(companion, &archive, bin).map_err(|e| e.to_string())?;
         println!(
             "Verified {} (SHA-256 matches the pinned release) and installed it with {}.",
             companion.archive,
@@ -516,7 +518,7 @@ fn install_binaries(
 }
 
 /// Downloads `release`'s archive (or takes it from the cache), checked against its pin.
-fn download(release: &kiln_services::Release) -> Result<std::path::PathBuf, String> {
+pub(crate) fn download(release: &kiln_services::Release) -> Result<std::path::PathBuf, String> {
     let expected = kiln_fetch::Expected::sha256(release.sha256).map_err(|e| e.to_string())?;
     let label = format!("Downloading {}", release.archive);
     crate::php::fetcher()?

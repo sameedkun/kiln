@@ -22,6 +22,7 @@ mod pool;
 mod project;
 mod proxy;
 mod service;
+mod tool;
 mod uninstall;
 mod web;
 
@@ -168,6 +169,12 @@ enum Command {
         /// A database to open.
         database: Option<String>,
     },
+    /// Database web tools served as sites: phpMyAdmin (pma.test) and Adminer (adminer.test),
+    /// pointed at Kiln's instances.
+    Tool {
+        #[command(subcommand)]
+        action: ToolAction,
+    },
     /// Start or stop all services at once.
     Services {
         #[command(subcommand)]
@@ -214,6 +221,14 @@ enum ImportFrom {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolAction {
+    /// Download (checked against Kiln's pinned SHA-256) and serve a tool: phpmyadmin or adminer.
+    Add { name: String },
+    /// Stop serving a tool and delete its files.
+    Remove { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -771,6 +786,10 @@ fn run(command: Command) -> Result<(), String> {
         Command::Uninstall { options } => uninstall::uninstall(options),
         Command::Service { action } => run_service(action),
         Command::Db { name, database } => service::db(&name, database.as_deref()),
+        Command::Tool { action } => match action {
+            ToolAction::Add { name } => tool::add(&name),
+            ToolAction::Remove { name } => tool::remove(&name),
+        },
         Command::Services { action } => match action {
             ServicesAction::Up => service::start(&[]),
             ServicesAction::Down => service::stop(&[]),

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     EXE_SUFFIX, InstanceDirs, Launch, PortRole, Release, STATUS_DLL_NOT_FOUND, ServiceProvider,
-    companion_dir, needs_vc_runtime, run, tail,
+    needs_vc_runtime, release_folder, run, tail,
 };
 
 pub struct Mongodb;
@@ -69,7 +69,7 @@ fn port_of(ports: &BTreeMap<String, u16>) -> u16 {
 }
 
 fn mongosh(bin: &Path) -> PathBuf {
-    companion_dir(bin, &MONGOSH[0]).join(MONGOSH[0].executable)
+    release_folder(bin, &MONGOSH[0]).join(MONGOSH[0].executable)
 }
 
 /// The shell keeps its history and logs under `%APPDATA%` and `%LOCALAPPDATA%`: pointed into
@@ -234,7 +234,7 @@ mod tests {
         assert!(launch.args.contains(&"--bind_ip=127.0.0.1".to_owned()));
         assert!(launch.args.contains(&"--port=27018".to_owned()));
         let stop = launch.stop_command.unwrap();
-        assert!(Path::new(&stop[0]).starts_with(companion_dir(&dirs().bin, &MONGOSH[0])));
+        assert!(Path::new(&stop[0]).starts_with(release_folder(&dirs().bin, &MONGOSH[0])));
         assert!(stop.contains(&"db.getSiblingDB('admin').shutdownServer()".to_owned()));
         assert!(launch.env["APPDATA"].starts_with(&*dirs().instance().to_string_lossy()));
     }

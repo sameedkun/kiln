@@ -697,6 +697,7 @@ name = "kiln-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "getrandom 0.4.3",
  "kiln-coexist",
  "kiln-core",
  "kiln-daemon",

@@ -127,45 +127,55 @@ pub fn install(
     Ok(dest)
 }
 
-/// Checks `archive` against `companion` and unpacks it into its folder in `bin`
-/// ([`crate::companion_dir`]), replacing what was there ([ADR 0042] §1). Returns its
-/// executable.
+/// Checks `archive` against `release` and puts it in its own folder under `parent`
+/// ([`crate::release_folder`]), replacing what was there: a companion's archive unpacked
+/// ([ADR 0042] §1), or a web tool's ([ADR 0043]). A download that is the file itself is
+/// copied in. Returns the path of `release.executable` in that folder.
 ///
 /// [ADR 0042]: ../../../docs/adr/0042-meilisearch-rustfs-mongodb.md
-pub fn install_companion(
-    companion: &Release,
+/// [ADR 0043]: ../../../docs/adr/0043-phpmyadmin-and-adminer.md
+pub fn install_into_folder(
+    release: &Release,
     archive: &Path,
-    bin: &Path,
+    parent: &Path,
 ) -> Result<PathBuf, InstallError> {
     let actual =
         sha256_of_file(archive).map_err(io_err(format!("cannot read {}", archive.display())))?;
-    if actual != companion.sha256 {
+    if actual != release.sha256 {
         return Err(InstallError::Unverified {
-            archive: companion.archive.to_owned(),
+            archive: release.archive.to_owned(),
             actual,
-            expected: companion.sha256.to_owned(),
+            expected: release.sha256.to_owned(),
         });
     }
-    let dest = crate::companion_dir(bin, companion);
+    let dest = crate::release_folder(parent, release);
     let _ = fs::remove_dir_all(&dest);
-    let top = companion.tree.unwrap_or_default();
-    let unpacked = unpack_tree(archive, companion.archive, top, &dest, &|_| true).and_then(|()| {
-        if dest.join(companion.executable).is_file() {
+    let placed = match release.tree {
+        Some(top) => unpack_tree(archive, release.archive, top, &dest, &|_| true),
+        None if release.archive == release.executable => fs::create_dir_all(&dest)
+            .and_then(|()| fs::copy(archive, dest.join(release.executable)))
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        None => Err("neither a folder nor the file itself".into()),
+    };
+    let checked = placed.and_then(|()| {
+        if dest.join(release.executable).is_file() {
             Ok(())
         } else {
             Err("not in the archive".into())
         }
     });
-    if let Err(detail) = unpacked {
+    if let Err(detail) = checked {
         let _ = fs::remove_dir_all(&dest);
         return Err(InstallError::BadArchive {
-            archive: companion.archive.to_owned(),
-            executable: companion.executable.to_owned(),
+            archive: release.archive.to_owned(),
+            executable: release.executable.to_owned(),
             detail,
         });
     }
-    Ok(dest.join(companion.executable))
+    Ok(dest.join(release.executable))
 }
+
 #[cfg(unix)]
 fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -441,7 +451,7 @@ mod tests {
             ..release("shell.zip", digest(&archive))
         };
         let bin = dir.path().join("bin");
-        let installed = install_companion(&companion, &archive, &bin).unwrap();
+        let installed = install_into_folder(&companion, &archive, &bin).unwrap();
         assert_eq!(installed, bin.join("shell-1").join("bin").join("shell.exe"));
         assert_eq!(fs::read(&installed).unwrap(), b"shell");
         assert!(bin.join("shell-1").join("LICENSE").is_file());
@@ -451,15 +461,30 @@ mod tests {
             ..companion
         };
         assert!(matches!(
-            install_companion(&wrong, &archive, &bin),
+            install_into_folder(&wrong, &archive, &bin),
             Err(InstallError::Unverified { .. })
         ));
         let missing = Release {
             executable: "bin/other.exe",
             ..companion
         };
-        assert!(install_companion(&missing, &archive, &bin).is_err());
+        assert!(install_into_folder(&missing, &archive, &bin).is_err());
         assert!(!bin.join("shell-1").exists(), "a failed unpack is removed");
+    }
+
+    #[test]
+    fn a_single_file_goes_into_a_folder_named_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("tool-1.0.php");
+        fs::write(&archive, b"<?php").unwrap();
+        let tool = Release {
+            executable: "tool-1.0.php",
+            ..release("tool-1.0.php", digest(&archive))
+        };
+        let parent = dir.path().join("tools");
+        let installed = install_into_folder(&tool, &archive, &parent).unwrap();
+        assert_eq!(installed, parent.join("tool-1.0").join("tool-1.0.php"));
+        assert_eq!(fs::read(installed).unwrap(), b"<?php");
     }
 
     #[test]

@@ -17,8 +17,9 @@ mod mysql;
 mod postgres;
 mod redis;
 mod rustfs;
+pub mod tools;
 
-pub use install::{InstallError, install, install_companion};
+pub use install::{InstallError, install, install_into_folder};
 
 /// `.exe` on Windows, nothing elsewhere.
 pub const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
@@ -141,11 +142,18 @@ impl InstanceDirs {
     }
 }
 
-/// Where `companion` is unpacked in a version's `bin`: a folder named after its archive's top
-/// folder (e.g. `mongosh-2.14.1-win32-x64`).
+/// The folder a release is unpacked into under `parent` ([`install_into_folder`]): its
+/// archive's top folder (`mongosh-2.14.1-win32-x64`), or for a download that is the file
+/// itself, its name without the extension (`adminer-6.2.0`).
 #[must_use]
-pub fn companion_dir(bin: &Path, companion: &Release) -> PathBuf {
-    bin.join(companion.tree.unwrap_or(companion.archive))
+pub fn release_folder(parent: &Path, release: &Release) -> PathBuf {
+    let name = release.tree.unwrap_or_else(|| {
+        release
+            .archive
+            .rsplit_once('.')
+            .map_or(release.archive, |(stem, _)| stem)
+    });
+    parent.join(name)
 }
 
 /// `<services>/bin/<kind>/<version>`.
@@ -247,7 +255,7 @@ pub trait ServiceProvider: Sync {
     }
 
     /// Other archives `release` needs, each unpacked into its own folder in `bin`
-    /// ([`companion_dir`]): a server's shell, for its clean shutdown and `kiln db` ([ADR 0042]
+    /// ([`release_folder`]): a server's shell, for its clean shutdown and `kiln db` ([ADR 0042]
     /// §1). None by default.
     ///
     /// [ADR 0042]: ../../../docs/adr/0042-meilisearch-rustfs-mongodb.md

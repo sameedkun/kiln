@@ -169,6 +169,50 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
     Expect 'kept' (Psql 'postgres-17' 'kiln_ci' 'SELECT v FROM t;')
 }
 
+Say '== phpMyAdmin and Adminer (ADR 0043)'
+Check 'php install 8.5 and web start (plain HTTP, for the tools)' {
+    Kiln php install 8.5 | Out-Null
+    $script:web = Kiln web start
+}
+$script:pma = ''; $script:adminer = ''
+Check 'tool add phpmyadmin: from phpmyadmin.net, served as pma.test' {
+    $out = Kiln tool add phpmyadmin
+    Expect 'Linked pma.test' $out
+    $script:pma = [regex]::Match($out, 'URL: (\S+)').Groups[1].Value
+    if (-not $script:pma) { throw "no URL in:`n$out" }
+}
+Check 'tool add adminer: from GitHub, served as adminer.test' {
+    $out = Kiln tool add adminer
+    $script:adminer = [regex]::Match($out, 'URL: (\S+)').Groups[1].Value
+    if (-not $script:adminer) { throw "no URL in:`n$out" }
+}
+# The hosts file isn't touched in CI: curl resolves the sites' names to 127.0.0.1 itself.
+$jar = Join-Path $dir 'cookies.txt'
+function Page($url, [string[]] $more = @()) {
+    $uri = [Uri] $url
+    curl.exe -sS -L --max-time 60 -c $jar -b $jar --resolve "$($uri.Host):$($uri.Port):127.0.0.1" @more $url 2>&1 | Out-String
+}
+function Clean($page) {
+    if ($page -match '(Deprecated|Warning|Fatal error|Notice): ') { throw "PHP reported a problem:`n$($page.Substring([Math]::Max(0, $page.IndexOf($Matches[0]) - 200), 600))" }
+}
+Check 'phpMyAdmin opens logged in, with Kiln''s MySQL and MariaDB instances, on PHP 8.5' {
+    $page = Page $script:pma
+    Clean $page
+    foreach ($name in 'mysql-8.4', 'mariadb-11.8') { Expect $name $page }
+    if ($page -match 'name="pma_password"') { throw 'it shows a login form' }
+    $databases = Page "$($script:pma)index.php?route=/server/databases&server=1"
+    Clean $databases
+    Expect 'kiln_ci' $databases
+}
+Check 'Adminer lists Kiln''s instances and logs in to PostgreSQL without a password' {
+    Remove-Item $jar -ErrorAction SilentlyContinue
+    $form = Page $script:adminer
+    Clean $form
+    foreach ($name in 'mysql-8.4', 'mariadb-11.8', 'postgres-18') { Expect $name $form }
+    $page = Page $script:adminer @('--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=')
+    Clean $page
+    Expect 'kiln_ci' $page
+}
 Say '== Redis (ADR 0041)'
 # A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark
 # in front of what it pipes to a program, and redis-cli reads it as part of the first command.
@@ -337,6 +381,18 @@ Check 'mongosh left nothing outside Kiln''s folders and sent no usage data' {
     foreach ($d in "$env:APPDATA\mongodb", "$env:LOCALAPPDATA\mongodb") {
         if (Test-Path $d) { throw "$d exists" }
     }
+}
+
+Check 'servers.json follows the services: instances added after the tools are listed' {
+    $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
+    foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
+        if ($servers.name -notcontains $name) { throw "$name missing from:`n$($servers | ConvertTo-Json -Compress)" }
+    }
+}
+Check 'tool remove adminer: the site and its files go' {
+    Kiln tool remove adminer | Out-Null
+    if (Test-Path "$env:LOCALAPPDATA\Kiln\tools\adminer") { throw 'its folder is still there' }
+    if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
 }
 
 Say '== uninstall'

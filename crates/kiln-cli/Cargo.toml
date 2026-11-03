@@ -24,6 +24,7 @@ kiln-helper.workspace = true
 kiln-sys.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+getrandom.workspace = true
 kiln-fetch.workspace = true
 kiln-node.workspace = true
 kiln-php.workspace = true
