@@ -212,7 +212,11 @@ Check 'Adminer lists Kiln''s instances and logs in to PostgreSQL without a passw
     foreach ($name in 'mysql-8.4', 'mariadb-11.8', 'postgres-18') { Expect $name $form }
     $page = Page $script:adminer @('--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=')
     Clean $page
-    Expect 'kiln_ci' $page
+    if ($page -notmatch 'kiln_ci') {
+        $heading = [regex]::Match($page, '<h2>(.*?)</h2>').Groups[1].Value
+        $error = [regex]::Match($page, "class='error'>(.*?)</div>").Groups[1].Value
+        throw "no kiln_ci; heading: $heading; error: $error; title: $([regex]::Match($page, '<title>(.*?)</title>').Groups[1].Value)"
+    }
 }
 Say '== Redis (ADR 0041)'
 # A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark
@@ -404,10 +408,13 @@ Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     if (-not (Test-Path "$env:LOCALAPPDATA\Kiln")) { throw 'Kiln folders were touched' }
     $global:LASTEXITCODE = 0
 }
-Check 'kiln uninstall --delete-data' { Kiln uninstall --yes --delete-data }
+Check 'kiln uninstall --delete-data' { Kiln uninstall --yes --delete-data | ForEach-Object { Say "     $_" } }
 Start-Sleep -Seconds 2
 & (Join-Path $vm 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
 Compare-Snapshot 'after.txt' 'after uninstall'
+if (Test-Path "$env:LOCALAPPDATA\Kiln") {
+    Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Force | Select-Object -First 20 | ForEach-Object { Say "     left: $($_.FullName)" }
+}
 
 Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
 exit $(if ($script:failed) { 1 } else { 0 })
