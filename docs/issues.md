@@ -91,6 +91,8 @@ commits and PRs.
 | [I-79](#i-79) | supervisor | Redis (an MSYS2 program) wrote nothing to its log: the supervisor gave programs append-only handles, which the MSYS2 runtime can't write through | fixed (P3-06) |
 | [I-80](#i-80) | services | The MSYS2 Redis read `C:/…` config paths as relative and failed to start ("can't open config file '/cygdrive/…/C:/…'") | fixed (P3-06) |
 | [I-81](#i-81) | fetch | MongoDB's Windows archive (989 MB) was refused: downloads were capped at 512 MB | fixed (P3-14) |
+| [I-82](#i-82) | tools | A failure to write the web tools' `servers.json` made every service command fail | fixed (P3-15) |
+| [I-83](#i-83) | uninstall | Uninstall kept Kiln's whole local folder because the phpMyAdmin site inside it counted as a project | fixed (P3-15) |
 
 ---
 
@@ -1171,3 +1173,34 @@ commits and PRs.
   - Windows PowerShell gives an S3 object served as text as a string, not bytes.
   - `Check` read a stale `$LASTEXITCODE` from an earlier failed check when its own block
     ran no program. It now resets the code first.
+
+## P3-15: phpMyAdmin and Adminer
+
+### I-82: the tools' server list could block service commands (fixed)
+
+- **Seen:** the first CI run with the tools. `kiln tool add` failed to write its files, but
+  had already created the tools folder. From then on, every `kiln service` command failed
+  with "cannot write …\tools\servers.json".
+- **Why:** two faults.
+  - The files were written with `kiln_sys::write_replacing`, which replaces an existing
+    file and fails on a new one. Its own comment says Kiln's own files go through
+    `rename_replace`.
+  - Service changes returned that error instead of carrying on.
+- **Fix:** the tools' files are written to a temporary file and moved into place. A failure
+  to rewrite `servers.json` is now printed as a note; the service command still succeeds
+  ([ADR 0043](adr/0043-phpmyadmin-and-adminer.md) §2).
+
+### I-83: uninstall kept Kiln's folder because of a tool's site (fixed)
+
+- **Seen:** after `kiln uninstall --delete-data`, `%LOCALAPPDATA%\Kiln` was still there in
+  full. The plan said "keep … (the project …\tools\phpmyadmin\phpMyAdmin-5.2.3-english is
+  inside it)".
+- **Why:** uninstall keeps any Kiln folder that holds a linked or parked project, so a
+  user's project is never deleted ([ADR 0018](adr/0018-history-undo-uninstall.md) §5). The
+  tools' sites are linked folders inside Kiln's folder.
+- **Fix:** sites inside Kiln's tools folder are Kiln's own files and don't count as
+  projects. The check compares canonical paths, like the rest of the folder check.
+- **Also:** two test-script faults, not Kiln's.
+  - `kiln web start` needs `kiln web install` first.
+  - Adminer 6 checks a CSRF token on its login form, which a browser sends with the form;
+    the test's POST now does too.

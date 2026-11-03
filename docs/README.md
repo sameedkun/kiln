@@ -58,6 +58,7 @@ working name). Start here.
 | [0040](adr/0040-postgresql.md) | PostgreSQL on Windows from EDB's binaries (pgAdmin left out); `initdb` with `trust` on loopback only, UTF-8 and the C locale; Kiln's config included over `initdb`'s; `pg_ctl` stop; services run without administrator rights (a restricted token, as `pg_ctl` uses) | accepted (Phase 3) |
 | [0041](adr/0041-redis.md) | Redis on Windows from `redis-windows/redis-windows`' MSYS2 builds of upstream tags (public workflow, GitHub-recorded digests); not `zkteco-home/redis-windows` (binaries with no source, mislabelled license); relative paths in a Kiln-written config; `redis-cli shutdown` saves; a Kiln-built Valkey stays possible | accepted (Phase 3) |
 | [0042](adr/0042-meilisearch-rustfs-mongodb.md) | Meilisearch (Community Edition, development mode, no analytics), RustFS (both addresses pinned to 127.0.0.1; relative volume) and MongoDB 9.0 and 8.0 (debug symbols left out; 256 MB cache; clean shutdown and `kiln db` through `mongosh`, kept inside Kiln's folders) on Windows; companion archives; downloads up to 2 GB | accepted (Phase 3) |
+| [0043](adr/0043-phpmyadmin-and-adminer.md) | phpMyAdmin 5.2.3 and Adminer 6.2.0 served as `pma.test` and `adminer.test` (`kiln tool add`), listing Kiln's instances from a `servers.json` the CLI rewrites after every service change, logged in without a password; tool sites aren't projects for uninstall | accepted (Phase 3) |
 
 ## Conventions
 
