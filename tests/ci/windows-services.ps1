@@ -210,14 +210,16 @@ Check 'Adminer lists Kiln''s instances and logs in to PostgreSQL without a passw
     $form = Page $script:adminer
     Clean $form
     foreach ($name in 'mysql-8.4', 'mariadb-11.8', 'postgres-18') { Expect $name $form }
-    $page = Page $script:adminer @('--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=')
+    # As a browser does: the login form's CSRF token goes back with it.
+    $token = [regex]::Match($form, "name='token' value='([^']+)'").Groups[1].Value
+    if (-not $token) { throw 'no token in the login form' }
+    $page = Page $script:adminer @('--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=',
+        '--data-urlencode', "token=$token")
     Clean $page
     if ($page -notmatch 'kiln_ci') {
         $heading = [regex]::Match($page, '<h2>(.*?)</h2>').Groups[1].Value
         $error = [regex]::Match($page, "class='error'>(.*?)</div>").Groups[1].Value
-        $trace = Page $script:adminer @('-i', '--data-urlencode', 'auth[server]=postgres-18', '--data-urlencode', 'auth[db]=')
-        $hops = ($trace -split "`n" | Where-Object { $_ -match '^(HTTP/|Location:|Set-Cookie:)' } | ForEach-Object { ($_ -replace '=[^;]*', '=').Trim() }) -join ' | '
-        throw "no kiln_ci; heading: $heading; error: $error; title: $([regex]::Match($page, '<title>(.*?)</title>').Groups[1].Value); hops: $hops"
+        throw "no kiln_ci; heading: $heading; error: $error"
     }
 }
 Say '== Redis (ADR 0041)'
