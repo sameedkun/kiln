@@ -1,6 +1,6 @@
 # 0018. History, undo, and a previewable uninstall
 
-- **Status:** accepted
+- **Status:** accepted; amended by [ADR 0045](0045-env-wiring.md) §7: uninstall leaves projects' `.env` wiring in place
 - **Date:** 2026-10-22
 - **Task:** P1-13 · Builds on [ADR 0004](0004-reversible-operation-engine.md) (operation engine), [0011](0011-caddy-integration.md)–[0016](0016-per-site-php-and-shims.md)
 

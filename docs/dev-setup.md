@@ -29,7 +29,7 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 |---|---|---|
 | `kiln-core` | Domain types (TLD, host names; `ALLOWED_TLDS`, `Tld::new` for a choice, `Tld::recorded` for reading back) | forbidden |
 | `kiln-ops` | Operation engine and journals; `testing` feature exports the journal contract suite | forbidden |
-| `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp`, `PhpExtOp`, operation descriptions | forbidden |
+| `kiln-platform` | Adapter traits, hosts block editor, `HostsBlockOp` (+ `PrivilegedHosts`), `TrustCaOp` (Windows), `UserPathOp`, `PhpExtOp`, `EnvKeysOp` (`.env` keys, [ADR 0045](adr/0045-env-wiring.md)), operation descriptions | forbidden |
 | `kiln-state` | SQLite state store (`StateStore`): journal, settings, sites, parked folders, PHP versions, PHP pins, proxies, service instances; JSONL import | forbidden |
 | `kiln-pki` | Local CA: name-constrained root, intermediate, protected key store | forbidden |
 | `kiln-web` | Caddy config (typed JSON), pinned release install, start/reload/restart/stop/status of `kiln-caddy` (restart validates the new config while the old server serves), admin client over its Unix socket; proxy targets (`ProxyTarget`, loopback only) | forbidden |
