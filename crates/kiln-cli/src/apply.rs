@@ -114,6 +114,7 @@ mod system {
         let mut registry = Registry::default();
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
         kiln_platform::php_ext::register_php_ext(&mut registry);
+        kiln_platform::env_file::register_env_keys(&mut registry);
         if let Some(item) = kiln_platform::autostart::platform_item() {
             kiln_platform::autostart::register_autostart(&mut registry, item);
         }
@@ -302,18 +303,6 @@ mod system {
             "Kiln's daemon no longer starts at login. It keeps running until you log out or run `kiln daemon stop`."
         );
         Ok(())
-    }
-
-    /// Undoes every operation in effect, newest first, stopping at the first failure
-    /// ([ADR 0018] §4). Returns the undone operation numbers.
-    ///
-    /// [ADR 0018]: ../../../docs/adr/0018-history-undo-uninstall.md
-    pub fn undo_all() -> Result<Vec<u64>, String> {
-        let mut ctx = open()?;
-        let result = ctx.engine.revert_all(false).map_err(|e| e.to_string());
-        ctx.session.finish().map_err(|e| e.to_string())?;
-        report_elevation(&ctx.session);
-        result
     }
 
     #[cfg(windows)]
@@ -785,7 +774,7 @@ pub fn ca_info() -> Result<(), String> {
 
 pub use system::{
     apply_quietly, autostart_disable, autostart_enable, ca_trust, hosts_set, revert_quietly,
-    shims_install, undo, undo_all,
+    shims_install, undo,
 };
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.

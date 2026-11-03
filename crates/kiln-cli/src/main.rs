@@ -13,6 +13,7 @@ mod apply;
 mod coexist;
 mod daemon;
 mod doctor;
+mod env;
 mod ext;
 mod history;
 mod new;
@@ -151,6 +152,10 @@ enum Command {
         /// Serve it over HTTPS.
         #[arg(long)]
         secure: bool,
+        /// Use a Kiln database: mysql, mariadb or pgsql (its first instance), or an instance
+        /// such as mysql-8.4. Its .env is pointed there and the migrations run.
+        #[arg(long)]
+        db: Option<String>,
     },
     /// Bring a project's settings over from another tool.
     Import {
@@ -168,6 +173,11 @@ enum Command {
         name: String,
         /// A database to open.
         database: Option<String>,
+    },
+    /// Point a project's .env at a Kiln service (journaled: `kiln undo` reverses it).
+    Env {
+        #[command(subcommand)]
+        action: EnvAction,
     },
     /// Database web tools served as sites: phpMyAdmin (pma.test) and Adminer (adminer.test),
     /// pointed at Kiln's instances.
@@ -220,6 +230,34 @@ enum ImportFrom {
         /// Replace an existing kiln.toml.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EnvAction {
+    /// Set the .env keys for an instance, e.g. `kiln env use mysql-8.4`: shows the old and new
+    /// values first. A database instance also gets the project's database, made if missing.
+    Use {
+        /// The instance (see `kiln service list`).
+        name: String,
+        /// The project folder (default: the current one).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// The database to use (default: the folder's name).
+        #[arg(long)]
+        database: Option<String>,
+        /// Use this Redis instance for Laravel's cache (`CACHE_STORE=redis`).
+        #[arg(long)]
+        cache: bool,
+        /// Use it for sessions (`SESSION_DRIVER=redis`).
+        #[arg(long)]
+        session: bool,
+        /// Use it for queues (`QUEUE_CONNECTION=redis`).
+        #[arg(long)]
+        queue: bool,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
     },
 }
 
@@ -752,6 +790,26 @@ fn run_php(action: PhpAction) -> Result<(), String> {
     }
 }
 
+fn run_env(action: EnvAction) -> Result<(), String> {
+    let EnvAction::Use {
+        name,
+        project,
+        database,
+        cache,
+        session,
+        queue,
+        yes,
+    } = action;
+    env::use_instance(&name, project, database, cache, session, queue, yes).map(|_| ())
+}
+
+fn run_tool(action: ToolAction) -> Result<(), String> {
+    match action {
+        ToolAction::Add { name } => tool::add(&name),
+        ToolAction::Remove { name } => tool::remove(&name),
+    }
+}
+
 fn run_service(action: ServiceAction) -> Result<(), String> {
     match action {
         ServiceAction::Add {
@@ -786,10 +844,8 @@ fn run(command: Command) -> Result<(), String> {
         Command::Uninstall { options } => uninstall::uninstall(options),
         Command::Service { action } => run_service(action),
         Command::Db { name, database } => service::db(&name, database.as_deref()),
-        Command::Tool { action } => match action {
-            ToolAction::Add { name } => tool::add(&name),
-            ToolAction::Remove { name } => tool::remove(&name),
-        },
+        Command::Env { action } => run_env(action),
+        Command::Tool { action } => run_tool(action),
         Command::Services { action } => match action {
             ServicesAction::Up => service::start(&[]),
             ServicesAction::Down => service::stop(&[]),
@@ -857,7 +913,8 @@ fn run(command: Command) -> Result<(), String> {
             path,
             php,
             secure,
-        } => new::new(&name, path, php.as_deref(), secure),
+            db,
+        } => new::new(&name, path, php.as_deref(), secure, db.as_deref()),
         Command::Import {
             from: ImportFrom::Herd { path, force },
         } => project::import_herd(path, force),

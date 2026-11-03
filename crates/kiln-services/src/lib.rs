@@ -263,6 +263,33 @@ pub trait ServiceProvider: Sync {
         &[]
     }
 
+    /// The `.env` keys that point a project at an instance on `ports` ([ADR 0045]), in order.
+    /// A database's `DB_DATABASE` is added by the CLI. None by default.
+    ///
+    /// [ADR 0045]: ../../../docs/adr/0045-env-wiring.md
+    fn env_keys(&self, _ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        Vec::new()
+    }
+
+    /// Whether instances hold named databases that [`ServiceProvider::create_database`]
+    /// makes. False by default.
+    fn has_databases(&self) -> bool {
+        false
+    }
+
+    /// Creates database `name` on a running instance if it's missing ([ADR 0045]):
+    /// `Some(Ok(true))` if it made it. `None` for kinds that have no databases.
+    ///
+    /// [ADR 0045]: ../../../docs/adr/0045-env-wiring.md
+    fn create_database(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+        _name: &str,
+    ) -> Option<Result<bool, String>> {
+        None
+    }
+
     /// A web UI to serve as a Kiln site ([ADR 0044]): the site's name (`mailpit` for
     /// `mailpit.test`) and the port role it listens on. None by default.
     ///
@@ -408,6 +435,37 @@ mod contract {
                 assert!(["windows", "linux", "macos"].contains(&r.os), "{r:?}");
             }
         }
+    }
+
+    #[test]
+    fn env_keys_are_upper_case_and_point_at_the_instances_main_port() {
+        for provider in providers() {
+            let keys = provider.env_keys(&sample_ports(*provider));
+            for (key, _) in &keys {
+                assert!(
+                    key.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
+                    "{}: {key}",
+                    provider.kind()
+                );
+            }
+            if let Some(main) = provider.ports().first()
+                && !keys.is_empty()
+            {
+                assert!(
+                    keys.iter()
+                        .any(|(_, v)| v.contains(&main.usual.to_string())),
+                    "{}: no key names port {}",
+                    provider.kind(),
+                    main.usual
+                );
+            }
+        }
+        let mysql = provider("mysql").unwrap();
+        assert_eq!(
+            mysql.env_keys(&sample_ports(mysql))[0],
+            ("DB_CONNECTION", "mysql".to_owned())
+        );
     }
 
     #[test]

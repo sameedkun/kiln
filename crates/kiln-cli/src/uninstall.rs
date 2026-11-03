@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use kiln_ops::{Journal, OpState};
+use kiln_platform::env_file::ENV_KEYS_KIND;
 use kiln_sys::background::ProcStatus;
 
 /// One of Kiln's folders, and whether it may be deleted.
@@ -35,6 +36,11 @@ pub struct Plan {
     ///
     /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
     pub service_data: Vec<(PathBuf, u64)>,
+    /// (operation, description): projects' `.env` files Kiln pointed at its services. They
+    /// are the projects' own, so uninstall leaves them ([ADR 0045] §6).
+    ///
+    /// [ADR 0045]: ../../../docs/adr/0045-env-wiring.md
+    pub wired: Vec<(u64, String)>,
 }
 
 /// Whether `dir` looks like one of Kiln's folders: its last component is `Kiln` (any case),
@@ -138,6 +144,9 @@ fn build_plan() -> Result<Plan, String> {
         {
             let what = kiln_platform::describe::describe(&entry.kind, &entry.params);
             match entry.state {
+                OpState::Applied if entry.kind == ENV_KEYS_KIND => {
+                    plan.wired.push((entry.id, what));
+                }
                 OpState::Applied => plan.undo.push((entry.id, what)),
                 OpState::Prepared | OpState::Stuck => plan.attention.push((
                     entry.id,
@@ -208,6 +217,14 @@ fn print_plan(plan: &Plan, keep_files: bool) {
         println!(
             "     #{id}  {what}  [{state}: not undone automatically; see `kiln undo {id} --force`]"
         );
+    }
+    if !plan.wired.is_empty() {
+        println!(
+            "   Left as they are: projects' .env files Kiln pointed at its services (`kiln undo <number>` before uninstalling puts one back)"
+        );
+        for (id, what) in &plan.wired {
+            println!("     #{id}  {what}");
+        }
     }
     println!("3. Delete Kiln's folders");
     if keep_files {
@@ -308,10 +325,12 @@ pub fn uninstall(options: Options) -> Result<(), String> {
 
     // 2. Undo, newest first; stop at the first failure and delete nothing.
     if !plan.undo.is_empty() {
-        let undone = crate::apply::undo_all().map_err(|e| {
+        // Everything in the plan, newest first; projects' .env wiring isn't in it.
+        let ids: Vec<u64> = plan.undo.iter().map(|(id, _)| *id).collect();
+        crate::apply::revert_quietly(&ids).map_err(|e| {
             format!("{e}\nUninstall stopped here and deleted nothing; fix the cause and run `kiln uninstall` again.")
         })?;
-        println!("Undid {} operation(s).", undone.len());
+        println!("Undid {} operation(s).", ids.len());
     }
     if keep_files {
         println!("Done. Kiln's folders were kept (--keep-files).");
@@ -339,10 +358,11 @@ pub fn uninstall(options: Options) -> Result<(), String> {
             entries
                 .iter()
                 .filter(|e| {
-                    matches!(
-                        e.state,
-                        OpState::Applied | OpState::Prepared | OpState::Stuck
-                    )
+                    e.kind != ENV_KEYS_KIND
+                        && matches!(
+                            e.state,
+                            OpState::Applied | OpState::Prepared | OpState::Stuck
+                        )
                 })
                 .count()
         });

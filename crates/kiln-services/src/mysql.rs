@@ -443,6 +443,59 @@ impl ServiceProvider for Flavor {
         vec![dirs.instance().join("error.log"), dirs.log.clone()]
     }
 
+    /// Laravel's connection of the same name: `mysql` or `mariadb` (Laravel 11 and later).
+    /// The CLI uses `mysql` for a project that has no `mariadb` connection.
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        vec![
+            ("DB_CONNECTION", self.kind.to_owned()),
+            ("DB_HOST", "127.0.0.1".to_owned()),
+            ("DB_PORT", port_of(ports).to_string()),
+            ("DB_USERNAME", "root".to_owned()),
+            ("DB_PASSWORD", String::new()),
+        ]
+    }
+
+    fn has_databases(&self) -> bool {
+        true
+    }
+
+    fn create_database(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        name: &str,
+    ) -> Option<Result<bool, String>> {
+        let client = self.client(dirs, ports, None)?;
+        let query = |sql: String| {
+            let mut args = client.args.clone();
+            args.extend([
+                "--batch".into(),
+                "--skip-column-names".into(),
+                "-e".into(),
+                sql,
+            ]);
+            match run(&client.program, &args, &client.env) {
+                Ok((0, output)) => Ok(output),
+                Ok((code, output)) => Err(format!(
+                    "{} answered with exit code {code}:\n{}",
+                    self.display,
+                    tail(&output, 4)
+                )),
+                Err(e) => Err(e),
+            }
+        };
+        Some((|| {
+            let found = query(format!(
+                "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '{name}'"
+            ))?;
+            if found.trim() != "0" {
+                return Ok(false);
+            }
+            query(format!("CREATE DATABASE `{name}`"))?;
+            Ok(true)
+        })())
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,

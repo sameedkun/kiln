@@ -40,7 +40,7 @@ pub(crate) fn supervisor() -> Result<SupervisorHandle, String> {
     ))
 }
 
-fn provider_of(kind: &str) -> Result<&'static dyn ServiceProvider, String> {
+pub(crate) fn provider_of(kind: &str) -> Result<&'static dyn ServiceProvider, String> {
     kiln_services::provider(kind).ok_or_else(|| {
         let known: Vec<_> = kiln_services::providers()
             .iter()
@@ -53,7 +53,7 @@ fn provider_of(kind: &str) -> Result<&'static dyn ServiceProvider, String> {
     })
 }
 
-fn dirs_of(record: &ServiceRecord) -> Result<InstanceDirs, String> {
+pub(crate) fn dirs_of(record: &ServiceRecord) -> Result<InstanceDirs, String> {
     Ok(InstanceDirs::new(
         &services_dir()?,
         &record.kind,
@@ -62,7 +62,7 @@ fn dirs_of(record: &ServiceRecord) -> Result<InstanceDirs, String> {
     ))
 }
 
-fn record_of(store: &StateStore, name: &str) -> Result<ServiceRecord, String> {
+pub(crate) fn record_of(store: &StateStore, name: &str) -> Result<ServiceRecord, String> {
     store
         .service(name)
         .map_err(|e| e.to_string())?

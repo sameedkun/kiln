@@ -200,6 +200,14 @@ impl ServiceProvider for Mongodb {
         fs::metadata(dirs.data.join("mongod.lock")).map_or(true, |m| m.len() == 0)
     }
 
+    /// The URI the MongoDB package for Laravel reads.
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        vec![(
+            "MONGODB_URI",
+            format!("mongodb://127.0.0.1:{}", port_of(ports)),
+        )]
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,

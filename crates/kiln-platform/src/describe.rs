@@ -7,6 +7,7 @@
 use serde_json::Value;
 
 use crate::autostart::AUTOSTART_KIND;
+use crate::env_file::ENV_KEYS_KIND;
 use crate::hosts_op::HOSTS_BLOCK_KIND;
 use crate::php_ext::PHP_EXT_KIND;
 use crate::shell_profile::SHELL_PROFILE_KIND;
@@ -65,6 +66,19 @@ pub fn describe(kind: &str, params: &Value) -> String {
                 "off"
             }
         ),
+        ENV_KEYS_KIND => {
+            let keys: Vec<&str> = params["keys"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|pair| pair.get(0).and_then(Value::as_str))
+                .collect();
+            format!(
+                "{}: {}",
+                params["path"].as_str().unwrap_or(".env"),
+                list(&keys, 4)
+            )
+        }
         other => other.to_owned(),
     }
 }

@@ -55,6 +55,15 @@ impl ServiceProvider for Meilisearch {
         "kiln-meilisearch"
     }
 
+    /// What Laravel Scout's Meilisearch engine reads; development mode needs no key.
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        let port = ports.get(HTTP.role).copied().unwrap_or(HTTP.usual);
+        vec![
+            ("MEILISEARCH_HOST", format!("http://127.0.0.1:{port}")),
+            ("MEILISEARCH_KEY", String::new()),
+        ]
+    }
+
     fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
         // Meilisearch creates its database on first start.
         fs::create_dir_all(&dirs.data)

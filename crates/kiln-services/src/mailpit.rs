@@ -95,6 +95,15 @@ impl ServiceProvider for Mailpit {
         Some(("mailpit", HTTP.role))
     }
 
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        let smtp = ports.get(SMTP.role).copied().unwrap_or(SMTP.usual);
+        vec![
+            ("MAIL_MAILER", "smtp".to_owned()),
+            ("MAIL_HOST", "127.0.0.1".to_owned()),
+            ("MAIL_PORT", smtp.to_string()),
+        ]
+    }
+
     fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
         // Mailpit creates its database on first start.
         fs::create_dir_all(&dirs.data)

@@ -83,13 +83,39 @@ fn path_with(dir: &Path) -> Result<OsString, String> {
         .map_err(|e| e.to_string())
 }
 
-/// `kiln new <name> [--path <folder>] [--php <version>] [--secure]`.
+/// The instance `--db` names: an instance's own name, or a kind (`pgsql` for `postgres`),
+/// meaning its first running instance ([ADR 0045] §5).
+///
+/// [ADR 0045]: ../../../docs/adr/0045-env-wiring.md
+fn db_instance(spec: &str) -> Result<String, String> {
+    let services = crate::web::open_store()?
+        .services()
+        .map_err(|e| e.to_string())?;
+    if services.iter().any(|s| s.name == spec) {
+        return Ok(spec.to_owned());
+    }
+    let kind = if spec == "pgsql" { "postgres" } else { spec };
+    if !matches!(kind, "mysql" | "mariadb" | "postgres") {
+        return Err(format!(
+            "--db takes mysql, mariadb, pgsql or an instance's name; there is no instance `{spec}`"
+        ));
+    }
+    services
+        .iter()
+        .find(|s| s.kind == kind && s.enabled)
+        .map(|s| s.name.clone())
+        .ok_or_else(|| format!("no running {kind} instance: `kiln service add {kind}` first"))
+}
+
+/// `kiln new <name> [--path <folder>] [--php <version>] [--secure] [--db <database>]`.
 pub fn new(
     name: &str,
     parent: Option<PathBuf>,
     php: Option<&str>,
     secure: bool,
+    db: Option<&str>,
 ) -> Result<(), String> {
+    let db = db.map(db_instance).transpose()?;
     let tld = crate::web::current_tld()?;
     let name = project_name(name, &tld)?;
     let parent = match parent {
@@ -167,6 +193,19 @@ pub fn new(
         println!("Wrote {}: PHP {spec} for this project.", toml.display());
     }
 
+    serve(&name, &tld, &project, secure)?;
+    if let Some(instance) = db {
+        wire_database(&instance, &project, &record)?;
+    }
+    println!(
+        "Next: `cd {}`, then `npm install` and `npm run dev` for its front end.",
+        project.display()
+    );
+    Ok(())
+}
+
+/// Serves the new project as `<name>.<tld>`: linked, or already served from a parked folder.
+fn serve(name: &str, tld: &Tld, project: &Path, secure: bool) -> Result<(), String> {
     let store = crate::web::open_store()?;
     let served = kiln_runtime::sites(&store)
         .map_err(|e| e.to_string())?
@@ -174,24 +213,46 @@ pub fn new(
         .iter()
         .any(|s| s.alias_of.is_none() && s.project == project);
     drop(store);
-    if served {
-        println!("{name}.{tld} already serves it (its folder is parked).");
-        if secure {
-            crate::web::set_secure(&name, true)?;
-        }
-        if let Some(url) =
-            crate::web::site_urls(&crate::web::open_store()?).get(&format!("{name}.{tld}"))
-        {
-            println!("URL: {url}");
-        }
-    } else {
-        crate::web::link(Some(name.clone()), Some(project.clone()), secure)?;
+    if !served {
+        return crate::web::link(Some(name.to_owned()), Some(project.to_path_buf()), secure);
     }
-    println!(
-        "Next: `cd {}`, then `npm install` and `npm run dev` for its front end.",
-        project.display()
-    );
+    println!("{name}.{tld} already serves it (its folder is parked).");
+    if secure {
+        crate::web::set_secure(name, true)?;
+    }
+    if let Some(url) =
+        crate::web::site_urls(&crate::web::open_store()?).get(&format!("{name}.{tld}"))
+    {
+        println!("URL: {url}");
+    }
     Ok(())
+}
+
+/// Points the new project at `instance` and runs its migrations there.
+fn wire_database(instance: &str, project: &Path, record: &PhpRecord) -> Result<(), String> {
+    crate::env::use_instance(
+        instance,
+        Some(project.to_path_buf()),
+        None,
+        false,
+        false,
+        false,
+        true,
+    )?;
+    println!("Running its migrations on {instance}...");
+    let status = std::process::Command::new(record.dir.join(kiln_php::PHP_EXE))
+        .args(["artisan", "migrate", "--force"])
+        .current_dir(project)
+        .status()
+        .map_err(|e| format!("cannot run php artisan migrate: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the migrations failed (exit code {}); the project is created and wired, so fix the cause and run `php artisan migrate`",
+            status.code().unwrap_or(1)
+        ))
+    }
 }
 
 #[cfg(test)]

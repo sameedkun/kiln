@@ -409,6 +409,69 @@ Check 'mongosh left nothing outside Kiln''s folders and sent no usage data' {
     }
 }
 
+Say '== A Laravel app wired to Kiln''s services (ADR 0045)'
+# Outside $dir, which is uploaded after the run: the app's vendor folder stays out of it.
+$projects = Join-Path $env:RUNNER_TEMP 'projects'
+New-Item -ItemType Directory -Force $projects | Out-Null
+$shop = Join-Path $projects 'shop'
+$envFile = Join-Path $shop '.env'
+function Php { $exe = Join-Path (Get-ChildItem "$env:LOCALAPPDATA\Kiln\php" -Directory | Select-Object -First 1).FullName 'php.exe'; & $exe @args 2>&1 | Out-String }
+function EnvHash { (Get-FileHash $envFile -Algorithm SHA256).Hash }
+Check 'kiln new shop --db mysql-8.4: created, its .env pointed at MySQL, migrated there' {
+    $out = Kiln new shop --path $projects --db mysql-8.4
+    Expect 'Created the database shop on mysql-8.4' $out
+    Expect 'now points at mysql-8.4' $out
+    $count = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
+    if ($count -notmatch '(?m)^\s*[1-9]') { throw "no migrations on mysql-8.4:`n$count" }
+}
+$script:beforeRedis = EnvHash
+$script:redisOp = ''; $script:mailOp = ''
+Check 'kiln env use redis-8.10 --cache --session --queue: old and new values shown, then journaled' {
+    $out = Kiln env use redis-8.10 --project $shop --cache --session --queue --yes
+    Expect 'REDIS_CLIENT' $out
+    Expect 'composer require predis/predis' $out
+    $script:redisOp = [regex]::Match($out, 'kiln undo (\d+)').Groups[1].Value
+    if (-not $script:redisOp) { throw "no undo number in:`n$out" }
+}
+Check 'kiln env use mailpit-1' {
+    $out = Kiln env use mailpit-1 --project $shop --yes
+    $script:mailOp = [regex]::Match($out, 'kiln undo (\d+)').Groups[1].Value
+    $text = Get-Content $envFile -Raw
+    if ($text -notmatch "(?m)^MAIL_PORT=$($script:smtp)\r?$") { throw "MAIL_PORT isn't $($script:smtp)" }
+    if ($text -notmatch '(?m)^CACHE_STORE=redis\r?$') { throw 'CACHE_STORE isn''t redis' }
+}
+Check 'composer require predis/predis' {
+    Push-Location $shop
+    try { Php "$env:LOCALAPPDATA\Kiln\bin\composer.phar" require predis/predis --no-interaction }
+    finally { Pop-Location }
+}
+Check 'Laravel''s cache, locks, tags, sessions, queues and limiters on Kiln''s Redis (spike 03''s checks)' {
+    New-Item -ItemType Directory -Force (Join-Path $shop 'app\Console\Commands') | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot '..\..\spikes\windows-cache\KilnSpike.php') (Join-Path $shop 'app\Console\Commands\KilnSpike.php')
+    Push-Location $shop
+    try { $out = Php artisan kiln:spike } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0 -or $out -notmatch 'PASSED') { throw "the checks failed:`n$out" }
+}
+Check 'a mail sent by Laravel lands in Kiln''s Mailpit' {
+    Set-Content (Join-Path $shop 'kiln-mail.php') -Encoding ascii -Value @'
+<?php
+require __DIR__ . '/vendor/autoload.php';
+$app = require __DIR__ . '/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+Illuminate\Support\Facades\Mail::raw('hello from shop', fn ($m) => $m->to('you@example.test')->subject('from shop'));
+echo "sent\n";
+'@
+    Push-Location $shop
+    try { Expect 'sent' (Php kiln-mail.php) } finally { Pop-Location }
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s)" }
+}
+Check 'kiln undo puts the .env back byte for byte' {
+    Kiln undo $script:mailOp --yes | Out-Null
+    Kiln undo $script:redisOp --yes | Out-Null
+    if ((EnvHash) -ne $script:beforeRedis) { throw 'the .env differs from before the wiring' }
+}
+Check 'kiln history lists the wiring that is still in effect' { Expect 'DB_CONNECTION' (Kiln history) }
+
 Check 'servers.json follows the services: instances added after the tools are listed' {
     $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
     foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
@@ -430,6 +493,9 @@ Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     $global:LASTEXITCODE = 0
 }
 Check 'kiln uninstall --delete-data' { Kiln uninstall --yes --delete-data | ForEach-Object { Say "     $_" } }
+Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
+    if ((Get-Content $envFile -Raw) -notmatch '(?m)^DB_CONNECTION=mysql') { throw 'the .env was changed' }
+}
 Start-Sleep -Seconds 2
 & (Join-Path $vm 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
 Compare-Snapshot 'after.txt' 'after uninstall'

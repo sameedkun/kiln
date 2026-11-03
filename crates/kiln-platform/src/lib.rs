@@ -6,6 +6,7 @@
 
 pub mod autostart;
 pub mod describe;
+pub mod env_file;
 pub mod hosts;
 pub mod hosts_op;
 pub mod php_ext;

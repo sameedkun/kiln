@@ -175,6 +175,16 @@ impl ServiceProvider for Redis {
         !pid_file(dirs).exists()
     }
 
+    /// `predis`, Laravel's other client: Kiln's Windows PHP has no `phpredis` extension.
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        vec![
+            ("REDIS_CLIENT", "predis".to_owned()),
+            ("REDIS_HOST", "127.0.0.1".to_owned()),
+            ("REDIS_PASSWORD", "null".to_owned()),
+            ("REDIS_PORT", port_of(ports).to_string()),
+        ]
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,

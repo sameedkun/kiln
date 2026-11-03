@@ -64,6 +64,19 @@ impl ServiceProvider for Rustfs {
         "kiln-rustfs"
     }
 
+    /// Laravel's `s3` disk, pointed at RustFS with path-style URLs. The bucket stays the
+    /// project's own choice (`AWS_BUCKET`).
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        let s3 = ports.get(S3.role).copied().unwrap_or(S3.usual);
+        vec![
+            ("AWS_ACCESS_KEY_ID", ACCESS_KEY.to_owned()),
+            ("AWS_SECRET_ACCESS_KEY", SECRET_KEY.to_owned()),
+            ("AWS_DEFAULT_REGION", "us-east-1".to_owned()),
+            ("AWS_ENDPOINT", format!("http://127.0.0.1:{s3}")),
+            ("AWS_USE_PATH_STYLE_ENDPOINT", "true".to_owned()),
+        ]
+    }
+
     fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
         fs::create_dir_all(&dirs.data)
             .map_err(|e| format!("cannot create {}: {e}", dirs.data.display()))

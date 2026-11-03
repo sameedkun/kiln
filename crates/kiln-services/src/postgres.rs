@@ -221,6 +221,56 @@ impl ServiceProvider for Postgres {
         fs::read_to_string(pid_file(dirs)).is_ok_and(|text| is_ready(&text))
     }
 
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        vec![
+            ("DB_CONNECTION", "pgsql".to_owned()),
+            ("DB_HOST", "127.0.0.1".to_owned()),
+            ("DB_PORT", port_of(ports).to_string()),
+            ("DB_USERNAME", SUPERUSER.to_owned()),
+            ("DB_PASSWORD", String::new()),
+        ]
+    }
+
+    fn has_databases(&self) -> bool {
+        true
+    }
+
+    fn create_database(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        name: &str,
+    ) -> Option<Result<bool, String>> {
+        let client = self.client(dirs, ports, Some("postgres"))?;
+        let query = |sql: String| {
+            let mut args = client.args.clone();
+            args.extend([
+                "--tuples-only".into(),
+                "--no-align".into(),
+                "--command".into(),
+                sql,
+            ]);
+            match run(&client.program, &args, &client.env) {
+                Ok((0, output)) => Ok(output),
+                Ok((code, output)) => Err(format!(
+                    "PostgreSQL answered with exit code {code}:\n{}",
+                    tail(&output, 4)
+                )),
+                Err(e) => Err(e),
+            }
+        };
+        Some((|| {
+            let found = query(format!(
+                "SELECT 1 FROM pg_database WHERE datname = '{name}'"
+            ))?;
+            if found.trim() == "1" {
+                return Ok(false);
+            }
+            query(format!("CREATE DATABASE \"{name}\""))?;
+            Ok(true)
+        })())
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,
