@@ -188,8 +188,11 @@ fn apply(store: &StateStore) -> Result<(), String> {
     if !wait_released(&gone, &stopping) {
         println!("Note: a service is taking long to stop; it may still be finishing.");
     }
-    // The web tools list the instances as they now are (ADR 0043).
-    crate::tool::write_servers(store)?;
+    // The web tools list the instances as they now are (ADR 0043). Only a convenience: a
+    // failure is reported, never in the way of the services themselves.
+    if let Err(e) = crate::tool::write_servers(store) {
+        println!("Note: the web tools' server list wasn't updated: {e}");
+    }
     Ok(())
 }
 

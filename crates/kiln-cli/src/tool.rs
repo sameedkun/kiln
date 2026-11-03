@@ -41,8 +41,15 @@ pub(crate) fn write_servers(store: &StateStore) -> Result<(), String> {
         })
         .collect();
     let text = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
-    kiln_sys::write_replacing(&dir.join("servers.json"), text.as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", dir.join("servers.json").display()))
+    write_file(&dir.join("servers.json"), &text)
+}
+
+/// Writes one of Kiln's own files whole: a temporary file beside it, then swapped in.
+fn write_file(path: &std::path::Path, text: &str) -> Result<(), String> {
+    let temp = path.with_extension("partial");
+    std::fs::write(&temp, text)
+        .and_then(|()| kiln_sys::rename_replace(&temp, path))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 /// 32 random characters, for phpMyAdmin's cookie encryption.
@@ -87,9 +94,7 @@ pub fn add(name: &str) -> Result<(), String> {
     let temp = parent.join("tmp");
     std::fs::create_dir_all(&temp).map_err(|e| format!("cannot create {}: {e}", temp.display()))?;
     for (file, text) in tool.files(&dir, &dir.join("servers.json"), &secret()?) {
-        let path = root.join(file);
-        kiln_sys::write_replacing(&path, text.as_bytes())
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        write_file(&root.join(file), &text)?;
     }
     write_servers(&store)?;
     drop(store);

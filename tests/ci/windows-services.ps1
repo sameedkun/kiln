@@ -170,8 +170,9 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
 }
 
 Say '== phpMyAdmin and Adminer (ADR 0043)'
-Check 'php install 8.5 and web start (plain HTTP, for the tools)' {
+Check 'php install 8.5, web install and web start (plain HTTP, for the tools)' {
     Kiln php install 8.5 | Out-Null
+    Kiln web install | Out-Null
     $script:web = Kiln web start
 }
 $script:pma = ''; $script:adminer = ''
