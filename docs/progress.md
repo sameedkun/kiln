@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-02 · **Current phase:** **Phase 3 in progress** (9 of 16 tasks done; ADRs 0035–0043; Windows first, Linux on hold (ADR 0039); next: P3-07) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-03 · **Current phase:** **Phase 3 in progress** (9 of 16 tasks done; ADRs 0035–0043; Windows first, Linux on hold (ADR 0039); next: P3-07) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
