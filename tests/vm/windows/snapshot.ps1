@@ -38,6 +38,9 @@ foreach ($d in @("$env:APPDATA\Kiln", "$env:LOCALAPPDATA\Kiln")) {
 $kilnPhp = Get-Process php-cgi -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -like "$env:LOCALAPPDATA\Kiln\*" -or $_.Path -like "$env:APPDATA\Kiln\*" }
 "kiln php-cgi: $(@($kilnPhp).Count)"
+# Kiln's PHP running a project's own server, such as Reverb (ADR 0047).
+$kilnCli = Get-Process php -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$env:LOCALAPPDATA\Kiln\*" }
+"kiln php: $(@($kilnCli).Count)"
 
 # Laravel Herd: its configuration, its sites, and that its server still listens.
 $herd = Join-Path $env:USERPROFILE '.config\herd\config'

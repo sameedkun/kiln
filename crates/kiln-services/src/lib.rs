@@ -16,6 +16,7 @@ mod mongodb;
 mod mysql;
 mod postgres;
 mod redis;
+pub mod reverb;
 mod rustfs;
 pub mod tools;
 
@@ -271,6 +272,26 @@ pub trait ServiceProvider: Sync {
         Vec::new()
     }
 
+    /// Whether instances run in a project with its own PHP, such as Reverb ([ADR 0047]): they
+    /// have no releases to download, and start through [`ServiceProvider::project_launch`].
+    /// False by default.
+    ///
+    /// [ADR 0047]: ../../../docs/adr/0047-reverb.md
+    fn runs_in_project(&self) -> bool {
+        false
+    }
+
+    /// How to run an instance in `project` with the PHP at `php`, for a provider that
+    /// [`runs_in_project`](ServiceProvider::runs_in_project). None by default.
+    fn project_launch(
+        &self,
+        _project: &Path,
+        _php: &Path,
+        _ports: &BTreeMap<String, u16>,
+    ) -> Option<Launch> {
+        None
+    }
+
     /// Whether instances hold named databases that [`ServiceProvider::create_database`]
     /// makes. False by default.
     fn has_databases(&self) -> bool {
@@ -312,7 +333,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 8] = [
+    static PROVIDERS: [&dyn ServiceProvider; 9] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -321,6 +342,7 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &meilisearch::Meilisearch,
         &rustfs::Rustfs,
         &mongodb::Mongodb,
+        &reverb::Reverb,
     ];
     &PROVIDERS
 }
@@ -408,7 +430,13 @@ mod contract {
     #[test]
     fn pins_are_well_formed() {
         for provider in providers() {
-            assert!(!provider.releases().is_empty(), "{}", provider.kind());
+            // Only a service that runs in a project has nothing to download.
+            assert_eq!(
+                provider.releases().is_empty(),
+                provider.runs_in_project(),
+                "{}",
+                provider.kind()
+            );
             // Companions are pinned the same way, and unpack into a folder of their own.
             let companions = provider
                 .releases()
@@ -493,6 +521,9 @@ mod contract {
     #[test]
     fn executables_have_kiln_names() {
         for provider in providers() {
+            if provider.runs_in_project() {
+                continue; // the project's own PHP
+            }
             assert!(
                 provider.executable_name().starts_with("kiln-"),
                 "{}",
@@ -518,14 +549,37 @@ mod contract {
         let services = Path::new("/k/services");
         for provider in providers() {
             let dirs = InstanceDirs::new(services, provider.kind(), "1.0", "x-1");
-            let launch = provider.launch(&dirs, &sample_ports(*provider));
-            assert!(launch.program.starts_with(&dirs.bin), "{launch:?}");
+            // A service that runs in a project runs the PHP it's given, in the project.
+            let project = Path::new("/k/project");
+            let php = Path::new("/k/php/php");
+            let (launch, home) = if provider.runs_in_project() {
+                let launch = provider
+                    .project_launch(project, php, &sample_ports(*provider))
+                    .expect("a project service has a project launch");
+                assert_eq!(launch.program, php, "{}", provider.kind());
+                (launch, project)
+            } else {
+                let launch = provider.launch(&dirs, &sample_ports(*provider));
+                assert!(launch.program.starts_with(&dirs.bin), "{launch:?}");
+                (launch, services)
+            };
             for arg in &launch.args {
                 assert!(
                     !arg.contains("0.0.0.0") && !arg.contains("[::]"),
                     "{}: listens beyond loopback: {arg}",
                     provider.kind()
                 );
+                // So does a `--host=` or `--bind_ip=` option.
+                if let Some(host) = arg
+                    .strip_prefix("--host=")
+                    .or_else(|| arg.strip_prefix("--bind_ip="))
+                {
+                    assert!(
+                        host == "127.0.0.1" || host == "::1",
+                        "{}: {arg}",
+                        provider.kind()
+                    );
+                }
                 // Any address it names is a loopback one.
                 if let Some((host, port)) = arg.rsplit_once(':')
                     && port.parse::<u16>().is_ok()
@@ -540,7 +594,7 @@ mod contract {
                 }
             }
             if let Some(path) = &launch.cwd {
-                assert!(path.starts_with(services), "{path:?}");
+                assert!(path.starts_with(home), "{path:?}");
             }
             // A config file listens on loopback only too ([ADR 0038] §3): MySQL's
             // `bind-address` or PostgreSQL's `listen_addresses`.

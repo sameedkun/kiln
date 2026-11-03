@@ -94,6 +94,7 @@ fn kind_of(name: &str) -> Option<&'static str> {
         "minio" | "rustfs" => "rustfs",
         "mongodb" => "mongodb",
         "mailpit" => "mailpit",
+        "reverb" => "reverb",
         _ => return None,
     })
 }
@@ -101,11 +102,7 @@ fn kind_of(name: &str) -> Option<&'static str> {
 /// One `services:` entry as a [`ServiceWant`], noting what changed or was left out.
 fn service(name: &str, settings: &Yaml, notes: &mut Vec<String>) -> Option<ServiceWant> {
     let Some(kind) = kind_of(name) else {
-        notes.push(if name == "reverb" {
-            "service reverb isn't imported: Kiln runs Reverb per project in a later version".into()
-        } else {
-            format!("service {name} isn't imported: Kiln has no {name}")
-        });
+        notes.push(format!("service {name} isn't imported: Kiln has no {name}"));
         return None;
     };
     if name == "minio" {
@@ -231,6 +228,7 @@ mod tests {
                 ("postgres", Some("17.2"), None),
                 ("rustfs", Some("2024"), None),
                 ("redis", None, Some(6390)),
+                ("reverb", Some("1"), None),
             ]
         );
         let notes = imported.notes.join(
@@ -238,7 +236,6 @@ mod tests {
 ",
         );
         assert!(notes.contains("minio became rustfs"), "{notes}");
-        assert!(notes.contains("reverb"), "{notes}");
         assert!(notes.contains("Kiln has no typesense"), "{notes}");
     }
 

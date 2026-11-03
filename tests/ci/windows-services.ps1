@@ -504,6 +504,55 @@ Check 'kiln services up in the project: reuses, adds, starts and wires what kiln
     }
 }
 
+Say '== Laravel Reverb in the project (ADR 0047)'
+Check 'composer require laravel/reverb' {
+    Push-Location $shop
+    try { Php "$env:LOCALAPPDATA\Kiln\bin\composer.phar" require laravel/reverb --no-interaction }
+    finally { Pop-Location }
+}
+$script:reverb = 0
+Check 'kiln service add reverb --project shop: php artisan reverb:start, kept up by Kiln, on loopback' {
+    # The app's own keys, as `php artisan install:broadcasting --reverb` writes them.
+    Add-Content $envFile "`nREVERB_APP_ID=kiln`nREVERB_APP_KEY=kiln-key`nREVERB_APP_SECRET=kiln-secret`n" -Encoding ascii
+    $out = Kiln service add reverb --project $shop
+    Expect 'running as reverb-shop' $out
+    $script:reverb = PortOf $out 'reverb'
+    if (-not $script:reverb) { throw "no port in:`n$out" }
+    OnlyLoopback 'php' 1
+}
+Check 'kiln env use reverb-shop: its project by default, BROADCAST_CONNECTION and REVERB_*' {
+    Kiln env use reverb-shop --yes | Out-Null
+    $text = Get-Content $envFile -Raw
+    foreach ($line in 'BROADCAST_CONNECTION=reverb', "REVERB_PORT=$($script:reverb)", 'REVERB_HOST=127.0.0.1', 'REVERB_APP_KEY=kiln-key') {
+        if ($text -notmatch "(?m)^$([regex]::Escape($line))\r?$") { throw "$line isn't in the .env" }
+    }
+}
+# A browser's opening WebSocket request; the server keeps the connection, so curl times out.
+function Handshake {
+    $answer = curl.exe -s -i --max-time 3 -H 'Connection: Upgrade' -H 'Upgrade: websocket' `
+        -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' `
+        "http://127.0.0.1:$($script:reverb)/app/kiln-key" 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    $answer
+}
+Check 'a browser''s WebSocket handshake is accepted' { Expect '101 Switching Protocols' (Handshake) }
+Check 'Laravel broadcasts an event through it (a signed request Reverb checks)' {
+    Set-Content (Join-Path $shop 'kiln-broadcast.php') -Encoding ascii -Value @'
+<?php
+require __DIR__ . '/vendor/autoload.php';
+$app = require __DIR__ . '/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+Illuminate\Support\Facades\Broadcast::connection('reverb')->broadcast(['kiln'], 'hello', ['from' => 'ci']);
+echo "broadcast\n";
+'@
+    Push-Location $shop
+    try { Expect 'broadcast' (Php kiln-broadcast.php) } finally { Pop-Location }
+}
+Check 'service restart reverb-shop: it comes back' {
+    Kiln service restart reverb-shop | Out-Null
+    Expect '101 Switching Protocols' (Handshake)
+}
+
 Check 'servers.json follows the services: instances added after the tools are listed' {
     $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
     foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {

@@ -23,6 +23,10 @@ pub struct ServiceRecord {
     pub ports: BTreeMap<String, u16>,
     /// Whether it should be running (`kiln service start` / `stop`).
     pub enabled: bool,
+    /// The project folder, for a service that runs in one (Reverb, [ADR 0047]).
+    ///
+    /// [ADR 0047]: ../../../docs/adr/0047-reverb.md
+    pub project: Option<std::path::PathBuf>,
 }
 
 fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceRecord> {
@@ -35,10 +39,13 @@ fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceRecord> {
             rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
         })?,
         enabled: row.get(4)?,
+        project: row
+            .get::<_, Option<String>>(5)?
+            .map(std::path::PathBuf::from),
     })
 }
 
-const COLUMNS: &str = "name, kind, version, ports, enabled";
+const COLUMNS: &str = "name, kind, version, ports, enabled, project";
 
 impl StateStore {
     /// All instances, ordered by name.
@@ -67,17 +74,21 @@ impl StateStore {
             StateError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })?;
         self.conn.execute(
-            "INSERT INTO services (name, kind, version, ports, enabled, created_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO services (name, kind, version, ports, enabled, created_ms, project)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, version = excluded.version,
-                 ports = excluded.ports, enabled = excluded.enabled",
+                 ports = excluded.ports, enabled = excluded.enabled, project = excluded.project",
             params![
                 service.name,
                 service.kind,
                 service.version,
                 ports,
                 service.enabled,
-                now_ms()
+                now_ms(),
+                service
+                    .project
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
             ],
         )?;
         Ok(())
@@ -114,6 +125,7 @@ mod tests {
             version: "1.31.6".into(),
             ports: BTreeMap::from([("smtp".into(), 1025), ("http".into(), 8025)]),
             enabled: true,
+            project: None,
         };
         store.put_service(&mail).unwrap();
         assert_eq!(store.service("mailpit-1").unwrap(), Some(mail.clone()));
@@ -132,6 +144,17 @@ mod tests {
             .unwrap();
         assert_eq!(store.services().unwrap().len(), 1);
         assert_eq!(store.services().unwrap()[0].version, "1.32.0");
+
+        // A service that runs in a project keeps its folder.
+        let reverb = ServiceRecord {
+            name: "reverb-shop".into(),
+            kind: "reverb".into(),
+            project: Some(std::path::PathBuf::from("/sites/shop")),
+            ..mail.clone()
+        };
+        store.put_service(&reverb).unwrap();
+        assert_eq!(store.service("reverb-shop").unwrap(), Some(reverb));
+        assert!(store.remove_service("reverb-shop").unwrap());
 
         assert!(store.remove_service("mailpit-1").unwrap());
         assert!(!store.remove_service("mailpit-1").unwrap());

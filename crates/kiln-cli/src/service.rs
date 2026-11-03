@@ -84,6 +84,29 @@ fn write_config(
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// How a service that runs in a project starts: in its folder, with the PHP Kiln picks there.
+fn project_launch(
+    store: &StateStore,
+    provider: &dyn ServiceProvider,
+    record: &ServiceRecord,
+) -> Result<kiln_services::Launch, String> {
+    let project = record
+        .project
+        .as_deref()
+        .ok_or("it has no project folder recorded")?;
+    if !project.is_dir() {
+        return Err(format!("{} is gone", project.display()));
+    }
+    let php = kiln_runtime::php_for_dir(store, project)
+        .map_err(|e| e.to_string())?
+        .php
+        .php
+        .ok_or_else(|| format!("Kiln has no PHP for {}", project.display()))?;
+    provider
+        .project_launch(project, &php.dir.join(kiln_php::PHP_EXE), &record.ports)
+        .ok_or_else(|| "it has no way to start".to_owned())
+}
+
 /// What the supervisor should run: every enabled instance.
 fn desired(store: &StateStore) -> Result<Pools, String> {
     let mut pools = Vec::new();
@@ -93,9 +116,21 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
         }
         let provider = provider_of(&record.kind)?;
         let dirs = dirs_of(&record)?;
-        // Rewritten before every start, so a changed port takes effect.
-        write_config(provider, &dirs, &record.ports)?;
-        let launch = provider.launch(&dirs, &record.ports);
+        let launch = if provider.runs_in_project() {
+            // The project's PHP as it is now (ADR 0047): a site pinned to another version
+            // brings its Reverb along. A project that can't run is skipped, not fatal.
+            match project_launch(store, provider, &record) {
+                Ok(launch) => launch,
+                Err(why) => {
+                    println!("Note: {} isn't started: {why}.", record.name);
+                    continue;
+                }
+            }
+        } else {
+            // Rewritten before every start, so a changed port takes effect.
+            write_config(provider, &dirs, &record.ports)?;
+            provider.launch(&dirs, &record.ports)
+        };
         let main = provider
             .ports()
             .first()
@@ -221,15 +256,19 @@ fn is_ours(holder: &kiln_coexist::Holder) -> bool {
     let Ok(bin) = services_dir().map(|s| s.join("bin")) else {
         return false;
     };
+    // A service that runs in a project runs Kiln's PHP (ADR 0047).
+    let php = kiln_state::default_local_dir().map(|local| local.join("php"));
     holder.image.as_ref().is_some_and(|image| {
-        if cfg!(windows) {
-            image
-                .to_string_lossy()
-                .to_lowercase()
-                .starts_with(&bin.to_string_lossy().to_lowercase())
-        } else {
-            image.starts_with(&bin)
-        }
+        std::iter::once(&bin).chain(php.as_ref()).any(|dir| {
+            if cfg!(windows) {
+                image
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .starts_with(&dir.to_string_lossy().to_lowercase())
+            } else {
+                image.starts_with(dir)
+            }
+        })
     })
 }
 
@@ -542,16 +581,78 @@ pub(crate) fn download(release: &kiln_services::Release) -> Result<std::path::Pa
         .map_err(|e| e.to_string())
 }
 
-/// `kiln service add <kind> [--version] [--name] [--port role=N]`. Returns the instance's name.
+/// For a service that runs in a project (Reverb, [ADR 0047]): the project folder, the version
+/// it has installed, and the label its instance is named after (its site's, else the
+/// folder's).
+///
+/// [ADR 0047]: ../../../docs/adr/0047-reverb.md
+fn in_project(
+    provider: &dyn ServiceProvider,
+    project: Option<PathBuf>,
+) -> Result<(PathBuf, String, String), String> {
+    let dir = match project {
+        Some(path) => path,
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let dir = std::fs::canonicalize(&dir)
+        .map(crate::web::strip_verbatim)
+        .map_err(|e| format!("cannot use {}: {e}", dir.display()))?;
+    let version = kiln_services::reverb::installed_version(&dir).ok_or_else(|| {
+        format!(
+            "{} has no laravel/reverb installed: run `composer require laravel/reverb` there (or `php artisan install:broadcasting --reverb`) first",
+            dir.display()
+        )
+    })?;
+    let found =
+        kiln_runtime::php_for_dir(&crate::web::open_store()?, &dir).map_err(|e| e.to_string())?;
+    if found.php.php.is_none() {
+        return Err(format!(
+            "{} runs on the project's PHP, and Kiln has none for it: `kiln php install` first",
+            provider.display_name()
+        ));
+    }
+    let label: String = found
+        .site
+        .as_deref()
+        .and_then(|host| host.split('.').next())
+        .map(str::to_owned)
+        .or_else(|| {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        })
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    Ok((dir, version, label))
+}
+
+/// `kiln service add <kind> [--version] [--name] [--port role=N] [--project]`. Returns the
+/// instance's name.
 pub fn add(
     kind: &str,
     version: Option<&str>,
     name: Option<&str>,
     ports: &[String],
+    project: Option<PathBuf>,
 ) -> Result<String, String> {
     let provider = provider_of(kind)?;
-    let release = release_of(provider, version)?;
-    let series = provider.series(release.version);
+    let (version, series, project) = if provider.runs_in_project() {
+        let (dir, version, label) = in_project(provider, project)?;
+        (version, label, Some(dir))
+    } else {
+        if project.is_some() {
+            return Err(format!(
+                "{kind} doesn't run in a project; --project is for reverb"
+            ));
+        }
+        let release = release_of(provider, version)?;
+        (
+            release.version.to_owned(),
+            provider.series(release.version),
+            None,
+        )
+    };
     let name = name.map_or_else(|| format!("{kind}-{series}"), str::to_owned);
     if name.is_empty()
         || !name
@@ -572,7 +673,7 @@ pub fn add(
         ));
     }
     let services = services_dir()?;
-    let dirs = InstanceDirs::new(&services, kind, release.version, &name);
+    let dirs = InstanceDirs::new(&services, kind, &version, &name);
     if dirs.data.exists() {
         return Err(format!(
             "{} already holds data from an earlier {name}; remove that folder or pick another --name",
@@ -586,9 +687,12 @@ pub fn add(
         &ports_of_others(&store, "")?,
     )?;
 
-    install_binaries(provider, release, &dirs.bin)?;
-    // Runs on this system? (A missing VC++ runtime or Linux library, ADR 0038 §6.)
-    provider.check(&dirs.bin)?;
+    if project.is_none() {
+        let release = release_of(provider, Some(&version))?;
+        install_binaries(provider, release, &dirs.bin)?;
+        // Runs on this system? (A missing VC++ runtime or Linux library, ADR 0038 §6.)
+        provider.check(&dirs.bin)?;
+    }
 
     write_config(provider, &dirs, &chosen)?;
     if let Err(e) = provider.init_data(&dirs, &chosen) {
@@ -599,9 +703,10 @@ pub fn add(
     let record = ServiceRecord {
         name: name.clone(),
         kind: kind.to_owned(),
-        version: release.version.to_owned(),
+        version: version.clone(),
         ports: chosen,
         enabled: true,
+        project: project.clone(),
     };
     store.put_service(&record).map_err(|e| e.to_string())?;
     if let Err(e) = apply(&store) {
@@ -610,15 +715,20 @@ pub fn add(
         ));
     }
     println!(
-        "{} {} is running as {name}: {}.",
+        "{} {version} is running as {name}: {}.",
         provider.display_name(),
-        release.version,
         describe_ports(provider, &record.ports)
     );
-    println!(
-        "It listens on this computer only. Its data is in {}.",
-        dirs.data.display()
-    );
+    match &project {
+        Some(dir) => println!(
+            "It listens on this computer only, and runs in {} with its PHP.",
+            dir.display()
+        ),
+        None => println!(
+            "It listens on this computer only. Its data is in {}.",
+            dirs.data.display()
+        ),
+    }
     // Its web UI as a site: a convenience, so a failure is reported, not fatal.
     if let Err(e) = attach_ui(provider, &record) {
         println!("Note: its web UI wasn't served as a site: {e}");

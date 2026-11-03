@@ -88,7 +88,32 @@ fn instance_for(
         (Some(port), Some(main)) => vec![format!("{}={port}", main.role)],
         _ => Vec::new(),
     };
-    crate::service::add(provider.kind(), Some(release.version), None, &ports)
+    crate::service::add(provider.kind(), Some(release.version), None, &ports, None)
+}
+
+/// The instance of a service that runs in a project (Reverb): this project's, else a new one.
+fn project_instance(
+    provider: &dyn ServiceProvider,
+    want: &ServiceWant,
+    dir: &Path,
+) -> Result<String, String> {
+    let dir = std::fs::canonicalize(dir)
+        .map(crate::web::strip_verbatim)
+        .map_err(|e| format!("cannot use {}: {e}", dir.display()))?;
+    let existing = crate::web::open_store()?
+        .services()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.kind == provider.kind() && s.project.as_deref() == Some(dir.as_path()));
+    if let Some(record) = existing {
+        println!("{}: using {}.", provider.kind(), record.name);
+        return Ok(record.name);
+    }
+    let ports: Vec<String> = match (want.port, provider.ports().first()) {
+        (Some(port), Some(main)) => vec![format!("{}={port}", main.role)],
+        _ => Vec::new(),
+    };
+    crate::service::add(provider.kind(), None, None, &ports, Some(dir))
 }
 
 /// `kiln services up [--project <folder>] [--yes]`. Without a project that lists services,
@@ -115,8 +140,12 @@ pub fn up(project: Option<PathBuf>, yes: bool) -> Result<(), String> {
     let mut chosen: Vec<(String, &'static dyn ServiceProvider)> = Vec::new();
     for want in &wants {
         let provider = crate::service::provider_of(kind_of(&want.kind))?;
-        let release = release_for(provider, want)?;
-        chosen.push((instance_for(provider, want, release)?, provider));
+        let name = if provider.runs_in_project() {
+            project_instance(provider, want, &dir)?
+        } else {
+            instance_for(provider, want, release_for(provider, want)?)?
+        };
+        chosen.push((name, provider));
     }
     let names: Vec<String> = chosen.iter().map(|(name, _)| name.clone()).collect();
     crate::service::start(&names)?;

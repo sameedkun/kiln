@@ -285,6 +285,9 @@ enum ServiceAction {
         /// A port by role, e.g. smtp=2525 (default: the usual one, or the next free one).
         #[arg(long = "port", value_name = "ROLE=PORT")]
         ports: Vec<String>,
+        /// For reverb: the Laravel project it runs in (default: the current folder).
+        #[arg(long)]
+        project: Option<PathBuf>,
     },
     /// List the services, their ports and whether they run.
     List,
@@ -826,7 +829,8 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
             version,
             name,
             ports,
-        } => service::add(&kind, version.as_deref(), name.as_deref(), &ports).map(|_| ()),
+            project,
+        } => service::add(&kind, version.as_deref(), name.as_deref(), &ports, project).map(|_| ()),
         ServiceAction::List => service::list(),
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),

@@ -75,6 +75,8 @@ const MIGRATIONS: &[&str] = &[
          enabled    INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),  -- should run
          created_ms INTEGER NOT NULL
      ) STRICT;",
+    // v8: a service that runs in a project, such as Reverb (ADR 0047): its folder.
+    "ALTER TABLE services ADD COLUMN project TEXT;",
 ];
 
 /// Schema version this build creates and understands.

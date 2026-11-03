@@ -138,7 +138,8 @@ pub fn use_instance(
     let record = crate::service::record_of(&store, name)?;
     let provider = crate::service::provider_of(&record.kind)?;
     drop(store);
-    let (project, env) = project_env(project)?;
+    // A service that runs in a project wires that project by default (ADR 0047).
+    let (project, env) = project_env(project.or_else(|| record.project.clone()))?;
     if provider.env_keys(&record.ports).is_empty() {
         return Err(format!(
             "{} has no .env keys for Kiln to set",
@@ -236,6 +237,7 @@ mod tests {
             version: "11.8.9".into(),
             ports: [("mysql".to_owned(), 3307)].into(),
             enabled: true,
+            project: None,
         };
         let keys = keys_for(mysql, &record, dir.path(), Some("shop"), &[]);
         let names: Vec<&str> = keys.iter().map(|(k, _)| k.as_str()).collect();
