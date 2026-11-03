@@ -263,6 +263,14 @@ pub trait ServiceProvider: Sync {
         &[]
     }
 
+    /// A web UI to serve as a Kiln site ([ADR 0044]): the site's name (`mailpit` for
+    /// `mailpit.test`) and the port role it listens on. None by default.
+    ///
+    /// [ADR 0044]: ../../../docs/adr/0044-service-web-uis.md
+    fn web_ui(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
     /// The client to open on an instance (`kiln db`), if there is one.
     fn client(
         &self,
@@ -400,6 +408,28 @@ mod contract {
                 assert!(["windows", "linux", "macos"].contains(&r.os), "{r:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_web_ui_is_on_one_of_its_ports_under_a_plain_site_name() {
+        for provider in providers() {
+            if let Some((site, role)) = provider.web_ui() {
+                assert!(
+                    provider.ports().iter().any(|p| p.role == role),
+                    "{}: no port {role}",
+                    provider.kind()
+                );
+                assert!(
+                    !site.is_empty() && site.bytes().all(|b| b.is_ascii_lowercase()),
+                    "{}: {site}",
+                    provider.kind()
+                );
+            }
+        }
+        assert_eq!(
+            provider("mailpit").and_then(ServiceProvider::web_ui),
+            Some(("mailpit", "http"))
+        );
     }
 
     #[test]

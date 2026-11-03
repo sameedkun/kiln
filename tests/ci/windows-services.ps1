@@ -39,6 +39,7 @@ Check 'service add mailpit: downloaded, checked, running on loopback' {
     Expect 'running as mailpit-1' $out
     $script:smtp = PortOf $out 'smtp'; $script:http = PortOf $out 'http'
     if (-not $script:smtp -or -not $script:http) { throw "no ports in:`n$out" }
+    Expect "mailpit.test proxies to http://127.0.0.1:$($script:http)" $out   # its inbox as a site (ADR 0044)
 }
 function MailTotal { (Invoke-RestMethod "http://127.0.0.1:$($script:http)/api/v1/messages" -TimeoutSec 5).total }
 Check 'a mail sent over SMTP is caught (Mailpit''s API counts 1)' {
@@ -59,7 +60,9 @@ Say '== Ports next to other programs (ADR 0037)'
 Check 'a second instance moves off the first one''s ports and says whose they are' {
     $out = Kiln service add mailpit --name mail-two
     Expect "used by Kiln's mailpit-1" $out
+    Expect 'mailpit.test is already taken' $out
     Kiln service remove mail-two --delete-data | Out-Null
+    if ((Kiln sites) -notmatch 'mailpit.test') { throw 'removing mail-two took mailpit-1''s site' }
 }
 Kiln service stop mailpit-1 | Out-Null
 $squatter = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-Command',
@@ -221,6 +224,20 @@ Check 'Adminer lists Kiln''s instances and logs in to PostgreSQL without a passw
         $error = [regex]::Match($page, "class='error'>(.*?)</div>").Groups[1].Value
         throw "no kiln_ci; heading: $heading; error: $error"
     }
+}
+# Kiln's web server answers on the port in the tools' URL (80, or the next free one).
+function SiteBase($name) { $uri = [Uri] $script:pma; "http://$name.test:$($uri.Port)/" }
+Check 'mailpit.test serves the inbox through Kiln''s web server, with its mail' {
+    $page = Page (SiteBase 'mailpit')
+    Expect 'Mailpit' $page
+    $api = Page "$(SiteBase 'mailpit')api/v1/messages" | ConvertFrom-Json
+    if ($api.total -ne 1) { throw "the inbox through mailpit.test has $($api.total) message(s)" }
+}
+Check 'service port mailpit-1 http=8125: mailpit.test follows it' {
+    Expect 'mailpit.test now proxies to http://127.0.0.1:8125' (Kiln service port mailpit-1 http=8125)
+    $script:http = 8125
+    $api = Page "$(SiteBase 'mailpit')api/v1/messages" | ConvertFrom-Json
+    if ($api.total -ne 1) { throw "the inbox through mailpit.test has $($api.total) message(s)" }
 }
 Say '== Redis (ADR 0041)'
 # A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark

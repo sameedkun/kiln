@@ -90,6 +90,11 @@ impl ServiceProvider for Mailpit {
         "kiln-mailpit"
     }
 
+    /// The inbox, as `mailpit.test` (ADR 0044).
+    fn web_ui(&self) -> Option<(&'static str, &'static str)> {
+        Some(("mailpit", HTTP.role))
+    }
+
     fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
         // Mailpit creates its database on first start.
         fs::create_dir_all(&dirs.data)

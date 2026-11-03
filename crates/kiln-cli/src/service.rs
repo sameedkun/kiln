@@ -372,6 +372,7 @@ pub fn port(name: &str, values: &[String]) -> Result<(), String> {
             provider.ports().first().map_or("port", |p| p.role)
         ));
     }
+    let ui_before = ui_target(provider, &record.ports);
     let others = ports_of_others(&store, name)?;
     let listeners = crate::coexist::Listeners::now();
     for (role, &port) in &asked {
@@ -403,6 +404,13 @@ pub fn port(name: &str, values: &[String]) -> Result<(), String> {
     store.put_service(&record).map_err(|e| e.to_string())?;
     if record.enabled {
         apply(&store)?;
+    }
+    // A web UI site that followed the old port follows the new one.
+    if let (Some((site, old)), Some((_, new))) = (ui_before, ui_target(provider, &record.ports))
+        && old != new
+        && let Some(proxy) = ui_proxy(site, &old)?
+    {
+        crate::proxy::proxy(site, &new, proxy.secure)?;
     }
     println!(
         "{name} now uses {}{}.",
@@ -611,6 +619,10 @@ pub fn add(
         "It listens on this computer only. Its data is in {}.",
         dirs.data.display()
     );
+    // Its web UI as a site: a convenience, so a failure is reported, not fatal.
+    if let Err(e) = attach_ui(provider, &record) {
+        println!("Note: its web UI wasn't served as a site: {e}");
+    }
     Ok(())
 }
 
@@ -836,6 +848,13 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
         }
     }
     println!("Removed {name}.");
+    // Its web UI site goes with it, if it was Kiln's for this instance.
+    if let Ok(provider) = provider_of(&record.kind)
+        && let Some((site, target)) = ui_target(provider, &record.ports)
+        && ui_proxy(site, &target)?.is_some()
+    {
+        crate::proxy::unproxy(site)?;
+    }
     Ok(())
 }
 
@@ -928,6 +947,63 @@ pub(crate) fn data_folders() -> Vec<(PathBuf, u64)> {
 
 fn has_files(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// Where `provider`'s web UI is for an instance on `ports`, and its site name: the
+/// proxy site Kiln serves it as ([ADR 0044]).
+///
+/// [ADR 0044]: ../../../docs/adr/0044-service-web-uis.md
+fn ui_target(
+    provider: &dyn ServiceProvider,
+    ports: &BTreeMap<String, u16>,
+) -> Option<(&'static str, String)> {
+    let (site, role) = provider.web_ui()?;
+    let port = ports.get(role)?;
+    Some((site, format!("http://127.0.0.1:{port}")))
+}
+
+/// The proxy `<site>.test`, if it forwards to `target`: one Kiln made for this instance.
+fn ui_proxy(site: &str, target: &str) -> Result<Option<kiln_state::ProxyRecord>, String> {
+    let host = crate::web::host_name(site)?;
+    let store = crate::web::open_store()?;
+    let normal = |t: &str| kiln_web::ProxyTarget::parse(t).map(|t| t.to_string()).ok();
+    Ok(store
+        .proxy(host.as_str())
+        .map_err(|e| e.to_string())?
+        .filter(|p| normal(&p.target).is_some() && normal(&p.target) == normal(target)))
+}
+
+/// After `kiln service add`: serves the instance's web UI as `<site>.test`, over HTTPS when
+/// Kiln's CA is set up, unless that name is taken by a site or another proxy.
+fn attach_ui(provider: &dyn ServiceProvider, record: &ServiceRecord) -> Result<(), String> {
+    let Some((site, target)) = ui_target(provider, &record.ports) else {
+        return Ok(());
+    };
+    let host = crate::web::host_name(site)?;
+    let store = crate::web::open_store()?;
+    let taken = store
+        .site(host.as_str())
+        .map_err(|e| e.to_string())?
+        .is_some()
+        || store
+            .proxy(host.as_str())
+            .map_err(|e| e.to_string())?
+            .is_some();
+    drop(store);
+    if taken {
+        println!(
+            "Its web UI is at {target}; {host} is already taken, so `kiln proxy <name> {target}` serves it under another name."
+        );
+        return Ok(());
+    }
+    let secure = crate::web::ca_files().is_ok();
+    crate::proxy::proxy(site, &target, secure)?;
+    if !secure {
+        println!(
+            "It's served over HTTP until Kiln's CA is set up: `kiln ca init`, then `kiln secure {site}`."
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
