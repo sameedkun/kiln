@@ -895,6 +895,7 @@ dependencies = [
  "flate2",
  "kiln-sys",
  "lzma-rust2",
+ "serde_json",
  "sha2",
  "tar",
  "tempfile",
