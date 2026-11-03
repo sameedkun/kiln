@@ -505,10 +505,14 @@ Check 'kiln services up in the project: reuses, adds, starts and wires what kiln
 }
 
 Say '== Laravel Reverb in the project (ADR 0047)'
-Check 'composer require laravel/reverb' {
+Check 'composer require laravel/reverb -W' {
     Push-Location $shop
-    try { Php "$env:LOCALAPPDATA\Kiln\bin\composer.phar" require laravel/reverb --no-interaction }
+    # -W: Laravel 13 locks guzzlehttp/psr7 3.x, and Reverb 1.12 still needs 2.x (ADR 0047).
+    try { $out = Php "$env:LOCALAPPDATA\Kiln\bin\composer.phar" require laravel/reverb -W --no-interaction }
     finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        throw (($out -split "`n" | Where-Object { $_ -match 'Problem|^\s+- ' } | Select-Object -First 8) -join "`n")
+    }
 }
 $script:reverb = 0
 Check 'kiln service add reverb --project shop: php artisan reverb:start, kept up by Kiln, on loopback' {
@@ -543,10 +547,10 @@ require __DIR__ . '/vendor/autoload.php';
 $app = require __DIR__ . '/bootstrap/app.php';
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 Illuminate\Support\Facades\Broadcast::connection('reverb')->broadcast(['kiln'], 'hello', ['from' => 'ci']);
-echo "broadcast\n";
+echo "kiln-broadcast-sent\n";
 '@
     Push-Location $shop
-    try { Expect 'broadcast' (Php kiln-broadcast.php) } finally { Pop-Location }
+    try { Expect 'kiln-broadcast-sent' (Php kiln-broadcast.php) } finally { Pop-Location }
 }
 Check 'service restart reverb-shop: it comes back' {
     Kiln service restart reverb-shop | Out-Null

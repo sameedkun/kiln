@@ -599,7 +599,7 @@ fn in_project(
         .map_err(|e| format!("cannot use {}: {e}", dir.display()))?;
     let version = kiln_services::reverb::installed_version(&dir).ok_or_else(|| {
         format!(
-            "{} has no laravel/reverb installed: run `composer require laravel/reverb` there (or `php artisan install:broadcasting --reverb`) first",
+            "{} has no laravel/reverb installed: run `composer require laravel/reverb -W` there first (-W lets Composer adjust packages it already locked, such as guzzlehttp/psr7 for Laravel 13), then `php artisan reverb:install` for its keys",
             dir.display()
         )
     })?;
