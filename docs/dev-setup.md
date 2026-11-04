@@ -88,6 +88,9 @@ cargo run -p kiln-cli -- plan hosts blog shop
 
 ## Linux test VM (Ubuntu 24.04 Desktop)
 
+> The test VMs were deleted on 2026-11-04 ([ADR 0039](adr/0039-windows-first-and-services-catalog.md),
+> amendment). These steps rebuild one if it's ever needed again.
+
 The reference Linux system for P1-04 and P1-15: a real desktop with NetworkManager,
 systemd-resolved, polkit and Firefox, from Canonical's Hyper-V image.
 
@@ -131,6 +134,9 @@ More VM notes:
 
 ## Integration tests in VMs (P1-15)
 
+> No VMs exist now: routine runs are on GitHub Actions (below), and the by-hand Herd check runs
+> on a developer machine with Herd. The scripts stay for rebuilding a VM.
+
 [ADR 0024](adr/0024-integration-test-vms.md): snapshot the machine, run a full Kiln session,
 `kiln uninstall --yes`, snapshot again, compare. Run them by hand before a release; CI can't
 host these VMs.
@@ -163,8 +169,8 @@ host these VMs.
   `tests/ci/windows-services.ps1 -Kiln <kiln.exe>` on `windows-latest` on every push to
   `main`: services, ports, data and uninstall, with the VM's snapshot before and after. Its
   log and snapshots are kept as the run's `windows-scenario` artifact. There's no desktop
-  and no Herd, so Herd coexistence and the certificate dialog stay with the VM, checked by
-  hand before a release.
+  and no Herd, so Herd coexistence and the certificate dialog are checked by hand before a
+  release, on a developer machine that runs Herd.
 - **Windows:** `tests/vm/windows/run.ps1 -Bin <folder>` from an elevated PowerShell (Hyper-V).
   - Build the binaries first, with the C runtime linked in:
     `$env:RUSTFLAGS='-C target-feature=+crt-static'; cargo build --release --target-dir target\vm-win`.

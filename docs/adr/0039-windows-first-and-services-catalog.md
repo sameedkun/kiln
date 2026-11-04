@@ -1,6 +1,6 @@
 # 0039. Windows first: Linux on hold, a Herd-like services catalog, tests on CI
 
-- **Status:** accepted
+- **Status:** accepted; amended 2026-11-04: the test VMs are deleted, and the by-hand Herd check runs on a developer machine (see the end)
 - **Date:** 2026-11-02
 - **Task:** Phase 3 re-plan · Amends [ADR 0007](0007-platform-delivery-order.md), [ADR 0035](0035-services.md) · Changes how [ADR 0024](0024-integration-test-vms.md)'s scenarios run
 
@@ -88,3 +88,15 @@ After P3-04, four facts changed the plan:
   Windows. Kept as a possible opt-in for services with no Windows build.
 - **Only official Windows builds, so no Redis.** Rejected. Redis is what Laravel projects
   expect, and the user asked for it.
+
+## Amendment (2026-11-04): no test VMs
+
+The three Hyper-V VMs (`kiln-win11`, `kiln-ubuntu`, `kiln-spike02`, about 124 GB) were
+deleted at the user's request.
+
+- **Tests run on GitHub Actions' Windows runners** (P3-13), as decided above.
+- **Herd coexistence and Windows' certificate dialog** need a desktop session and Herd.
+  They are checked by hand before a release on a developer's own machine, which runs Laravel
+  Herd, instead of in `kiln-win11`.
+- The VM scripts (`tests/vm/…`) stay in the repository. `new-vm.ps1` and the setup scripts
+  can rebuild a VM if one is ever needed again, for example when Linux resumes.

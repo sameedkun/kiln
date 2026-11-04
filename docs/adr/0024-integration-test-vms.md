@@ -1,6 +1,6 @@
 # 0024. Integration tests in VMs: snapshot, full session, uninstall, compare; Herd alongside
 
-- **Status:** accepted
+- **Status:** accepted; its VMs were deleted on 2026-11-04 ([ADR 0039](0039-windows-first-and-services-catalog.md), amendment): routine runs are on GitHub Actions, and the scripts remain to rebuild a VM
 - **Date:** 2026-10-23
 - **Task:** P1-15 · Builds on [ADR 0018](0018-history-undo-uninstall.md), [0019](0019-coexistence.md), [0020](0020-linux-dns-and-privilege.md)–[0023](0023-linux-shims-and-path.md); lessons [I-34](../issues.md#i-34)–[I-36](../issues.md#i-36)
 
