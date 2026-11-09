@@ -37,7 +37,7 @@ thiserror = "2"
 proptest = "1"
 tempfile = "3"
 # Bundled SQLite: one known version on every platform, no system library needed.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # Helper message authentication (ADR 0009); RustCrypto, MIT/Apache-2.0.
 hmac = "0.13"
 sha2 = "0.11"
@@ -60,7 +60,7 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 tar = { version = "0.4", default-features = false }
 # MySQL's Linux archives (.tar.xz, ADR 0038): pure-Rust xz decoding.
-lzma-rust2 = { version = "=0.21.0", default-features = false, features = ["std", "xz", "optimization"] }
+lzma-rust2 = { version = "=0.25.0", default-features = false, features = ["std", "xz", "optimization"] }
 # Linux: the Secret Service (ADR 0021) over D-Bus: a client only, driven by zbus::block_on.
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 futures-core = { version = "0.3", default-features = false }
