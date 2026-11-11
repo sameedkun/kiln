@@ -1,13 +1,13 @@
 # Progress
 
-**Last updated:** 2026-11-11 · **Current phase:** **Phase 3 in progress** (14 of 16 tasks done; ADRs 0035–0048; Windows first, Linux on hold (ADR 0039); next: P3-11) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-11 · **Current phase:** **Phase 3 in progress** (15 of 16 tasks done; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); next: P3-12, the exit run) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
 | Area | State |
 |---|---|
 | Research (how existing tools work, feature parity, risks) | **done**: private reconnaissance package, outside this repo |
-| Architecture and key decisions | **done**: ADRs 0001–0048 accepted |
+| Architecture and key decisions | **done**: ADRs 0001–0049 accepted |
 | Local CA (`kiln-pki`) | **done** (Windows): `.test`-only root, DPAPI-protected key, 30-day intermediate; `kiln ca init/info/trust`; verified on the dev machine: trust → in `CurrentUser\Root` → undo, store identical to baseline ([I-43](issues.md#i-43)) |
 | Privileged helper (`kiln-helper`, Windows) | **done**: UAC per batch, private pipe, HMAC-signed messages, fixed operations (protocol v2) |
 | Hosts DNS on Windows (`HostsBlockOp`) | **done**: `kiln hosts set` / `clear` and `kiln undo`, journaled, one UAC prompt per change; verified on the dev machine: set → resolve → undo, byte-identical ([I-42](issues.md#i-42)) |
@@ -1493,8 +1493,8 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-08 | `.env` wiring (`DB_*`, `REDIS_*`, `MAIL_*`) with byte-exact undo | **done** | ADR 0035 §9 |
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | **done** | ADR 0046; CI scenario 65 checks |
 | P3-10 | `kilnd` and services | **done** | ADR 0048; CI scenario 75 checks |
-| P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | next | ADR 0035 §7 |
-| P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | planned | ADR 0039 |
+| P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | **done** | ADR 0049; CI scenario 82 checks |
+| P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | next | ADR 0039 |
 | P3-13 | Windows scenario on GitHub Actions | **done** | ADR 0039 §3; `scenario.yml`, `tests/ci/windows-services.ps1`; 17 checks + before/after, green in about 5 minutes |
 | P3-14 | Meilisearch, RustFS, MongoDB | **done** | ADR 0042; mongosh as a companion; CI scenario 45 checks |
 | P3-15 | phpMyAdmin and Adminer as Kiln sites | **done** | ADR 0043; `kiln tool add`; CI scenario 52 checks |
@@ -1793,6 +1793,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-03 | **P3-16 done:** Laravel Reverb ([ADR 0047](adr/0047-reverb.md)), the first service that runs in a project. Providers gain `runs_in_project()` (no releases) and `project_launch(project, php, ports)`; the contract tests check those on their own terms. State schema v8 adds the instance's project folder. `kiln service add reverb [--project]` names the instance after the site (`reverb-shop`), takes the version from `composer.lock`, and runs `php artisan reverb:start --host=127.0.0.1 --port=<port>` with the PHP Kiln picks for that folder, under the services supervisor (without admin rights, restarted on a crash, skipped with a note if the project can't run). `kiln env use reverb-shop` wires its own project: `BROADCAST_CONNECTION=reverb`, `REVERB_SERVER_*` and `REVERB_HOST/PORT/SCHEME` on 127.0.0.1, never the app's keys. `[services]` and `kiln import herd` take `reverb`. Found on the way: Reverb needs `composer require laravel/reverb -W` on Laravel 13 ([I-84](issues.md#i-84)). CI: a WebSocket handshake, a signed broadcast from Laravel, a restart: 71 checks, green. Next: P3-10 (`kilnd` and services). |
 | 2026-11-04 | **Test VMs deleted** at the user's request: `kiln-win11`, `kiln-ubuntu` and `kiln-spike02` (about 124 GB on E:). Tests run on GitHub Actions (P3-13); Herd coexistence and the certificate dialog are checked by hand before a release on a developer machine with Herd. ADR 0039 amended, ADR 0024 and `dev-setup.md` updated; the VM scripts stay for rebuilding one. |
 | 2026-11-11 | **P3-10 done:** `kilnd` and services ([ADR 0048](adr/0048-kilnd-and-services.md)). The watchdog checks the services supervisor on each pass, with its own backoff: a stale PID file (a crash or a reboot) makes it run `kiln services resume`, a new hidden command that starts the supervisor again with the instances that should run and leaves stopped ones stopped; restarts are logged, counted and published as `services.repaired`. The API gains `services.status` (supervisor and instances, read from Kiln's state) and `service.start/stop/restart` (the name is checked against the state first, then the CLI does it). `kiln daemon status` shows how many services answer and how many restarts the daemon made. Also: `rusqlite` 0.41 for RUSTSEC-2026-0459 in the bundled SQLite ([I-85](issues.md#i-85)). CI kills the services supervisor and the daemon brings all 12 instances back: 75 checks, green. Next: P3-11 (data safety). |
+| 2026-11-11 | **P3-11 done:** data safety ([ADR 0049](adr/0049-data-safety.md)). `kiln db dump <instance> [database] [--output]` writes portable SQL with the service's own tool (`mysqldump`/`mariadb-dump` with a consistent snapshot, routines, events and triggers; `pg_dump --no-owner` for one database, `pg_dumpall` for the server), never over an existing file; `kiln db restore <instance> <file> [database]` loads it through the client, making the database if missing, with `psql` stopping at the first error. `kiln db <instance>` still opens the client. `kiln uninstall --keep-data` (exclusive with `--delete-data`) copies each data folder to `~/Kiln data (<date>)/<instance>` after the services stop and before anything is undone, checked by size; a failed copy stops uninstall with nothing changed. CI dumps the Laravel app's MySQL database and restores it under a new name with the same rows, does the same on PostgreSQL, and uninstalls with `--keep-data`: 82 checks, green on the first run. Next: P3-12, Phase 3's exit run. |
 
 ## How to update this file
 
