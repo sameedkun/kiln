@@ -826,6 +826,28 @@ fn set_enabled(names: &[String], enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// `kiln services resume` ([ADR 0048]): the enabled instances started again under a new
+/// supervisor, after the old one exited on its own. Nothing is enabled or disabled.
+///
+/// [ADR 0048]: ../../../docs/adr/0048-kilnd-and-services.md
+pub fn resume() -> Result<(), String> {
+    let store = crate::web::open_store()?;
+    let running: Vec<String> = store
+        .services()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| s.enabled)
+        .map(|s| s.name)
+        .collect();
+    apply(&store)?;
+    if running.is_empty() {
+        println!("No services should be running.");
+    } else {
+        println!("Running again: {}.", running.join(", "));
+    }
+    Ok(())
+}
+
 /// `kiln service start [name…]`; all of them without names (`kiln services up`).
 pub fn start(names: &[String]) -> Result<(), String> {
     set_enabled(names, true)

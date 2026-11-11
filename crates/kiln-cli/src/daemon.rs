@@ -194,6 +194,30 @@ pub fn status() -> Result<(), String> {
     if repairs > 0 {
         println!("  Restarts by the daemon: {repairs}");
     }
+    // Services (ADR 0048): their supervisor, and how many instances answer.
+    if let Ok(services) = call(&mut client, "services.status") {
+        let instances = services["instances"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let wanted = instances.iter().filter(|i| i["enabled"] == true).count();
+        let answering = instances.iter().filter(|i| i["answers"] == true).count();
+        match services["supervisor"]["state"].as_str() {
+            Some("running") => println!(
+                "  Services: {answering} of {wanted} running (supervisor PID {})",
+                services["supervisor"]["pid"]
+            ),
+            Some("exited") => {
+                println!("  Services: their supervisor exited on its own; the daemon restarts it");
+            }
+            _ if instances.is_empty() => println!("  Services: none"),
+            _ => println!("  Services: stopped"),
+        }
+    }
+    let service_repairs = status["service_repairs"].as_array().map_or(0, Vec::len);
+    if service_repairs > 0 {
+        println!("  Services restarted by the daemon: {service_repairs}");
+    }
     let ca = &status["ca"];
     if let Some(days) = ca["intermediate_days_left"].as_i64() {
         println!(

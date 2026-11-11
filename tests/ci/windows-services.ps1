@@ -557,6 +557,41 @@ Check 'service restart reverb-shop: it comes back' {
     Expect '101 Switching Protocols' (Handshake)
 }
 
+Say '== kilnd and services (ADR 0048)'
+Check 'daemon start; services.status lists the instances through the API' {
+    Kiln daemon start | Out-Null
+    $out = Kiln daemon call services.status
+    foreach ($name in 'mailpit-1', 'mysql-8.4', 'reverb-shop') { Expect "`"$name`"" $out }
+    Expect '"running"' $out
+}
+Check 'service.restart through the API (the CLI does it, under its lock)' {
+    Expect '"ok": true' (Kiln daemon call service.restart '{\"name\":\"mailpit-1\"}')
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the restart" }
+    $refused = (& $Kiln daemon call service.stop '{\"name\":\"--everything\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no service called') { throw "an unknown name went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'the services supervisor crashes: the daemon brings every service back' {
+    $supervisor = Get-CimInstance Win32_Process -Filter "Name = 'kiln-supervisor.exe'" |
+        Where-Object { $_.CommandLine -match 'services[\/]supervisor' }
+    if (-not $supervisor) { throw 'no services supervisor running' }
+    Stop-Process -Id $supervisor.ProcessId -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers: the crash took nothing down'
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Seconds 3
+        $back = Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue
+    } until ($back -or (Get-Date) -gt $deadline)
+    if (-not $back) { throw "not back after 90 s:`n$(Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 15 | Out-String)" }
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+    $status = Kiln daemon status
+    Expect 'Services restarted by the daemon: 1' $status
+}
+Check 'daemon stop' { Kiln daemon stop | Out-Null }
+
 Check 'servers.json follows the services: instances added after the tools are listed' {
     $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
     foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {

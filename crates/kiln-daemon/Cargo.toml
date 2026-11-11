@@ -15,6 +15,7 @@ path = "src/main.rs"
 kiln-pki.workspace = true
 kiln-state.workspace = true
 kiln-supervisor.workspace = true
+kiln-services.workspace = true
 kiln-sys.workspace = true
 kiln-web.workspace = true
 serde.workspace = true

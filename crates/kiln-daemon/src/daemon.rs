@@ -34,6 +34,8 @@ pub struct Paths {
     pub log: PathBuf,
     /// Kiln's CA (`<state>/ca`).
     pub ca: PathBuf,
+    /// Kiln's state folder, with its database.
+    pub state: PathBuf,
 }
 
 impl Paths {
@@ -45,6 +47,7 @@ impl Paths {
             lock: state.join("kilnd.lock"),
             log: local.join("logs").join("kilnd.log"),
             ca: state.join("ca"),
+            state: state.to_path_buf(),
         }
     }
 
@@ -155,6 +158,13 @@ pub fn repair_for(caddy: &ProcStatus, supervisor: &ProcStatus) -> Repair {
     }
 }
 
+/// Whether the services supervisor exited without being stopped through Kiln (a crash or a
+/// reboot): a clean stop removes its PID file, so a stale one is the only case to repair.
+#[must_use]
+pub fn services_need_repair(state: &ProcStatus) -> bool {
+    matches!(state, ProcStatus::Stale { .. })
+}
+
 /// Waits between repairs: none for the first, then longer each time, reset after a healthy
 /// stretch, so a server that crashes at once doesn't restart in a tight loop.
 #[derive(Debug, Default)]
@@ -204,6 +214,10 @@ pub struct Daemon {
     started: SystemTime,
     shutdown: Mutex<Option<Sender<()>>>,
     repairs: Mutex<Vec<Value>>,
+    /// Restarts of the services supervisor ([ADR 0048]).
+    ///
+    /// [ADR 0048]: ../../../docs/adr/0048-kilnd-and-services.md
+    service_repairs: Mutex<Vec<Value>>,
     /// When the intermediate was last checked, and the renewals made since the daemon started.
     ca_checked: Mutex<Option<Instant>>,
     renewals: Mutex<Vec<Value>>,
@@ -219,6 +233,7 @@ impl Daemon {
             started: SystemTime::now(),
             shutdown: Mutex::new(Some(shutdown)),
             repairs: Mutex::new(Vec::new()),
+            service_repairs: Mutex::new(Vec::new()),
             ca_checked: Mutex::new(None),
             renewals: Mutex::new(Vec::new()),
         }
@@ -230,6 +245,10 @@ impl Daemon {
         "daemon.status",
         "daemon.shutdown",
         "web.status",
+        "services.status",
+        "service.start",
+        "service.stop",
+        "service.restart",
         "ca.status",
         "ca.renew",
         "events.subscribe",
@@ -400,6 +419,132 @@ impl Daemon {
         self.events.publish("web.repaired", record);
     }
 
+    fn services_supervisor(&self) -> io::Result<kiln_supervisor::SupervisorHandle> {
+        Ok(kiln_supervisor::SupervisorHandle::for_programs(
+            kiln_supervisor::handle::default_exe()?,
+            self.paths.local.join("services").join("supervisor"),
+            "services",
+            Duration::from_mins(1),
+        ))
+    }
+
+    /// The services supervisor's state ([ADR 0048] §1).
+    ///
+    /// [ADR 0048]: ../../../docs/adr/0048-kilnd-and-services.md
+    pub fn services_state(&self) -> Result<ProcStatus, String> {
+        self.services_supervisor()
+            .and_then(|s| s.status())
+            .map_err(|e| e.to_string())
+    }
+
+    /// One watchdog pass for services: if their supervisor exited on its own (a crash or a
+    /// reboot), `kiln services resume` brings back what was running. One that was stopped
+    /// through Kiln, or never started, stays as it is.
+    pub fn watch_services(&self, backoff: &mut Backoff, now: Instant) {
+        let state = match self.services_state() {
+            Ok(state) => state,
+            Err(e) => {
+                self.log.line(&format!(
+                    "watchdog: cannot read the services supervisor's state: {e}"
+                ));
+                return;
+            }
+        };
+        if !services_need_repair(&state) {
+            backoff.healthy(now);
+            return;
+        }
+        if !backoff.try_repair(now) {
+            return;
+        }
+        self.log.line(&format!(
+            "watchdog: the services supervisor exited on its own ({state:?}); running `kiln services resume` (attempt {})",
+            backoff.attempts()
+        ));
+        let record = self.run_and_record(&["services", "resume"]);
+        self.service_repairs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record.clone());
+        self.events.publish("services.repaired", record);
+    }
+
+    /// Runs `kiln <args>`, logs what it printed, and returns a record of the run.
+    fn run_and_record(&self, args: &[&str]) -> Value {
+        let outcome = run_kiln(args);
+        match &outcome {
+            Ok(output) | Err(output) => {
+                for line in output.lines() {
+                    self.log.line(&format!("  {line}"));
+                }
+            }
+        }
+        json!({
+            "at": time::OffsetDateTime::now_utc().to_string(),
+            "command": format!("kiln {}", args.join(" ")),
+            "ok": outcome.is_ok(),
+        })
+    }
+
+    /// The supervisor's state and every instance, from Kiln's state: name, kind, version,
+    /// ports, whether it should run and whether its main port answers.
+    fn services_status(&self) -> Result<Value, String> {
+        let supervisor = self.services_state()?;
+        let (store, _) =
+            kiln_state::StateStore::open_dir(&self.paths.state).map_err(|e| e.to_string())?;
+        let instances: Vec<Value> = store
+            .services()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|record| {
+                let main = kiln_services::provider(&record.kind)
+                    .and_then(|p| p.ports().first())
+                    .and_then(|role| record.ports.get(role.role).copied());
+                let answers = main.is_some_and(|port| {
+                    std::net::TcpStream::connect_timeout(
+                        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+                        Duration::from_millis(300),
+                    )
+                    .is_ok()
+                });
+                json!({
+                    "name": record.name,
+                    "kind": record.kind,
+                    "version": record.version,
+                    "ports": record.ports,
+                    "enabled": record.enabled,
+                    "project": record.project,
+                    "answers": record.enabled && answers,
+                })
+            })
+            .collect();
+        Ok(json!({"supervisor": state_json(&supervisor), "instances": instances}))
+    }
+
+    /// `service.start|stop|restart` through the CLI, for an instance that exists: the name is
+    /// checked against Kiln's state first, so nothing else reaches the command line.
+    fn service_command(&self, action: &str, params: &Value) -> Result<Value, RpcError> {
+        let name = params["name"]
+            .as_str()
+            .ok_or_else(|| RpcError::kiln("params.name (an instance) is missing"))?;
+        let (store, _) = kiln_state::StateStore::open_dir(&self.paths.state)
+            .map_err(|e| RpcError::kiln(e.to_string()))?;
+        if store
+            .service(name)
+            .map_err(|e| RpcError::kiln(e.to_string()))?
+            .is_none()
+        {
+            return Err(RpcError::kiln(format!("no service called {name}")));
+        }
+        drop(store);
+        self.log.line(&format!(
+            "services: `kiln service {action} {name}` asked through the API"
+        ));
+        run_kiln(&["service", action, name])
+            .map(|output| json!({"ok": true, "output": output}))
+            .map_err(RpcError::kiln)
+    }
+
     fn status(&self) -> Value {
         let uptime = self.started.elapsed().map_or(0, |d| d.as_secs());
         let started = time::OffsetDateTime::from(self.started).to_string();
@@ -416,6 +561,11 @@ impl Daemon {
             "log": self.log.path(),
             "socket": self.paths.socket,
             "repairs": repairs,
+            "service_repairs": self
+                .service_repairs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
             "ca": self.ca_status(),
         })
     }
@@ -485,6 +635,10 @@ impl Handler for Daemon {
                 let (caddy, supervisor) = self.web_states().map_err(RpcError::kiln)?;
                 Ok(json!({"server": state_json(&caddy), "php_supervisor": state_json(&supervisor)}))
             }
+            "services.status" => self.services_status().map_err(RpcError::kiln),
+            "service.start" => self.service_command("start", params),
+            "service.stop" => self.service_command("stop", params),
+            "service.restart" => self.service_command("restart", params),
             "ca.status" => Ok(self.ca_status()),
             "ca.renew" => {
                 let force = params["force"].as_bool().unwrap_or(false);
@@ -530,6 +684,16 @@ mod tests {
             "stopped by `kiln web stop`"
         );
         assert_eq!(repair_for(&STOPPED, &EXITED), Repair::Nothing);
+    }
+
+    #[test]
+    fn only_a_services_supervisor_that_exited_on_its_own_is_restarted() {
+        assert!(services_need_repair(&EXITED), "crash or reboot");
+        assert!(!services_need_repair(&RUNNING));
+        assert!(
+            !services_need_repair(&STOPPED),
+            "all stopped, or never started"
+        );
     }
 
     #[test]

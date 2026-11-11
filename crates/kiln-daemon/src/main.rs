@@ -76,9 +76,11 @@ fn main() -> ExitCode {
     let watcher = Arc::clone(&daemon);
     std::thread::spawn(move || {
         let mut backoff = Backoff::default();
+        let mut service_backoff = Backoff::default();
         loop {
             let now = Instant::now();
             watcher.watch(&mut backoff, now);
+            watcher.watch_services(&mut service_backoff, now);
             watcher.check_ca(now);
             std::thread::sleep(WATCH_EVERY);
         }

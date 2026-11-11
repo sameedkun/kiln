@@ -335,6 +335,10 @@ enum ServicesAction {
     },
     /// Stop every service. Their data stays.
     Down,
+    /// Start again what should be running, after its supervisor stopped on its own (a crash
+    /// or a reboot). Kiln's daemon runs this; it starts nothing that was stopped.
+    #[command(hide = true)]
+    Resume,
 }
 
 #[derive(Debug, Subcommand)]
@@ -862,6 +866,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Services { action } => match action {
             ServicesAction::Up { project, yes } => services_up::up(project, yes),
             ServicesAction::Down => service::stop(&[]),
+            ServicesAction::Resume => service::resume(),
         },
         Command::State {
             action: StateAction::Info { dir },
