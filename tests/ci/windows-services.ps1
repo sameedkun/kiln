@@ -572,10 +572,13 @@ Check 'service.restart through the API (the CLI does it, under its lock)' {
     $global:LASTEXITCODE = 0
 }
 Check 'the services supervisor crashes: the daemon brings every service back' {
-    $supervisor = Get-CimInstance Win32_Process -Filter "Name = 'kiln-supervisor.exe'" |
-        Where-Object { $_.CommandLine -match 'services[\/]supervisor' }
-    if (-not $supervisor) { throw 'no services supervisor running' }
-    Stop-Process -Id $supervisor.ProcessId -Force
+    # Kiln's own record of it: the first line of its PID file.
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    $supervisor = [int]((Get-Content $pidFile -TotalCount 1) -as [int])
+    if (-not $supervisor -or -not (Get-Process -Id $supervisor -ErrorAction SilentlyContinue)) {
+        throw "no services supervisor running (PID file: $(Get-Content $pidFile -Raw -ErrorAction SilentlyContinue))"
+    }
+    Stop-Process -Id $supervisor -Force
     Start-Sleep -Seconds 2
     if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
         throw 'Mailpit still answers: the crash took nothing down'
