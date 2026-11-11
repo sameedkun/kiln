@@ -13,6 +13,7 @@ mod apply;
 mod coexist;
 mod daemon;
 mod doctor;
+mod dump;
 mod env;
 mod ext;
 mod history;
@@ -168,10 +169,14 @@ enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Open a database service's client (mysql, mariadb) on an instance, as root.
+    /// Open a database service's client on an instance (`kiln db mysql-8.4 [database]`), or
+    /// dump and restore its data as portable .sql files.
+    #[command(args_conflicts_with_subcommands = true)]
     Db {
+        #[command(subcommand)]
+        action: Option<DbAction>,
         /// The instance, e.g. mysql-8.4 (see `kiln service list`).
-        name: String,
+        name: Option<String>,
         /// A database to open.
         database: Option<String>,
     },
@@ -231,6 +236,31 @@ enum ImportFrom {
         /// Replace an existing kiln.toml.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DbAction {
+    /// Write a database (or all of them) to a .sql file with the service's own tool
+    /// (`mysqldump`, `mariadb-dump`, `pg_dump`).
+    Dump {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The database (default: every one).
+        database: Option<String>,
+        /// The file to write (default: <instance>-<database>-<time>.sql here). Never overwritten.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+    /// Load a .sql file into an instance: into a database (made if missing), or the whole
+    /// server for a dump of every database.
+    Restore {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The .sql file.
+        file: PathBuf,
+        /// The database to load it into.
+        database: Option<String>,
     },
 }
 
@@ -806,6 +836,43 @@ fn run_php(action: PhpAction) -> Result<(), String> {
     }
 }
 
+fn run_db(
+    action: Option<DbAction>,
+    name: Option<String>,
+    database: Option<&str>,
+) -> Result<(), String> {
+    match (action, name) {
+        (
+            Some(DbAction::Dump {
+                name,
+                database,
+                output,
+            }),
+            _,
+        ) => dump::dump(&name, database.as_deref(), output),
+        (
+            Some(DbAction::Restore {
+                name,
+                file,
+                database,
+            }),
+            _,
+        ) => dump::restore(&name, &file, database.as_deref()),
+        (None, Some(name)) => service::db(&name, database),
+        (None, None) => {
+            Err("give an instance, e.g. `kiln db mysql-8.4` (see `kiln service list`)".into())
+        }
+    }
+}
+
+fn run_services(action: ServicesAction) -> Result<(), String> {
+    match action {
+        ServicesAction::Up { project, yes } => services_up::up(project, yes),
+        ServicesAction::Down => service::stop(&[]),
+        ServicesAction::Resume => service::resume(),
+    }
+}
+
 fn run_env(action: EnvAction) -> Result<(), String> {
     let EnvAction::Use {
         name,
@@ -860,14 +927,14 @@ fn run(command: Command) -> Result<(), String> {
         Command::History { all } => history::history(all),
         Command::Uninstall { options } => uninstall::uninstall(options),
         Command::Service { action } => run_service(action),
-        Command::Db { name, database } => service::db(&name, database.as_deref()),
+        Command::Db {
+            action,
+            name,
+            database,
+        } => run_db(action, name, database.as_deref()),
         Command::Env { action } => run_env(action),
         Command::Tool { action } => run_tool(action),
-        Command::Services { action } => match action {
-            ServicesAction::Up { project, yes } => services_up::up(project, yes),
-            ServicesAction::Down => service::stop(&[]),
-            ServicesAction::Resume => service::resume(),
-        },
+        Command::Services { action } => run_services(action),
         Command::State {
             action: StateAction::Info { dir },
         } => state_info(dir),

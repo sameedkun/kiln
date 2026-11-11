@@ -606,6 +606,40 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
 }
 Check 'daemon stop' { Kiln daemon stop | Out-Null }
 
+Say '== Data safety: dump and restore (ADR 0049)'
+$dumps = Join-Path $dir 'dumps'
+New-Item -ItemType Directory -Force $dumps | Out-Null
+Check 'kiln db dump mysql-8.4 shop: the Laravel app''s database as a portable .sql file' {
+    Expect 'Wrote' (Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql")
+    Expect 'CREATE TABLE `migrations`' (Get-Content "$dumps\shop.sql" -Raw)
+}
+Check 'an existing dump is never overwritten' {
+    $out = (& $Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql" 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -or $out -notmatch 'cannot write') { throw "it wrote over the file:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln db restore mysql-8.4 shop.sql shop_copy: a new database with the same rows' {
+    Expect 'Created the database shop_copy' (Kiln db restore mysql-8.4 "$dumps\shop.sql" shop_copy)
+    $original = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
+    $copy = Client 'mysql-8.4' 'shop_copy' 'SELECT COUNT(*) FROM migrations;'
+    if ($copy -ne $original -or $copy -notmatch '[1-9]') { throw "original:`n$original`ncopy:`n$copy" }
+}
+Check 'PostgreSQL: pg_dump kiln_ci, restored as kiln_copy' {
+    Kiln db dump postgres-18 kiln_ci --output "$dumps\kiln_ci.sql" | Out-Null
+    Kiln db restore postgres-18 "$dumps\kiln_ci.sql" kiln_copy | Out-Null
+    Expect 'kept' (Client 'postgres-18' 'kiln_copy' 'SELECT v FROM t;')
+}
+Check 'kiln db dump postgres-18: every database (pg_dumpall)' {
+    Kiln db dump postgres-18 --output "$dumps\postgres-all.sql" | Out-Null
+    Expect 'kiln_copy' (Get-Content "$dumps\postgres-all.sql" -Raw)
+}
+Check 'a service without a dump tool says where its data is and what keeps it' {
+    $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)
+    Expect 'has no dump tool' $out
+    Expect '--keep-data' $out
+    $global:LASTEXITCODE = 0
+}
+
 Check 'servers.json follows the services: instances added after the tools are listed' {
     $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
     foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
@@ -623,10 +657,32 @@ Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"
     if ($LASTEXITCODE -eq 0) { throw "uninstall went ahead without --delete-data:`n$out" }
     Expect 'hold data' $out
+    Expect 'kiln uninstall --keep-data' $out
     if (-not (Test-Path "$env:LOCALAPPDATA\Kiln")) { throw 'Kiln folders were touched' }
     $global:LASTEXITCODE = 0
 }
-Check 'kiln uninstall --delete-data' { Kiln uninstall --yes --delete-data | ForEach-Object { Say "     $_" } }
+Check '--keep-data and --delete-data can''t be given together' {
+    $out = (& $Kiln uninstall --yes --keep-data --delete-data 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0) { throw "both were taken:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+$script:kept = ''
+Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
+    $out = Kiln uninstall --yes --keep-data
+    $out -split "`n" | ForEach-Object { Say "     $_" }
+    $script:kept = [regex]::Match($out, 'Copied the services'' data to (.+)\.').Groups[1].Value.Trim()
+    if (-not $script:kept -or -not (Test-Path $script:kept)) { throw "no kept folder in:`n$out" }
+    foreach ($instance in 'mysql-8.4', 'postgres-18', 'mailpit-1', 'redis-8.10') {
+        if (-not (Get-ChildItem (Join-Path $script:kept $instance) -Recurse -File -ErrorAction SilentlyContinue)) {
+            throw "$instance's data isn't in $($script:kept)"
+        }
+    }
+    if (-not (Get-ChildItem (Join-Path $script:kept 'mysql-8.4\shop') -ErrorAction SilentlyContinue)) {
+        throw 'the shop database isn''t in the kept MySQL data'
+    }
+}
+# The kept data is the one thing uninstall leaves; the test removes it before comparing.
+if ($script:kept) { Remove-Item $script:kept -Recurse -Force -ErrorAction SilentlyContinue }
 Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
     if ((Get-Content $envFile -Raw) -notmatch '(?m)^DB_CONNECTION=mysql') { throw 'the .env was changed' }
 }

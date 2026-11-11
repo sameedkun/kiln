@@ -26,6 +26,8 @@ pub struct Flavor {
     admin: &'static str,
     /// The client, e.g. `mysql`.
     client: &'static str,
+    /// The dump tool, e.g. `mysqldump`.
+    dump: &'static str,
     /// Oracle MySQL: an X plugin to switch off, a monitor process on Windows, and
     /// `--initialize-insecure` for the data folder. MariaDB has its own installers.
     oracle: bool,
@@ -131,6 +133,7 @@ pub static MYSQL: Flavor = Flavor {
     kiln_server: "kiln-mysqld",
     admin: "mysqladmin",
     client: "mysql",
+    dump: "mysqldump",
     oracle: true,
 };
 
@@ -142,6 +145,7 @@ pub static MARIADB: Flavor = Flavor {
     kiln_server: "kiln-mariadbd",
     admin: "mariadb-admin",
     client: "mariadb",
+    dump: "mariadb-dump",
     oracle: false,
 };
 
@@ -494,6 +498,46 @@ impl ServiceProvider for Flavor {
             query(format!("CREATE DATABASE `{name}`"))?;
             Ok(true)
         })())
+    }
+
+    /// One database, without `CREATE DATABASE`, so it can be restored under another name; or
+    /// every database. A consistent snapshot of the tables, with routines, events and
+    /// triggers.
+    fn dump(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        database: Option<&str>,
+    ) -> Option<Launch> {
+        let mut args = vec![
+            "--host=127.0.0.1".to_owned(),
+            format!("--port={}", port_of(ports)),
+            "--user=root".to_owned(),
+            "--single-transaction".to_owned(),
+            "--routines".to_owned(),
+            "--events".to_owned(),
+            "--triggers".to_owned(),
+        ];
+        match database {
+            Some(name) => args.push(name.to_owned()),
+            None => args.push("--all-databases".to_owned()),
+        }
+        Some(Launch {
+            program: Self::tool(&dirs.bin, self.dump),
+            args,
+            env: Self::env(&dirs.bin),
+            cwd: None,
+            stop_command: None,
+        })
+    }
+
+    fn restore(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        database: Option<&str>,
+    ) -> Option<Launch> {
+        self.client(dirs, ports, database)
     }
 
     fn client(

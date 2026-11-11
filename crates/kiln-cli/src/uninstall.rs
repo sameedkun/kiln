@@ -244,7 +244,9 @@ fn print_plan(plan: &Plan, keep_files: bool) {
         println!("     and the CA root key's entry in your desktop keyring");
     }
     if !plan.service_data.is_empty() && !keep_files {
-        println!("     including the services' data, deleted only with --delete-data:");
+        println!(
+            "     including the services' data (--keep-data copies it to your home folder first; --delete-data deletes it):"
+        );
         for (path, bytes) in &plan.service_data {
             println!("       {}  ({})", path.display(), mb(*bytes));
         }
@@ -272,19 +274,113 @@ pub struct Options {
     /// refuses while there is any.
     #[arg(long)]
     pub delete_data: bool,
+    /// Copy the services' data to `Kiln data (<date>)` in your home folder, then uninstall.
+    #[arg(long, conflicts_with = "delete_data")]
+    pub keep_data: bool,
+}
+
+/// `Kiln data (<date>)` in the home folder, with ` 2`, ` 3`… if that name is taken.
+fn kept_data_folder(home: &Path, date: &str) -> PathBuf {
+    let base = format!("Kiln data ({date})");
+    let mut path = home.join(&base);
+    let mut n = 1;
+    while path.exists() {
+        n += 1;
+        path = home.join(format!("{base} {n}"));
+    }
+    path
+}
+
+/// Copies `from` into a new folder `to`, file by file; returns the bytes copied.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<u64> {
+    std::fs::create_dir_all(to)?;
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            bytes += copy_dir(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            bytes += std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(bytes)
+}
+
+/// `--keep-data` ([ADR 0049] §3): each instance's data folder copied to
+/// `~/Kiln data (<date>)/<instance>`, checked by size. Returns that folder.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-data-safety.md
+fn keep_data(data: &[(PathBuf, u64)]) -> Result<PathBuf, String> {
+    let home = std::env::home_dir().ok_or("cannot find your home folder")?;
+    let today = time::OffsetDateTime::now_utc().date().to_string();
+    let kept = kept_data_folder(&home, &today);
+    for (folder, _) in data {
+        // Measured now: a database writes on its way down, after the plan's sizes were taken.
+        let size = dir_size(folder);
+        let instance = folder
+            .parent()
+            .and_then(Path::file_name)
+            .ok_or_else(|| format!("{} has no instance folder", folder.display()))?;
+        let target = kept.join(instance);
+        let copied = copy_dir(folder, &target).map_err(|e| {
+            format!(
+                "cannot copy {} to {}: {e}",
+                folder.display(),
+                target.display()
+            )
+        })?;
+        if copied != size {
+            return Err(format!(
+                "copying {} gave {copied} bytes, not {size}",
+                folder.display()
+            ));
+        }
+        println!("  kept {} ({})", target.display(), mb(copied));
+    }
+    Ok(kept)
+}
+
+/// Stops what Kiln runs: the daemon first, so it doesn't restart what is stopped next.
+fn stop_everything() -> Result<(), String> {
+    if crate::daemon::stop_quietly()? {
+        println!("Stopped Kiln's daemon.");
+    }
+    if let Some(pid) = crate::web::server()?.stop().map_err(|e| e.to_string())? {
+        println!("Stopped the web server (PID {pid}).");
+    }
+    if let Some(pid) = crate::pool::supervisor()?
+        .stop()
+        .map_err(|e| e.to_string())?
+    {
+        println!("Stopped the PHP workers (supervisor PID {pid}).");
+    }
+    if let Some(pid) = crate::service::supervisor()?
+        .stop()
+        .map_err(|e| e.to_string())?
+    {
+        println!("Stopped the services (supervisor PID {pid}).");
+    }
+    Ok(())
 }
 
 /// Databases are the user's work: never deleted without being asked ([ADR 0036] §9).
 ///
 /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
 fn refuse_data_loss(plan: &Plan, options: Options) -> Result<(), String> {
-    if plan.service_data.is_empty() || options.keep_files || options.delete_data {
+    if plan.service_data.is_empty()
+        || options.keep_files
+        || options.delete_data
+        || options.keep_data
+    {
         return Ok(());
     }
     Err(
         "Kiln's services hold data (listed above). Nothing was changed.\n\
-         To delete it with Kiln, run `kiln uninstall --delete-data`. To keep it, copy those \
-         folders somewhere else first, or use --keep-files."
+         To keep it, run `kiln uninstall --keep-data`: it is copied to `Kiln data (<date>)` in \
+         your home folder first. To delete it, run `kiln uninstall --delete-data`. \
+         `kiln db dump` writes a database to a portable .sql file before either."
             .into(),
     )
 }
@@ -303,24 +399,15 @@ pub fn uninstall(options: Options) -> Result<(), String> {
         return Ok(());
     }
 
-    // 1. Stop: the daemon first, so it doesn't restart what is stopped next.
-    if crate::daemon::stop_quietly()? {
-        println!("Stopped Kiln's daemon.");
-    }
-    if let Some(pid) = crate::web::server()?.stop().map_err(|e| e.to_string())? {
-        println!("Stopped the web server (PID {pid}).");
-    }
-    if let Some(pid) = crate::pool::supervisor()?
-        .stop()
-        .map_err(|e| e.to_string())?
-    {
-        println!("Stopped the PHP workers (supervisor PID {pid}).");
-    }
-    if let Some(pid) = crate::service::supervisor()?
-        .stop()
-        .map_err(|e| e.to_string())?
-    {
-        println!("Stopped the services (supervisor PID {pid}).");
+    // 1. Stop.
+    stop_everything()?;
+    // Their data out of Kiln's folder while nothing writes to it, before anything is undone:
+    // a copy that fails stops uninstall with nothing changed.
+    if options.keep_data && !keep_files && !plan.service_data.is_empty() {
+        let kept = keep_data(&plan.service_data).map_err(|e| {
+            format!("{e}\nUninstall stopped here; the services are stopped, and nothing was undone or deleted.")
+        })?;
+        println!("Copied the services' data to {}.", kept.display());
     }
 
     // 2. Undo, newest first; stop at the first failure and delete nothing.
@@ -405,6 +492,33 @@ pub fn uninstall(options: Options) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_data_goes_to_a_dated_folder_never_over_an_old_one() {
+        let home = tempfile::tempdir().unwrap();
+        let first = kept_data_folder(home.path(), "2026-11-11");
+        assert_eq!(first, home.path().join("Kiln data (2026-11-11)"));
+        std::fs::create_dir(&first).unwrap();
+        assert_eq!(
+            kept_data_folder(home.path(), "2026-11-11"),
+            home.path().join("Kiln data (2026-11-11) 2")
+        );
+    }
+
+    #[test]
+    fn a_data_folder_is_copied_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("mysql-8.4").join("data");
+        std::fs::create_dir_all(from.join("shop")).unwrap();
+        std::fs::write(from.join("ibdata1"), vec![1u8; 4096]).unwrap();
+        std::fs::write(from.join("shop").join("users.ibd"), b"rows").unwrap();
+        let to = dir.path().join("kept").join("mysql-8.4");
+        assert_eq!(copy_dir(&from, &to).unwrap(), dir_size(&from));
+        assert_eq!(
+            std::fs::read(to.join("shop").join("users.ibd")).unwrap(),
+            b"rows"
+        );
+    }
 
     fn p(parts: &[&str]) -> PathBuf {
         parts.iter().collect()

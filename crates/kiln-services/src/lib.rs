@@ -319,6 +319,32 @@ pub trait ServiceProvider: Sync {
         None
     }
 
+    /// The service's own tool writing `database`, or every database, as SQL to standard
+    /// output ([ADR 0049] §1): `mysqldump`, `pg_dump`. None for kinds without one.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-data-safety.md
+    fn dump(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+        _database: Option<&str>,
+    ) -> Option<Launch> {
+        None
+    }
+
+    /// The client reading a dump from standard input into `database`, or into the server
+    /// for a dump of every database ([ADR 0049] §2). None for kinds without one.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-data-safety.md
+    fn restore(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+        _database: Option<&str>,
+    ) -> Option<Launch> {
+        None
+    }
+
     /// The client to open on an instance (`kiln db`), if there is one.
     fn client(
         &self,
@@ -494,6 +520,42 @@ mod contract {
             mysql.env_keys(&sample_ports(mysql))[0],
             ("DB_CONNECTION", "mysql".to_owned())
         );
+    }
+
+    #[test]
+    fn dumps_and_restores_run_the_instances_own_tools() {
+        let dirs = InstanceDirs::new(Path::new("/k/services"), "x", "1.0", "x-1");
+        for provider in providers() {
+            let ports = sample_ports(*provider);
+            for database in [None, Some("shop")] {
+                for launch in [
+                    provider.dump(&dirs, &ports, database),
+                    provider.restore(&dirs, &ports, database),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(launch.program.starts_with(&dirs.bin), "{launch:?}");
+                }
+            }
+            // A kind that can dump can also restore, and makes databases to restore into.
+            assert_eq!(
+                provider.dump(&dirs, &ports, None).is_some(),
+                provider.restore(&dirs, &ports, None).is_some(),
+                "{}",
+                provider.kind()
+            );
+        }
+        let pg = provider("postgres").unwrap();
+        let dump = pg.dump(&dirs, &sample_ports(pg), Some("shop")).unwrap();
+        assert!(dump.program.ends_with(format!("pg_dump{EXE_SUFFIX}")));
+        assert!(dump.args.contains(&"--dbname=shop".to_owned()));
+        let all = pg.dump(&dirs, &sample_ports(pg), None).unwrap();
+        assert!(all.program.ends_with(format!("pg_dumpall{EXE_SUFFIX}")));
+        let mariadb = provider("mariadb").unwrap();
+        let dump = mariadb.dump(&dirs, &sample_ports(mariadb), None).unwrap();
+        assert!(dump.program.ends_with(format!("mariadb-dump{EXE_SUFFIX}")));
+        assert!(dump.args.contains(&"--all-databases".to_owned()));
     }
 
     #[test]

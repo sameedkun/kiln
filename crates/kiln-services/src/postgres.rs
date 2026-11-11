@@ -271,6 +271,53 @@ impl ServiceProvider for Postgres {
         })())
     }
 
+    /// `pg_dump` for one database, without owners or grants so it restores as `postgres`
+    /// anywhere; `pg_dumpall` for the whole server.
+    fn dump(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        database: Option<&str>,
+    ) -> Option<Launch> {
+        let mut args = vec![
+            "--host=127.0.0.1".to_owned(),
+            format!("--port={}", port_of(ports)),
+            format!("--username={SUPERUSER}"),
+        ];
+        let program = match database {
+            Some(name) => {
+                args.extend([
+                    "--no-owner".to_owned(),
+                    "--no-privileges".to_owned(),
+                    format!("--dbname={name}"),
+                ]);
+                "pg_dump"
+            }
+            None => "pg_dumpall",
+        };
+        Some(Launch {
+            program: tool(&dirs.bin, program),
+            args,
+            env: BTreeMap::new(),
+            cwd: None,
+            stop_command: None,
+        })
+    }
+
+    /// `psql`, stopping at the first error instead of carrying on past it.
+    fn restore(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        database: Option<&str>,
+    ) -> Option<Launch> {
+        let mut launch = self.client(dirs, ports, Some(database.unwrap_or("postgres")))?;
+        launch
+            .args
+            .extend(["--quiet".to_owned(), "--set=ON_ERROR_STOP=1".to_owned()]);
+        Some(launch)
+    }
+
     fn client(
         &self,
         dirs: &InstanceDirs,
