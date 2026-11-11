@@ -594,8 +594,15 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
     Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
     if (-not $back) { throw 'not back after 90 s' }
     if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
-    $status = Kiln daemon status
+    # The restart is counted once `kiln services resume` returns, after the slower databases
+    # are ready too, which is after Mailpit is back.
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
     Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
 }
 Check 'daemon stop' { Kiln daemon stop | Out-Null }
 
