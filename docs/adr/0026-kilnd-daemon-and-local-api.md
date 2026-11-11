@@ -1,6 +1,6 @@
 # 0026. `kilnd`: an optional per-user daemon with a versioned local API
 
-- **Status:** accepted
+- **Status:** accepted; extended by [ADR 0048](0048-kilnd-and-services.md): the watchdog also brings services back, and the API gains `services.status` and `service.*`
 - **Date:** 2026-10-27
 - **Task:** P2-01, P2-02, P2-03 · Builds on [ADR 0002](0002-rust-core-and-tauri-gui.md), [0011](0011-caddy-integration.md), [0012](0012-caddy-admin-channel.md), [0014](0014-php-cgi-supervisor.md), [0018](0018-history-undo-uninstall.md)
 

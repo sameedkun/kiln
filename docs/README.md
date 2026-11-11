@@ -63,6 +63,7 @@ working name). Start here.
 | [0045](adr/0045-env-wiring.md) | `.env` wiring: `kiln env use <instance>` sets the provider's keys (DB, Redis with `predis`, Mail, Meilisearch, S3, MongoDB) as a journaled key-level edit with preview and byte-exact undo; makes the project's database; `kiln new --db`; uninstall leaves projects' `.env` | accepted (Phase 3) |
 | [0046](adr/0046-project-services.md) | Project services: `[services]` in `kiln.toml`; `kiln services up` in a project reuses or adds each one, starts it and wires the `.env` (first database only), falling back to the major line, then the newest release, with a note; `kiln import herd` maps `herd.yml` services | accepted (Phase 3) |
 | [0047](adr/0047-reverb.md) | Laravel Reverb as a service that runs in its project: `php artisan reverb:start` with the project's PHP under the services supervisor (schema v8 records the project); `kiln env use` sets `BROADCAST_CONNECTION` and `REVERB_SERVER_*`/`REVERB_*`, never the app's keys | accepted (Phase 3) |
+| [0048](adr/0048-kilnd-and-services.md) | `kilnd` and services: the watchdog runs `kiln services resume` when the services supervisor exited on its own (a crash or a reboot), leaving stopped instances stopped; the API gains `services.status` and `service.start/stop/restart` (names checked, run through the CLI) | accepted (Phase 3) |
 
 ## Conventions
 

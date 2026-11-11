@@ -94,6 +94,7 @@ commits and PRs.
 | [I-82](#i-82) | tools | A failure to write the web tools' `servers.json` made every service command fail | fixed (P3-15) |
 | [I-83](#i-83) | uninstall | Uninstall kept Kiln's whole local folder because the phpMyAdmin site inside it counted as a project | fixed (P3-15) |
 | [I-84](#i-84) | reverb | `composer require laravel/reverb` fails on a new Laravel 13 app: the app locks `guzzlehttp/psr7` 3.x, and Reverb 1.12 needs 2.x | worked around (P3-16): Kiln says to add `-W` |
+| [I-85](#i-85) | dependencies | RUSTSEC-2026-0459 (CVE-2026-119375): the SQLite bundled by `rusqlite` 0.40 could return stale page-cache memory with a crafted `-wal` file; cargo-deny failed CI | fixed (P3-10): `rusqlite` 0.41, SQLite 3.54.1 |
 
 ---
 
@@ -1223,3 +1224,20 @@ commits and PRs.
 - **Also:** the CI check for a broadcast passed once without Reverb installed. It looked
   for the word "broadcast", which the error message also contained. It now looks for a
   marker only the successful script prints.
+
+## P3-10: `kilnd` and services
+
+### I-85: a SQLite advisory against the bundled copy (fixed)
+
+- **Seen:** CI's `cargo-deny` job failed on 2026-11-11 with RUSTSEC-2026-0459
+  (CVE-2026-119375), against `libsqlite3-sys` 0.38.2 through `rusqlite` 0.40.
+- **What it is:** SQLite before 3.54.0 can return uninitialised page-cache memory when it
+  opens a database together with a sibling `-wal` file whose page size differs. A crafted
+  pair of files makes ordinary queries return stale bytes.
+- **Exposure:** small. Kiln only opens its own `state.db` in the user's folders, which
+  another party would have to replace first.
+- **Fix:** `rusqlite` 0.41.1, which bundles SQLite 3.54.1 (`libsqlite3-sys` 0.39.1). No code
+  change; the state tests and `cargo-deny` pass.
+- **Also:** the CI check for the daemon's restart read `kiln daemon status` while
+  `kiln services resume` was still waiting for the slower databases. The daemon counts a
+  restart once the command returns, so the check now waits for it.
