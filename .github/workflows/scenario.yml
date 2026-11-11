@@ -20,19 +20,24 @@ env:
 
 jobs:
   windows:
-    name: services (windows-latest)
+    name: services, uninstall --${{ matrix.uninstall }} (windows-latest)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    # Both endings of a run: the data kept in the home folder, or deleted with Kiln (P3-12).
+    strategy:
+      fail-fast: false
+      matrix:
+        uninstall: [keep-data, delete-data]
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --bins --locked
       - name: scenario
         shell: powershell
-        run: tests\ci\windows-services.ps1 -Kiln "$pwd\target\debug\kiln.exe"
+        run: tests\ci\windows-services.ps1 -Kiln "$pwd\target\debug\kiln.exe" -Uninstall ${{ matrix.uninstall }}
       - name: keep the scenario's log and snapshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-scenario
+          name: windows-scenario-${{ matrix.uninstall }}
           path: ${{ runner.temp }}/kiln-ci

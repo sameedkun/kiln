@@ -5,7 +5,11 @@
 # Reuses the VM scenario's helpers (lib.ps1) and snapshot (snapshot.ps1). The runner's image
 # may run its own MySQL or PostgreSQL, so the checks read the port Kiln chose instead of
 # assuming the usual one: another service on it is a coexistence check for free.
-param([Parameter(Mandatory)] [string] $Kiln)
+param(
+    [Parameter(Mandatory)] [string] $Kiln,
+    # How the run ends: `kiln uninstall --keep-data` or `--delete-data`.
+    [ValidateSet('keep-data', 'delete-data')] [string] $Uninstall = 'keep-data'
+)
 $ErrorActionPreference = 'Continue'
 $dir = Join-Path $env:RUNNER_TEMP 'kiln-ci'
 $log = Join-Path $dir 'scenario.log'
@@ -239,6 +243,19 @@ Check 'service port mailpit-1 http=8125: mailpit.test follows it' {
     $api = Page "$(SiteBase 'mailpit')api/v1/messages" | ConvertFrom-Json
     if ($api.total -ne 1) { throw "the inbox through mailpit.test has $($api.total) message(s)" }
 }
+# HTTPS with Kiln's CA. A runner can't answer Windows' trust dialog, so curl is given Kiln's
+# root certificate instead: the chain the browser would check, without trusting it.
+Check 'https://mailpit.test: the inbox over HTTPS, with a certificate from Kiln''s CA' {
+    Kiln ca init | Out-Null
+    Kiln secure mailpit | Out-Null
+    $url = [regex]::Match((Kiln sites), 'https://mailpit\.test[^\s]*').Value
+    if (-not $url) { throw "no HTTPS URL in:`n$(Kiln sites)" }
+    $uri = [Uri] $url
+    $page = curl.exe -sS --max-time 60 --ssl-revoke-best-effort --cacert "$env:APPDATA\Kiln\ca\root.crt" `
+        --resolve "$($uri.Host):$($uri.Port):127.0.0.1" "$($url.TrimEnd('/'))/api/v1/messages" 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "curl couldn't verify or reach it:`n$page" }
+    if (($page | ConvertFrom-Json).total -ne 1) { throw "the inbox over HTTPS answered:`n$page" }
+}
 Say '== Redis (ADR 0041)'
 # A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark
 # in front of what it pipes to a program, and redis-cli reads it as part of the first command.
@@ -424,6 +441,28 @@ Check 'kiln new shop --db mysql-8.4: created, its .env pointed at MySQL, migrate
     $count = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
     if ($count -notmatch '(?m)^\s*[1-9]') { throw "no migrations on mysql-8.4:`n$count" }
 }
+# Laravel keeps its sessions in the database by default, so a page load reads and writes it.
+function ShopPage {
+    $page = Page (SiteBase 'shop')
+    Clean $page
+    if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
+}
+Check 'the app serves pages on MySQL 8.4' { ShopPage }
+foreach ($database in 'mariadb-11.8', 'postgres-18') {
+    Check "the app migrates and serves pages on $database" {
+        Kiln env use $database --project $shop --yes | Out-Null
+        Push-Location $shop
+        try { $out = Php artisan migrate --force } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { throw "migrate failed:`n$out" }
+        ShopPage
+        $count = Client $database 'shop' 'SELECT COUNT(*) FROM sessions;'
+        if ($count -notmatch '[1-9]') { throw "no session row in $database`:`n$count" }
+    }
+}
+Check 'back on MySQL 8.4' {
+    Kiln env use mysql-8.4 --project $shop --yes | Out-Null
+    ShopPage
+}
 $script:beforeRedis = EnvHash
 $script:redisOp = ''; $script:mailOp = ''
 Check 'kiln env use redis-8.10 --cache --session --queue: old and new values shown, then journaled' {
@@ -558,6 +597,11 @@ Check 'service restart reverb-shop: it comes back' {
 }
 
 Say '== kilnd and services (ADR 0048)'
+Check 'services keep running through kiln web stop' {
+    Kiln web stop | Out-Null
+    if ((MailTotal) -ne 2) { throw "Mailpit isn't answering with the web server stopped" }
+    Kiln web start | Out-Null
+}
 Check 'daemon start; services.status lists the instances through the API' {
     Kiln daemon start | Out-Null
     $out = Kiln daemon call services.status
@@ -603,6 +647,26 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
     } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
     Expect 'Services restarted by the daemon: 1' $status
     Expect 'Services: 12 of 12 running' $status
+}
+# A reboot, as far as a runner can have one: every process of Kiln's gone, the services'
+# supervisor leaving its PID file behind, then the daemon starting as it does at login.
+Check 'after a reboot (daemon and supervisor gone, daemon started as at login): services come back' {
+    Kiln daemon stop | Out-Null
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    Stop-Process -Id ([int](Get-Content $pidFile -TotalCount 1)) -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers'
+    }
+    Kiln daemon start | Out-Null
+    $deadline = (Get-Date).AddSeconds(150)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
 }
 Check 'daemon stop' { Kiln daemon stop | Out-Null }
 
@@ -667,7 +731,15 @@ Check '--keep-data and --delete-data can''t be given together' {
     $global:LASTEXITCODE = 0
 }
 $script:kept = ''
-Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
+# The workflow runs the scenario once per uninstall mode (P3-12): both must leave the machine
+# as it was, apart from the kept data folder.
+if ($Uninstall -eq 'delete-data') {
+    Check 'kiln uninstall --delete-data: the services'' data deleted with Kiln' {
+        $out = Kiln uninstall --yes --delete-data
+        $out -split "`n" | ForEach-Object { Say "     $_" }
+        if ($out -match 'Copied the services') { throw 'it kept data without --keep-data' }
+    }
+} else { Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
     $out = Kiln uninstall --yes --keep-data
     $out -split "`n" | ForEach-Object { Say "     $_" }
     $script:kept = [regex]::Match($out, 'Copied the services'' data to (.+)\.').Groups[1].Value.Trim()
@@ -680,7 +752,7 @@ Check 'kiln uninstall --keep-data: the services'' data copied to the home folder
     if (-not (Get-ChildItem (Join-Path $script:kept 'mysql-8.4\shop') -ErrorAction SilentlyContinue)) {
         throw 'the shop database isn''t in the kept MySQL data'
     }
-}
+} }
 # The kept data is the one thing uninstall leaves; the test removes it before comparing.
 if ($script:kept) { Remove-Item $script:kept -Recurse -Force -ErrorAction SilentlyContinue }
 Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
