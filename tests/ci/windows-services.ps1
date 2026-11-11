@@ -588,7 +588,11 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
         Start-Sleep -Seconds 3
         $back = Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue
     } until ($back -or (Get-Date) -gt $deadline)
-    if (-not $back) { throw "not back after 90 s:`n$(Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 15 | Out-String)" }
+    # What happened, in the scenario's log whichever way it went.
+    Say "     killed supervisor PID $supervisor; now: $(Get-Content $pidFile -TotalCount 1 -ErrorAction SilentlyContinue)"
+    Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+    Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    if (-not $back) { throw 'not back after 90 s' }
     if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
     $status = Kiln daemon status
     Expect 'Services restarted by the daemon: 1' $status
