@@ -86,9 +86,12 @@ The prototype also uses things a real Windows app can't or shouldn't:
      - the services, with start and stop;
      - "Open Kiln", "Stop all" and "Quit".
      - It closes on Esc or a click elsewhere, like Windows' own flyouts.
-     - Because it never moves, it may use Windows' Acrylic behind it, like Windows' own
-       flyouts: Acrylic's lag only shows when a window is dragged. P4-03 tries it, and
-       falls back to Kiln's backdrop.
+     - Its surface is Kiln's backdrop, because glass over the desktop, which can be any
+       colour, can't keep its text readable ([I-89](../issues.md#i-89)).
+     - Because it never moves, Windows' Acrylic could sit behind it, like Windows' own
+       flyouts: Acrylic's lag only shows when a window is dragged. P4-03 may try it, but
+       only with a fill opaque enough to pass the contrast check over a light and a dark
+       desktop.
    - **The keyboard works the same:** Enter on the focused tray icon acts as a left click,
      and the menu key as a right click.
    - **A native menu is the fallback.** It shows the same items, as plain text, in Windows'
@@ -151,6 +154,10 @@ These came from the user's review of the mockup and from the checks. Each is now
 - **Measured contrast moved some colours.** Faint text, amber, the "stopped" ring, the light
   sidebar glass and dark red changed from the mockup to reach WCAG AA on every fill, glow
   included. `tokens.css` is the source now, not the mockup.
+- **The tray popup sits on Kiln's backdrop, not on glass.** Over a dark desktop, light glass
+  left its quieter text near 3:1 ([I-89](../issues.md#i-89)).
+- **axe can't measure text on glass.** It reports it as "incomplete", so contrast is
+  measured from the design values instead ([I-88](../issues.md#i-88)).
 - **Stop and start are filled icons.** An outlined square next to "Running" read as an empty
   checkbox.
 

@@ -42,7 +42,7 @@ export function TrayPopup({
   const item = "flex h-[34px] w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[13px]";
   const label = "px-2 pb-1 pt-0.5 text-[11.5px] font-medium text-text-3";
   return (
-    <div role="dialog" aria-label="Kiln" className="glass-pop w-[340px] overflow-hidden rounded-pop text-text">
+    <div role="dialog" aria-label="Kiln" className="backdrop pop-frame w-[340px] overflow-hidden rounded-pop text-text">
       <div className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3.5">
         <Logo size={22} />
         <div>

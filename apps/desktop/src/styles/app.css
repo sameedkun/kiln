@@ -97,6 +97,20 @@
   }
 }
 
+/*
+ * The tray popup's frame. It is its own window over the desktop, which can be any colour,
+ * so its surface is Kiln's backdrop (`backdrop`), not glass: glass over a dark wallpaper
+ * left its quieter text at about 3:1 in light mode. Acrylic may replace it in P4-03 only
+ * if it passes the same contrast check over a light and a dark desktop.
+ */
+@utility pop-frame {
+  border: 1px solid var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--rim), var(--shadow-pop);
+  @media (forced-colors: active) {
+    border-color: CanvasText;
+  }
+}
+
 /* Content fades out under the floating page header, so nothing peeks round its corners. */
 @utility fade-top {
   mask-image: linear-gradient(to bottom, transparent 0, transparent 6px, #000 22px);

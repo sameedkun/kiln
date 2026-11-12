@@ -95,6 +95,11 @@ commits and PRs.
 | [I-83](#i-83) | uninstall | Uninstall kept Kiln's whole local folder because the phpMyAdmin site inside it counted as a project | fixed (P3-15) |
 | [I-84](#i-84) | reverb | `composer require laravel/reverb` fails on a new Laravel 13 app: the app locks `guzzlehttp/psr7` 3.x, and Reverb 1.12 needs 2.x | worked around (P3-16): Kiln says to add `-W` |
 | [I-85](#i-85) | dependencies | RUSTSEC-2026-0459 (CVE-2026-119375): the SQLite bundled by `rusqlite` 0.40 could return stale page-cache memory with a crafted `-wal` file; cargo-deny failed CI | fixed (P3-10): `rusqlite` 0.41, SQLite 3.54.1 |
+| [I-86](#i-86) | design | With transparency off, the selected page was the same colour as the sidebar | ✅ |
+| [I-87](#i-87) | design | A fade on the page's scroller also faded the page header inside it | 📌 (header beside the scroller) |
+| [I-88](#i-88) | design | axe can't measure text contrast on translucent glass: it reports it as incomplete, not failed | 📌 (contrast measured from the design values) |
+| [I-89](#i-89) | design | The tray popup's glass over a dark desktop left its quieter text near 3:1 in light mode | 📌 (Kiln's backdrop under the popup) |
+| [I-90](#i-90) | design | An outlined stop square next to "Running" read as an empty checkbox | ✅ |
 
 ---
 
@@ -1241,3 +1246,51 @@ commits and PRs.
 - **Also:** the CI check for the daemon's restart read `kiln daemon status` while
   `kiln services resume` was still waiting for the slower databases. The daemon counts a
   restart once the command returns, so the check now waits for it.
+
+## P4-02: the visual design
+
+### I-86: the selected page disappeared with transparency off (fixed)
+
+- **Seen:** the user's review of the mockup (2026-11-12). With transparency off, the selected
+  **Home** pill had no visible background.
+- **Cause:** "transparency off" mapped both the sidebar's glass and the selected item's
+  glass to the same solid colour.
+- **Fix:** the selected item has a solid colour of its own (`--selected-solid`). The contrast
+  test checks that the selected item stands out from the sidebar in every appearance, and
+  the gallery's checks compare the two colours in the browser. The light glass also moved,
+  since a near-white pill on near-white glass was too close.
+
+### I-87: the fade under the page header faded the header (design rule)
+
+- **Seen:** the user saw content peek round the floating header's rounded corners. The first
+  fix, a fade at the top of the scrolling content, also faded the header's own top edge,
+  because the header was inside the scroller and a mask covers everything inside.
+- **Rule:** a page's header sits beside its scroller, not inside it (`Page.tsx`). The
+  scroller fades out under the header; the header stays sharp.
+
+### I-88: axe can't measure contrast on glass (design rule)
+
+- **What:** for text over translucent layers, gradients or very short text, axe's
+  `color-contrast` rule returns "incomplete" rather than a result. A check that only looked
+  for violations would pass without measuring anything.
+- **Rule:** `src/styles/contrast.test.ts` measures contrast from the design values. It
+  blends each fill over Kiln's backdrop, with and without the ember glow, and over the
+  smoke behind a dialog. It checks WCAG AA for each text colour in light, dark and
+  transparency off. The gallery's axe run allows "incomplete" only for those reasons. The
+  first run moved five colours from the mockup: faint text, amber, the "stopped" ring, the
+  light sidebar glass and dark red.
+
+### I-89: the tray popup's glass over the desktop (design rule)
+
+- **Seen:** the gallery's light screenshots. The tray popup is a window of its own, so its
+  glass shows the desktop. Over a dark wallpaper, its fill came out mid-grey in light mode,
+  and the quieter text measured 3.2 to 3.6:1.
+- **Rule:** the popup's surface is Kiln's backdrop (`backdrop pop-frame`), which the
+  contrast test covers. Windows' Acrylic (ADR 0051 §6) may replace it in P4-03 only with a
+  fill opaque enough to pass the same check over both a light and a dark desktop.
+
+### I-90: the stop icon read as a checkbox (fixed)
+
+- **Seen:** the gallery's screenshots. An outlined square next to "Running", and before
+  "Stop all", looked like an unticked checkbox.
+- **Fix:** stop and start use the filled icons (`Stop16Filled`, `Play16Filled`).

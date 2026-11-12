@@ -94,6 +94,8 @@ function surfaces(t: Tokens): Record<string, Rgba> {
     out[`attention notice${where}`] = over(c("--warn-soft"), base);
     out[`attention row on glass${where}`] = over(c("--warn-soft"), glass);
     out[`failed notice${where}`] = over(c("--bad-soft"), base);
+    // A dialog's glass over the window darkened by the smoke behind it.
+    out[`dialog${where}`] = over(c("--glass"), over(c("--smoke"), base));
   }
   return out;
 }

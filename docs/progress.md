@@ -1470,7 +1470,7 @@ VMs.**
     `-HardReset`.
 
 <a id="phase-4"></a>
-## Phase 4: the desktop app, Windows (planned)
+## Phase 4: the desktop app, Windows (in progress)
 
 Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 0050](adr/0050-desktop-app.md).
 
