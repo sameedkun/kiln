@@ -930,7 +930,10 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
             project,
         } => service::add(&kind, version.as_deref(), name.as_deref(), &ports, project).map(|_| ()),
         ServiceAction::List => service::list(),
-        ServiceAction::Catalog => service::catalog(),
+        ServiceAction::Catalog => {
+            service::catalog();
+            Ok(())
+        }
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),
         ServiceAction::Restart { name } => service::restart(&name),

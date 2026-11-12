@@ -865,7 +865,7 @@ fn sites_data(
         "parked": parked,
         "sites": sites,
         "proxies": proxies,
-        "skipped": all.skipped.iter().map(|s| json!({"folder": s.folder, "reason": s.reason.to_string()})).collect::<Vec<_>>(),
+        "skipped": all.skipped.iter().map(|s| json!({"folder": s.folder, "reason": s.reason.clone()})).collect::<Vec<_>>(),
         "warnings": all.warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
     }))
 }

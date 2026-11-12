@@ -760,7 +760,7 @@ fn answers(record: &ServiceRecord, listeners: &crate::coexist::Listeners) -> boo
 }
 
 /// `kiln service catalog`: every kind Kiln offers, with the versions for this machine.
-pub fn catalog() -> Result<(), String> {
+pub fn catalog() {
     let here = |r: &&kiln_services::Release| {
         r.os == std::env::consts::OS && r.arch == std::env::consts::ARCH
     };
@@ -791,7 +791,7 @@ pub fn catalog() -> Result<(), String> {
                 "runs_in_project": p.runs_in_project(),
             })).collect::<Vec<_>>(),
         }));
-        return Ok(());
+        return;
     }
     for (p, versions) in &kinds {
         let shown = if p.runs_in_project() {
@@ -809,7 +809,6 @@ pub fn catalog() -> Result<(), String> {
         );
     }
     say!("Add one with `kiln service add <kind> [--version X]`.");
-    Ok(())
 }
 
 /// `kiln service list`.
