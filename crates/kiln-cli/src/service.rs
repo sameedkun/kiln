@@ -759,10 +759,83 @@ fn answers(record: &ServiceRecord, listeners: &crate::coexist::Listeners) -> boo
         })
 }
 
+/// `kiln service catalog`: every kind Kiln offers, with the versions for this machine.
+pub fn catalog() -> Result<(), String> {
+    let here = |r: &&kiln_services::Release| {
+        r.os == std::env::consts::OS && r.arch == std::env::consts::ARCH
+    };
+    let kinds: Vec<_> = kiln_services::providers()
+        .iter()
+        .map(|p| {
+            let versions: Vec<&str> = p
+                .releases()
+                .iter()
+                .filter(here)
+                .map(|r| r.version)
+                .collect();
+            (p, versions)
+        })
+        .collect();
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "kinds": kinds.iter().map(|(p, versions)| serde_json::json!({
+                "kind": p.kind(),
+                "name": p.display_name(),
+                "license": p.license(),
+                "versions": versions,
+                "ports": p.ports().iter().map(|port| serde_json::json!({
+                    "role": port.role,
+                    "usual": port.usual,
+                    "what": port.what,
+                })).collect::<Vec<_>>(),
+                "runs_in_project": p.runs_in_project(),
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
+    for (p, versions) in &kinds {
+        let shown = if p.runs_in_project() {
+            "runs in its project (composer require)".to_owned()
+        } else if versions.is_empty() {
+            "not for this machine yet".to_owned()
+        } else {
+            versions.join(", ")
+        };
+        say!(
+            "{:<12} {:<22} {shown}  ({})",
+            p.kind(),
+            p.display_name(),
+            p.license()
+        );
+    }
+    say!("Add one with `kiln service add <kind> [--version X]`.");
+    Ok(())
+}
+
 /// `kiln service list`.
 pub fn list() -> Result<(), String> {
     let store = crate::web::open_store()?;
     let records = store.services().map_err(|e| e.to_string())?;
+    if crate::out::json() {
+        let listeners = crate::coexist::Listeners::now();
+        let running = matches!(
+            supervisor()?.status().map_err(|e| e.to_string())?,
+            ProcStatus::Running { .. }
+        );
+        crate::out::data(serde_json::json!({
+            "supervisor_running": running,
+            "instances": records.iter().map(|r| serde_json::json!({
+                "name": r.name,
+                "kind": r.kind,
+                "version": r.version,
+                "ports": r.ports,
+                "enabled": r.enabled,
+                "running": r.enabled && running && answers(r, &listeners),
+                "project": r.project,
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
     if records.is_empty() {
         let kinds: Vec<_> = kiln_services::providers()
             .iter()

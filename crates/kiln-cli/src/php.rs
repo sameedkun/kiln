@@ -81,6 +81,17 @@ pub fn available() -> Result<(), String> {
         .into_iter()
         .map(|r| r.version)
         .collect();
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "releases": releases.iter().rev().map(|r| serde_json::json!({
+                "line": r.minor,
+                "version": r.version,
+                "archive": r.archive,
+                "installed": installed.contains(&r.version),
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
     say!("Installable PHP builds (x64, non-thread-safe) from windows.php.net:");
     for release in releases.iter().rev() {
         let mark = if installed.contains(&release.version) {
@@ -325,7 +336,23 @@ fn install_system(_spec: &str) -> Result<(), String> {
 }
 
 pub fn list() -> Result<(), String> {
-    let records = open_store()?.php_versions().map_err(|e| e.to_string())?;
+    let store = open_store()?;
+    let records = store.php_versions().map_err(|e| e.to_string())?;
+    if crate::out::json() {
+        let default = store
+            .setting(crate::pool::DEFAULT_KEY)
+            .map_err(|e| e.to_string())?;
+        crate::out::data(serde_json::json!({
+            "default": default,
+            "versions": records.iter().map(|r| serde_json::json!({
+                "version": r.version,
+                "dir": r.dir,
+                "installed": kiln_php::is_installed(&r.dir),
+                "system": r.archive == kiln_php::linux::SYSTEM_ARCHIVE,
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
     if records.is_empty() {
         say!("No PHP installed by Kiln yet. See `kiln php available`.");
         return Ok(());

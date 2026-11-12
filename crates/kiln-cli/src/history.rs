@@ -36,6 +36,19 @@ pub fn history(all: bool) -> Result<(), String> {
         .rev()
         .filter(|e| all || current(e.state))
         .collect();
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "operations": shown.iter().map(|e| serde_json::json!({
+                "id": e.id,
+                "at_ms": times.get(&e.id).map(|(created, _)| *created),
+                "state": crate::apply::state_word(e.state).trim(),
+                "kind": e.kind,
+                "description": kiln_platform::describe::describe(&e.kind, &e.params),
+            })).collect::<Vec<_>>(),
+            "hidden": entries.iter().filter(|e| !current(e.state)).count(),
+        }));
+        return Ok(());
+    }
     if shown.is_empty() {
         if entries.is_empty() {
             say!("Kiln hasn't changed anything on this machine yet.");

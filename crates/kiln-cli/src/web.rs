@@ -715,11 +715,15 @@ pub(crate) fn site_urls(store: &StateStore) -> BTreeMap<String, String> {
 pub fn sites() -> Result<(), String> {
     let store = open_store()?;
     let parked = store.parked().map_err(|e| e.to_string())?;
+    let all = resolved(&store)?;
+    let proxies = proxy_specs(&store)?;
+    if crate::out::json() {
+        crate::out::data(sites_data(&store, &parked, &all, &proxies)?);
+        return Ok(());
+    }
     for dir in &parked {
         say!("Parked: {}", dir.display());
     }
-    let all = resolved(&store)?;
-    let proxies = proxy_specs(&store)?;
     if all.sites.is_empty() && proxies.is_empty() {
         say!(
             "No sites yet. Run `kiln link` in a project folder, or `kiln park` in a folder of projects."
@@ -794,6 +798,76 @@ pub fn sites() -> Result<(), String> {
         say!("warning: {warning}");
     }
     Ok(())
+}
+
+/// `kiln --json sites`' data (ADR 0053 §3): the same values the table is made of.
+fn sites_data(
+    store: &StateStore,
+    parked: &[PathBuf],
+    all: &kiln_sites::Resolved,
+    proxies: &[SiteSpec],
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    let config = url_config(store);
+    let in_hosts = hosts_names();
+    let listed = |host: &str| in_hosts.iter().any(|n| n == host);
+    let installed = kiln_runtime::installed(store).map_err(|e| e.to_string())?;
+    let versions =
+        kiln_runtime::site_versions(store, &all.sites, &installed).map_err(|e| e.to_string())?;
+    let sites: Vec<_> = all
+        .sites
+        .iter()
+        .filter(|s| !proxies.iter().any(|p| p.host == s.host))
+        .map(|site| {
+            let host = site.host.as_str();
+            let php = versions
+                .get(host)
+                .filter(|_| site.driver.uses_php())
+                .map(|v| {
+                    json!({
+                        "version": v.php.as_ref().map(|p| p.version.clone()),
+                        "pinned": v.pinned,
+                        "from_project": v.from_project,
+                        "fell_back": v.fell_back,
+                    })
+                });
+            let (source, folder) = match (&site.alias_of, &site.source) {
+                (Some(_), _) => ("alias", None),
+                (None, kiln_sites::Source::Link) => ("link", None),
+                (None, kiln_sites::Source::Parked(dir)) => ("parked", Some(dir)),
+            };
+            json!({
+                "host": host,
+                "url": config.site_url(&spec(site, &BTreeMap::new())),
+                "driver": site.driver.name(),
+                "document_root": site.document_root,
+                "secure": site.secure,
+                "source": source,
+                "parked_in": folder,
+                "alias_of": site.alias_of.as_ref().map(HostName::as_str),
+                "php": php,
+                "in_hosts": listed(host),
+            })
+        })
+        .collect();
+    let proxies: Vec<_> = proxies
+        .iter()
+        .map(|proxy| {
+            json!({
+                "host": proxy.host.as_str(),
+                "url": config.site_url(proxy),
+                "target": proxy.proxy.as_ref().map(ToString::to_string),
+                "in_hosts": listed(proxy.host.as_str()),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "parked": parked,
+        "sites": sites,
+        "proxies": proxies,
+        "skipped": all.skipped.iter().map(|s| json!({"folder": s.folder, "reason": s.reason.to_string()})).collect::<Vec<_>>(),
+        "warnings": all.warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    }))
 }
 
 pub fn install(archive: Option<PathBuf>) -> Result<(), String> {

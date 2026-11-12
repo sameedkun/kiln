@@ -310,6 +310,8 @@ enum ToolAction {
 
 #[derive(Debug, Subcommand)]
 enum ServiceAction {
+    /// What Kiln can run: every kind with its versions for this machine, licence and ports.
+    Catalog,
     /// Download (checked against Kiln's pinned SHA-256), set up and start a service.
     Add {
         /// What to run, e.g. mailpit.
@@ -732,7 +734,7 @@ fn changes_state(command: &Command) -> bool {
                 action: WebAction::Status | WebAction::Config
             }
             | Command::Service {
-                action: ServiceAction::List | ServiceAction::Logs { .. }
+                action: ServiceAction::List | ServiceAction::Catalog | ServiceAction::Logs { .. }
             }
             // A client session can last hours and changes nothing of Kiln's.
             | Command::Db { .. }
@@ -928,6 +930,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
             project,
         } => service::add(&kind, version.as_deref(), name.as_deref(), &ports, project).map(|_| ()),
         ServiceAction::List => service::list(),
+        ServiceAction::Catalog => service::catalog(),
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),
         ServiceAction::Restart { name } => service::restart(&name),

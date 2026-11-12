@@ -224,6 +224,25 @@ fn static_build(record: &PhpRecord) -> String {
 pub fn list(spec: Option<&str>) -> Result<(), String> {
     let record = target(&open_store()?, spec)?;
     let all = inspect(&record)?;
+    if crate::out::json() {
+        let of = |kind: Kind| -> Vec<&str> {
+            all.iter()
+                .filter(|e| e.kind == kind)
+                .map(|e| e.name.as_str())
+                .collect()
+        };
+        crate::out::data(serde_json::json!({
+            "php": record.version,
+            "ini": ini_path(&record),
+            "static_build": is_static(&record),
+            "toggles": all.iter().filter(|e| e.kind == Kind::Toggle)
+                .map(|e| serde_json::json!({"name": e.name, "on": e.loaded}))
+                .collect::<Vec<_>>(),
+            "built_in": of(Kind::BuiltIn),
+            "distribution": of(Kind::Distribution),
+        }));
+        return Ok(());
+    }
     say!("PHP {} ({})", record.version, ini_path(&record).display());
     let names = |kind: Kind| -> Vec<&str> {
         all.iter()

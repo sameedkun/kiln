@@ -42,6 +42,18 @@ pub fn available() -> Result<(), String> {
     let platform = platform()?;
     let releases = releases(&crate::php::fetcher()?)?;
     let installed = kiln_node::installed(&node_root()?);
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "releases": index::newest_per_line(&releases, platform).iter().map(|r| serde_json::json!({
+                "line": r.numbers[0],
+                "version": r.version,
+                "lts": r.lts,
+                "date": r.date,
+                "installed": installed.iter().any(|n| n.version == r.version),
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
     say!(
         "Node releases for {} from nodejs.org (newest of each line):",
         platform.suffix
@@ -132,12 +144,23 @@ pub fn install(spec: &str) -> Result<(), String> {
 /// `kiln node list`.
 pub fn list() -> Result<(), String> {
     let installed = kiln_node::installed(&node_root()?);
+    let default_spec = default_spec()?;
+    let default = kiln_runtime::node::default_node(&installed, default_spec.as_deref());
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "default": default.map(|d| d.version.clone()),
+            "versions": installed.iter().map(|n| serde_json::json!({
+                "version": n.version,
+                "lts": n.lts,
+                "dir": n.dir,
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
     if installed.is_empty() {
         say!("No Node installed by Kiln yet. See `kiln node available`.");
         return Ok(());
     }
-    let default_spec = default_spec()?;
-    let default = kiln_runtime::node::default_node(&installed, default_spec.as_deref());
     for node in &installed {
         let lts = node
             .lts
