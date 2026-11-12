@@ -615,6 +615,60 @@ Check 'service.restart through the API (the CLI does it, under its lock)' {
     if ($refused -notmatch 'no service called') { throw "an unknown name went through:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+
+# API version 2 (ADR 0053): the CLI's --json mode, reads through it, and changes as jobs.
+function JsonLines($lines) { @($lines | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }) }
+function WaitJob($id) {
+    $deadline = (Get-Date).AddSeconds(180)
+    do {
+        Start-Sleep -Milliseconds 500
+        $job = (Kiln daemon call jobs.get ('{\"job\":' + $id + '}')) | ConvertFrom-Json
+    } until (-not $job.running -or (Get-Date) -gt $deadline)
+    if ($job.running) { throw "job $id still running after 180 s" }
+    $job
+}
+Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
+    $lines = @(& $Kiln --json sites)
+    if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    $last = $events[-1]
+    if ($last.type -ne 'result' -or -not $last.ok) { throw "last line: $($lines[-1])" }
+    if (-not ($last.data.sites | Where-Object { $_.host -eq 'shop.test' })) { throw "no shop.test in: $($lines[-1])" }
+}
+Check 'kiln --json undo without --confirmed: asks, stops with exit code 3, changes nothing' {
+    $before = Kiln history
+    $lines = @(& $Kiln --json undo)
+    $code = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($code -ne 3) { throw "exit code $code`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    if (-not ($events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event:`n$($lines -join "`n")" }
+    if (-not $events[-1].needs_confirmation) { throw "last line: $($lines[-1])" }
+    if ((Kiln history) -ne $before) { throw 'history changed' }
+}
+Check 'API v2: kiln.hello says 2; sites, services and the catalog are read through kiln --json' {
+    Expect '"api": 2' (Kiln daemon call kiln.hello)
+    Expect '"shop.test"' (Kiln daemon call sites.list)
+    Expect '"mailpit-1"' (Kiln daemon call services.list)
+    Expect '"mailpit"' (Kiln daemon call services.catalog)
+}
+Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
+    $before = Kiln history
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"undo\"],\"mode\":\"preview\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.needs_confirmation) { throw "the preview didn't stop at its confirmation: $($job | ConvertTo-Json -Depth 6)" }
+    if (-not ($job.events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event: $($job | ConvertTo-Json -Depth 6)" }
+    if ((Kiln history) -ne $before) { throw 'a preview changed the history' }
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"service\",\"restart\",\"mailpit-1\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.ok) { throw "the restart job failed: $($job | ConvertTo-Json -Depth 6)" }
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the job" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"uninstall\"],\"mode\":\"apply\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "can't be run through the API") { throw "uninstall wasn't refused:`n$refused" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"php\",\"install\",\"8.4\"],\"mode\":\"preview\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
 Check 'the services supervisor crashes: the daemon brings every service back' {
     # Kiln's own record of it: the first line of its PID file.
     $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"

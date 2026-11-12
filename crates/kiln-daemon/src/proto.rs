@@ -5,8 +5,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The API version `kiln.hello` reports. A breaking change adds `v2` methods beside these.
-pub const API_VERSION: u32 = 1;
+/// The API version `kiln.hello` reports: 2 adds reads through `kiln --json` and jobs
+/// ([ADR 0053]); version 1's methods stay as they were.
+///
+/// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+pub const API_VERSION: u32 = 2;
 
 /// Longest line either side accepts, so a stuck or hostile peer can't exhaust memory.
 pub const MAX_LINE: usize = 1024 * 1024;

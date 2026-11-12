@@ -58,7 +58,7 @@ pub fn serve(listener: &Listener, handler: &Arc<dyn Handler>, events: &Arc<Event
                 let handler = Arc::clone(handler);
                 let events = Arc::clone(events);
                 std::thread::spawn(move || {
-                    let _ = serve_connection(stream, handler.as_ref(), &events);
+                    let _ = serve_connection(stream, &handler, &events);
                 });
             }
             Err(e) => return e,
@@ -66,8 +66,16 @@ pub fn serve(listener: &Listener, handler: &Arc<dyn Handler>, events: &Arc<Event
     }
 }
 
-/// Serves one connection until the client closes it.
-pub fn serve_connection(stream: Stream, handler: &dyn Handler, events: &Events) -> io::Result<()> {
+/// Serves one connection until the client closes it. Each call is answered on its own
+/// thread, so a slow one (a download, a port scan) doesn't hold up the others; responses
+/// carry their ids ([ADR 0053] §4).
+///
+/// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+pub fn serve_connection(
+    stream: Stream,
+    handler: &Arc<dyn Handler>,
+    events: &Events,
+) -> io::Result<()> {
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -101,9 +109,18 @@ pub fn serve_connection(stream: Stream, handler: &dyn Handler, events: &Events) 
                 continue;
             }
         };
-        let outcome = if request.jsonrpc != "2.0" {
-            Err(RpcError::new(INVALID_REQUEST, "jsonrpc must be \"2.0\""))
-        } else if request.method == "events.subscribe" {
+        if request.jsonrpc == "2.0" && request.method != "events.subscribe" {
+            let handler = Arc::clone(handler);
+            let writer = Arc::clone(&writer);
+            std::thread::spawn(move || {
+                let outcome = handler.call(&request.method, &request.params);
+                if let Some(id) = request.id {
+                    let _ = write_line(&writer, &Response::new(id, outcome));
+                }
+            });
+            continue;
+        }
+        let outcome = if request.jsonrpc == "2.0" {
             let receiver = events.subscribe();
             let writer = Arc::clone(&writer);
             std::thread::spawn(move || {
@@ -119,7 +136,7 @@ pub fn serve_connection(stream: Stream, handler: &dyn Handler, events: &Events) 
             });
             Ok(json!({"subscribed": true}))
         } else {
-            handler.call(&request.method, &request.params)
+            Err(RpcError::new(INVALID_REQUEST, "jsonrpc must be \"2.0\""))
         };
         if let Some(id) = request.id {
             write_line(&writer, &Response::new(id, outcome))?;

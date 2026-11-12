@@ -15,12 +15,21 @@ use std::time::{Duration, Instant, SystemTime};
 use kiln_sys::background::ProcStatus;
 use serde_json::{Value, json};
 
+use crate::allow::{self, Mode};
+use crate::jobs::{self, Jobs};
 use crate::proto::{API_VERSION, Hello, RpcError};
 use crate::server::{Events, Handler};
 
 /// Rotate the log at this size, keeping this many old files.
 const LOG_LIMIT: u64 = 5 * 1024 * 1024;
 const LOG_KEEP: u32 = 3;
+
+/// How long a read method's `kiln --json` may take ([ADR 0053] §4).
+///
+/// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+const READ_LIMIT: Duration = Duration::from_secs(120);
+/// How long a job may take: long enough for the largest download on a slow line.
+const JOB_LIMIT: Duration = Duration::from_hours(2);
 
 /// Where the daemon's files are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +230,12 @@ pub struct Daemon {
     /// When the intermediate was last checked, and the renewals made since the daemon started.
     ca_checked: Mutex<Option<Instant>>,
     renewals: Mutex<Vec<Value>>,
+    /// Jobs started through the API ([ADR 0053] §4).
+    ///
+    /// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+    jobs: Arc<Jobs>,
+    /// The `kiln` program next to the daemon.
+    kiln: PathBuf,
 }
 
 impl Daemon {
@@ -236,6 +251,11 @@ impl Daemon {
             service_repairs: Mutex::new(Vec::new()),
             ca_checked: Mutex::new(None),
             renewals: Mutex::new(Vec::new()),
+            jobs: Arc::new(Jobs::default()),
+            kiln: std::env::current_exe().map_or_else(
+                |_| PathBuf::from(KILN_EXE),
+                |me| me.with_file_name(KILN_EXE),
+            ),
         }
     }
 
@@ -252,6 +272,20 @@ impl Daemon {
         "ca.status",
         "ca.renew",
         "events.subscribe",
+        // Version 2 (ADR 0053).
+        "sites.list",
+        "php.list",
+        "php.available",
+        "php.extensions",
+        "node.list",
+        "node.available",
+        "services.list",
+        "services.catalog",
+        "history.list",
+        "doctor.report",
+        "jobs.start",
+        "jobs.get",
+        "jobs.list",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -545,6 +579,77 @@ impl Daemon {
             .map_err(RpcError::kiln)
     }
 
+    /// A read method: `kiln --json <args>`, answered with its data ([ADR 0053] §4).
+    ///
+    /// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+    fn read(&self, args: &[&str]) -> Result<Value, RpcError> {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        let outcome = jobs::run(&self.kiln, &args, false, READ_LIMIT, &mut |_| {});
+        if outcome.ok {
+            Ok(outcome.last.get("data").cloned().unwrap_or(Value::Null))
+        } else {
+            Err(RpcError::kiln(
+                outcome.last["message"].as_str().unwrap_or("kiln failed"),
+            ))
+        }
+    }
+
+    /// `jobs.start`: checks the command, answers with the job's id, and runs it on its own
+    /// thread, sending each line as `job.event` and the end as `job.finished`.
+    fn start_job(&self, params: &Value) -> Result<Value, RpcError> {
+        let args: Vec<String> = params["args"]
+            .as_array()
+            .and_then(|list| list.iter().map(|a| a.as_str().map(str::to_owned)).collect())
+            .ok_or_else(|| RpcError::kiln("params.args must be a list of strings"))?;
+        let mode =
+            Mode::parse(params["mode"].as_str().unwrap_or_default()).map_err(RpcError::kiln)?;
+        allow::check(&args, mode).map_err(RpcError::kiln)?;
+        let id = self.jobs.add(
+            args.clone(),
+            mode,
+            time::OffsetDateTime::now_utc().to_string(),
+        );
+        self.log.line(&format!(
+            "job {id}: kiln {} ({})",
+            args.join(" "),
+            mode.name()
+        ));
+        let (jobs, events, log, kiln) = (
+            Arc::clone(&self.jobs),
+            Arc::clone(&self.events),
+            Arc::clone(&self.log),
+            self.kiln.clone(),
+        );
+        std::thread::spawn(move || {
+            let outcome = jobs::run(&kiln, &args, mode == Mode::Apply, JOB_LIMIT, &mut |event| {
+                jobs.event(id, event.clone());
+                events.publish("job.event", json!({"job": id, "event": event}));
+            });
+            let finished = json!({
+                "job": id,
+                "ok": outcome.ok,
+                "exit": outcome.exit,
+                "needs_confirmation": outcome.needs_confirmation,
+                "last": outcome.last,
+            });
+            let how = if outcome.ok {
+                "done"
+            } else if outcome.needs_confirmation {
+                "stopped at its confirmation"
+            } else {
+                "failed"
+            };
+            log.line(&format!("job {id}: {how}"));
+            jobs.finish(id, finished.clone());
+            events.publish("job.finished", finished);
+            if mode == Mode::Apply {
+                let command: Vec<_> = args.iter().take(2).cloned().collect();
+                events.publish("state.changed", json!({"job": id, "command": command}));
+            }
+        });
+        Ok(json!({"job": id}))
+    }
+
     fn status(&self) -> Value {
         let uptime = self.started.elapsed().map_or(0, |d| d.as_secs());
         let started = time::OffsetDateTime::from(self.started).to_string();
@@ -601,6 +706,22 @@ fn run_kiln(args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// A PHP version as `php.extensions` takes it: 8.4 or 8.4.13, nothing else.
+fn check_version(text: &str) -> Result<(), RpcError> {
+    let fine = !text.is_empty()
+        && text.len() <= 12
+        && text
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+    if fine {
+        Ok(())
+    } else {
+        Err(RpcError::kiln(format!(
+            "{text:?} isn't a PHP version like 8.4"
+        )))
+    }
+}
+
 fn state_json(status: &ProcStatus) -> Value {
     match status {
         ProcStatus::Running { pid } => json!({"state": "running", "pid": pid}),
@@ -650,6 +771,38 @@ impl Handler for Daemon {
                     .map(|output| json!({"ok": true, "output": output}))
                     .map_err(RpcError::kiln)
             }
+            "sites.list" => self.read(&["sites"]),
+            "php.list" => self.read(&["php", "list"]),
+            "php.available" => self.read(&["php", "available"]),
+            "php.extensions" => match params["php"].as_str() {
+                Some(php) => {
+                    check_version(php)?;
+                    self.read(&["php", "ext", "list", "--php", php])
+                }
+                None => self.read(&["php", "ext", "list"]),
+            },
+            "node.list" => self.read(&["node", "list"]),
+            "node.available" => self.read(&["node", "available"]),
+            "services.list" => self.read(&["service", "list"]),
+            "services.catalog" => self.read(&["service", "catalog"]),
+            "history.list" => {
+                if params["all"].as_bool().unwrap_or(false) {
+                    self.read(&["history", "--all"])
+                } else {
+                    self.read(&["history"])
+                }
+            }
+            "doctor.report" => self.read(&["doctor"]),
+            "jobs.start" => self.start_job(params),
+            "jobs.get" => {
+                let id = params["job"]
+                    .as_u64()
+                    .ok_or_else(|| RpcError::kiln("params.job (a job id) is missing"))?;
+                self.jobs
+                    .get(id)
+                    .ok_or_else(|| RpcError::kiln(format!("no job {id}")))
+            }
+            "jobs.list" => Ok(self.jobs.list()),
             other => Err(RpcError::method_not_found(other)),
         }
     }

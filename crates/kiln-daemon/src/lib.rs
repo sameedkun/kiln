@@ -5,11 +5,14 @@
 //! - [`server`]: the accept loop, per-connection threads and event notifications.
 //! - [`client`]: what `kiln daemon …` uses.
 //! - [`daemon`]: the methods, the web-stack watchdog and the log.
+//! - [`jobs`] and [`allow`]: running `kiln --json` for reads and jobs (API version 2).
 //!
 //! [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
 
+pub mod allow;
 pub mod client;
 pub mod daemon;
+pub mod jobs;
 pub mod proto;
 pub mod server;
 pub mod transport;
