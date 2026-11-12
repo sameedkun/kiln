@@ -1,6 +1,6 @@
 # 0050. The desktop app on Windows: a tray app over `kilnd`'s API
 
-- **Status:** accepted (architecture); the visual design is chosen in P4-02
+- **Status:** accepted (architecture); §2's tray clicks and §4's look are amended by [ADR 0051](0051-desktop-visual-design.md) (glass over Kiln's own backdrop, not Mica)
 - **Date:** 2026-11-12
 - **Task:** Phase 4 plan · Builds on [ADR 0002](0002-rust-core-and-tauri-gui.md), [0026](0026-kilnd-daemon-and-local-api.md), [0039](0039-windows-first-and-services-catalog.md), [0048](0048-kilnd-and-services.md)
 

@@ -66,6 +66,7 @@ working name). Start here.
 | [0048](adr/0048-kilnd-and-services.md) | `kilnd` and services: the watchdog runs `kiln services resume` when the services supervisor exited on its own (a crash or a reboot), leaving stopped instances stopped; the API gains `services.status` and `service.start/stop/restart` (names checked, run through the CLI) | accepted (Phase 3) |
 | [0049](adr/0049-data-safety.md) | Data safety: `kiln db dump` / `restore` with the services' own tools (`mysqldump`, `mariadb-dump`, `pg_dump`, `pg_dumpall`; never overwrite; restore makes the database); `kiln uninstall --keep-data` copies each data folder to `~/Kiln data (<date>)` before anything is undone | accepted (Phase 3) |
 | [0050](adr/0050-desktop-app.md) | The desktop app on Windows: a Tauri tray app over `kilnd`'s API; close to tray, quit leaves services running, one login item starts the app and `kilnd`; the API grows to cover the app with the CLI's `--json` mode; visual design chosen in P4-02 | accepted (Phase 4) |
+| [0051](adr/0051-desktop-visual-design.md) | The desktop app's visual design: glass only for what floats, over Kiln's own painted backdrop (no Mica); Windows caption buttons; ink primary actions and an ember brand colour, statuses always with a word; Inter, Cascadia Mono and Fluent icons bundled; tray left click opens the window, right click a glass popup; "start in the tray"; contrast, transparency-off and high contrast checked | accepted (Phase 4; mockup under review) |
 
 ## Conventions
 
