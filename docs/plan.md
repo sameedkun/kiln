@@ -204,6 +204,10 @@ request (2026-11-12).
 - **Developer tools:** a log viewer that follows logs live; a project's queue worker,
   scheduler and Vite run as project processes; Xdebug per PHP, triggered per request; dumps
   from `dump()` collected and shown.
+- **What else the app shows** ([ADR 0052](adr/0052-phase-4-screens-and-scope.md)): Kiln's
+  memory, CPU and disk use with a way to clear downloads; updates for PHP and, if the user
+  turns it on, for Kiln; each site's request timing from Caddy's log; and an MCP server
+  that AI assistants can use once the user turns it on.
 - **Data viewers:** WhoDB opens every Kiln database, Redis and MongoDB, already connected.
   phpMyAdmin and Adminer stay.
 - **Verification:** the app's end-to-end tests run on CI's Windows runner, and uninstall
@@ -227,6 +231,11 @@ request (2026-11-12).
 | P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | Its server binds every interface: see below |
 | P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task |
 | P4-14 | The Phase 4 exit run: CI plus a by-hand check on a developer machine | all | |
+| P4-15 | The screens: every page drawn in the design gallery from the base components, with sample data that drafts the API's shapes | P4-02 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); **Done** 2026-11-12 |
+| P4-16 | Kiln's footprint: memory and CPU per Kiln process, disk use by folder, clearing the download cache | P4-03 | ADR 0052 |
+| P4-17 | Updates: PHP patch updates shown where they apply; checking GitHub for a new Kiln, off by default | P4-03 | ADR 0052 |
+| P4-18 | Request timing per site from Caddy's access log: median, slowest 5%, counts, failures, slowest requests; kept on the PC | P4-03 | ADR 0052; its own ADR first |
+| P4-19 | An MCP server for AI assistants (`kiln mcp`, from Phase 5): reads sites, services, logs and history; changes through the CLI, in History; off by default | P4-01 | ADR 0052; its own ADR first |
 
 **WhoDB (P4-12).** WhoDB (Apache-2.0) covers what Adminer doesn't: MongoDB, Redis and Valkey,
 SQLite, ClickHouse, Elasticsearch, as well as MySQL, MariaDB and PostgreSQL. It can be given
@@ -241,9 +250,10 @@ profiles from its environment, and what does it send (an install heartbeat that
 with its instances preconfigured. If not, Kiln builds the server from source with a
 loopback setting and offers that setting upstream.
 
-**Order:** P4-01 and P4-02 first (the API, and the design with the user), then P4-03, the
-pages (P4-04 to P4-07), the developer tools and WhoDB (P4-08 to P4-12), with P4-13 growing
-alongside, and P4-14 last.
+**Order:** P4-02 and P4-15 first (the design and every screen, with the user), then P4-01
+(the API, shaped by the screens), P4-03, the pages (P4-04 to P4-07), the developer tools,
+WhoDB and the additions (P4-08 to P4-12, P4-16 to P4-19), with P4-13 growing alongside, and
+P4-14 last.
 
 ## Phase 3–5 scope (summary)
 
@@ -256,7 +266,9 @@ alongside, and P4-14 last.
   Apple hardware to test on. Builds stay unsigned until Phase 5.
 - **Phase 5:** MSIX/winget, Homebrew cask, deb/rpm/AppImage; Developer ID signing and
   notarization on macOS (needs an Apple Developer Program account); signed update
-  manifests; `kiln mcp`; share-tunnel plug-ins; workspaces; external security review; SBOM.
+  manifests; share-tunnel plug-ins; workspaces; git worktrees as sites; database snapshots
+  before migrations; a Tinker console; LAN sharing; plugins and themes (ADR 0052; `kiln mcp`
+  moved to Phase 4 as P4-19); external security review; SBOM.
 
 ## Out of scope
 

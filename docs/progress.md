@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-02 done (ADR 0051), P4-01 next) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-02 and P4-15 done (ADRs 0051, 0052), P4-01 next) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1490,6 +1490,11 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-12 | WhoDB | planned | spike first: its server binds every interface |
 | P4-13 | Tests on CI | planned | |
 | P4-14 | Phase 4 exit run | planned | |
+| P4-15 | The screens | **done** 2026-11-12 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); every page in the gallery, checked with axe in light and dark |
+| P4-16 | Kiln's footprint (memory, CPU, disk, clear downloads) | planned | |
+| P4-17 | Updates (PHP patches shown; Kiln check, off by default) | planned | |
+| P4-18 | Request timing per site | planned | its own ADR first |
+| P4-19 | MCP server for AI assistants | planned | its own ADR first |
 
 ## Phase 3: services, Windows first (done)
 
@@ -1822,6 +1827,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-12 | **Phase 4 planned** (Windows only, at the user's request): [ADR 0050](adr/0050-desktop-app.md), a Tauri tray app over `kilnd`'s API that keeps running when its window is closed; 14 tasks (P4-01 to P4-14). WhoDB added as a data viewer beside phpMyAdmin and Adminer, after a spike: its server binds every network interface and its Windows release is a desktop app. Next: P4-01 (the API) and P4-02 (the visual design, with the user). |
 | 2026-11-12 | **P4-02 started:** [ADR 0051](adr/0051-desktop-visual-design.md), the visual design the user chose: glass only for what floats (sidebar, page header, dialogs, menus, tray popup) over Kiln's own painted backdrop, not Mica; ink primary actions and an ember brand colour, so it doesn't look templated; tray left click opens the window and right click a glass popup, as in Herd; "start in the tray". [The mockup](design/desktop-mockup.html) (home page and tray popup, light and dark, transparency off) is with the user for review. |
 | 2026-11-12 | **P4-02 done:** the user approved [the mockup](design/desktop-mockup.html) after two fixes it asked for (the selected page lost its colour with transparency off; content peeked round the page header). `apps/desktop` (frontend only; Tauri in P4-03): every design value in `tokens.css`, Tailwind 4 reading them, one glass recipe, `setAppearance` as the one place that sets theme and transparency, and the base components (title bar, sidebar with a sliding selection, page with a floating header, notice, rows, buttons, status, switch, text field, menu, dialog, toast, tray popup) in a design gallery. Measured contrast moved five colours from the mockup; stop and start became filled icons. CI job `desktop`: types, 26 unit tests (contrast in 4 appearances), build with no network calls, `npm audit`, axe in Edge in 4 appearances plus high contrast. |
+| 2026-11-12 | **P4-15 done** ([ADR 0052](adr/0052-phase-4-screens-and-scope.md)): after the user compared the gallery with Lerd's dashboard, every page is drawn in the design gallery and can be clicked through: Home, Sites (by parked folder, link, proxy), a site's page (Overview with PHP, Node, HTTPS, workers and services; Requests with timing and the slowest requests; Logs; `.env`), Services by category with the catalog, PHP with updates and extensions, Node, Logs, History, Settings (the PC's health, Kiln's footprint, updates, AI assistants). New components: tabs, filter chips, select, meter, log view, bar chart, setting row. Phase 4 grows by P4-16 to P4-19 (footprint, updates, request timing, MCP server); worktrees, snapshots, Tinker, LAN sharing, plugins and themes go to Phase 5. The gallery's checks cover every screen and tab in light and dark (26 browser checks). |
 
 ## How to update this file
 

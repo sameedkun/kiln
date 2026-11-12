@@ -16,8 +16,8 @@ export function Section({ title, meta, action, children }: { title: string; meta
 }
 
 /**
- * One row. `columns` is the CSS grid template shared by a list's rows; `actions` show on
- * hover or keyboard focus.
+ * One row. `columns` is the CSS grid template shared by a list's rows, with a column for
+ * `actions` when there are any (they show on hover or keyboard focus).
  */
 export function Row({ columns, children, actions }: { columns: string; children: ReactNode; actions?: ReactNode }) {
   return (

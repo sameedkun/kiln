@@ -15,9 +15,9 @@ const modes = [
 
 /**
  * Why axe may leave a contrast check unfinished: it can't see through layers, or the text is
- * a single character (a count). Both are measured from the design values instead.
+ * a single character (a count), or an empty field showing its placeholder. All are measured from the design values instead.
  */
-const layered = new Set(["bgOverlap", "bgGradient", "bgImage", "bgFilter", "pseudoContent", "elmPartiallyObscured", "nonBmp", "shortTextContent"]);
+const layered = new Set(["bgOverlap", "bgGradient", "bgImage", "bgFilter", "pseudoContent", "elmPartiallyObscured", "nonBmp", "shortTextContent", "emptyValue"]);
 
 async function scan(page: Page) {
   const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
@@ -43,11 +43,41 @@ for (const mode of modes) {
     const glass = await page.locator("nav[aria-label=Pages]").evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(pill).not.toBe(glass);
 
-    for (const shown of ["Home", "Tray popup (right-click on the tray icon)", "Components"]) {
+    for (const shown of ["App", "Tray popup (right-click on the tray icon)", "Components"]) {
       await page.locator(`[data-shown="${shown}"]`).screenshot({ path: info.outputPath(`${mode.name}-${shown.split(" ")[0].toLowerCase()}.png`) });
     }
   });
 }
+
+// Every screen of the app, and each tab of a site's page, in light and dark.
+const screens = ["home", "sites", "site:shop.test", "services", "php", "node", "logs", "history", "settings"];
+for (const theme of ["light", "dark"]) {
+  for (const screen of screens) {
+    test(`screen ${screen}, ${theme}`, async ({ page }, info) => {
+      await page.goto(`/?theme=${theme}&page=${screen}`);
+      await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      const app = page.locator('[data-shown="App"]');
+      const tabs = screen.startsWith("site:") ? ["Overview", "Requests", "Logs", ".env"] : [""];
+      for (const tab of tabs) {
+        if (tab) await app.getByRole("tab", { name: new RegExp(`^${tab.replace(".", "\\.")}`) }).click();
+        const { violations, unexplained } = await scan(page);
+        expect(violations, `${screen} ${tab}`).toEqual([]);
+        expect(unexplained, `${screen} ${tab}`).toEqual([]);
+        await app.screenshot({ path: info.outputPath(`${theme}-${screen.replace(":", "-")}${tab ? `-${tab.replace(".", "")}` : ""}.png`) });
+      }
+    });
+  }
+}
+
+test("the service catalog opens from Services", async ({ page }, info) => {
+  await page.goto("/?theme=light&page=services");
+  await page.getByRole("button", { name: "Add a service" }).click();
+  await expect(page.getByRole("dialog", { name: "Add a service" })).toBeVisible();
+  const { violations } = await scan(page);
+  expect(violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath("light-services-catalog.png") });
+});
 
 test("scrolled content goes under the page header's glass", async ({ page }) => {
   await page.goto("/?theme=light");
@@ -89,5 +119,5 @@ test("high contrast: no glass, and the selected page and focus still show", asyn
   const sites = nav.getByRole("button", { name: /^Sites/ });
   await sites.focus();
   expect(await sites.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe("none");
-  await page.locator('[data-shown="Home"]').screenshot({ path: info.outputPath("high-contrast-home.png") });
+  await page.locator('[data-shown="App"]').screenshot({ path: info.outputPath("high-contrast-home.png") });
 });

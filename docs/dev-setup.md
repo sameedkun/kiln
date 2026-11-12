@@ -62,7 +62,7 @@ The frontend: TypeScript, React, Vite and Tailwind. Tauri joins in P4-03. Its de
 | `src/styles/app.css` | Tailwind's names for those values; the one glass recipe (`glass`, `glass-pop`), the backdrop, the fade under the page header |
 | `src/appearance.ts` | The one place that sets the theme and transparency (`setAppearance`) |
 | `src/components/` | Base components: title bar, sidebar, page, notice, rows, buttons, status, tag, switch, text field, menu, dialog, toast, tray popup |
-| `src/gallery/` | The design gallery: the components with sample data, for review and for the checks |
+| `src/gallery/` | The design gallery: every screen of the app (`screens/`, clickable; `?page=sites`, `?page=site:shop.test`…), the tray popup and the components, with sample data (`sample.ts`) that drafts the API's shapes |
 | `src/styles/contrast.test.ts` | Contrast measured from the design values: each fill blended over the backdrop, WCAG AA |
 | `e2e/gallery.spec.ts` | axe in Edge in each appearance and high contrast; screenshots under `test-results/` |
 
