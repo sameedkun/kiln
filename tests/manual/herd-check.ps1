@@ -90,7 +90,8 @@ Check 'service add redis' { Kiln service add redis }
 Check 'kiln service list: both running' {
     $list = Kiln service list
     if (($list -split "`n" | Where-Object { $_ -match 'running' }).Count -lt 2) { throw "not both running:`n$list" }
-    Say ($list.Trim() -split "`n" | ForEach-Object { "     $_" }) -join "`n"
+    # One line each: Windows line endings would have each line overwrite the last.
+    $list.Trim() -split "\r?\n" | ForEach-Object { Say "     $_" }
 }
 Check 'kiln doctor names Herd and Kiln''s own ports' {
     $out = (& $Kiln doctor 2>&1 | ForEach-Object { "$_" }) -join "`n"

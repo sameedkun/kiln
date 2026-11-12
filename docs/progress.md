@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-11 · **Current phase:** **Phase 3 in progress** (15 of 16 tasks done; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); next: P3-12, the exit run) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); next: Phase 4, the GUI) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -24,6 +24,8 @@
 | Living next to other tools | **done** (Windows): `kiln doctor` names Herd, XAMPP, Laragon, WampServer and who holds each web port; `kiln web start` moves to a free port (80→8080, 443→8443) and says why; `.test` names shared with another tool are flagged. Nothing of theirs is touched |
 | Linux (Ubuntu 24.04 Desktop VM) | **part a done**: `kiln link`, `web install/start` (Caddy 2.11.7 for Linux, live reload over a Unix socket), `hosts sync` and `undo` through **one polkit password dialog per action**, `kiln doctor` (nsswitch, systemd-resolved, port owners from `/proc`). Checked in Firefox in the VM. **Part b done:** the CA root key in the desktop keyring; `kiln ca trust` for Chrome and Firefox (no password), `--system` for curl/PHP/Node (one dialog); `kiln uninstall` removes it all, keyring entry included. **Part c done:** `kiln php install 8.4` (Kiln's own static builds from `sameedkun/kiln-php`, SHA-256 pinned in Kiln, ADR 0025) or `--system` (the distribution's PHP), served by PHP-FPM, per-site versions switched live. **Part d done:** `kiln shims install` puts `php`/`composer` shims on PATH through a block in the shell startup files, undone byte for byte. **Linux now matches Windows for Phase 1.** |
 | Integration tests in VMs | **done**: scripted runs in Windows 11 (with Laravel Herd running) and Ubuntu 24.04. A full Kiln session, then `kiln uninstall`, leaves the machine **as it was** in both; Herd's site and settings are untouched, and Kiln survives Herd restarting |
+| Services (`kiln-services`, Phase 3) | **done** (Windows): MySQL, MariaDB, PostgreSQL, Redis, Mailpit (`mailpit.test`), Meilisearch, RustFS, MongoDB, Reverb (per project); phpMyAdmin and Adminer as sites; `kiln env use` with byte-exact undo; `[services]` and `herd.yml`; `kilnd` brings them back; `kiln db dump/restore`, `--keep-data`. Linux waits for containers (ADR 0039) |
+| Integration tests on CI | **done**: the Windows services scenario on every push, in both uninstall modes; Herd coexistence by hand on a developer machine (`tests/manual/herd-check.ps1`). The VMs were deleted on 2026-11-04 |
 | GUI | **not started** (Phase 4) |
 
 <a id="phase-0"></a>
@@ -1467,7 +1469,7 @@ VMs.**
   - The P2-02 reboot scripts (`autostart.ps1`, `autostart.sh`) stay, for quick checks and
     `-HardReset`.
 
-## Phase 3: services, Windows first (in progress)
+## Phase 3: services, Windows first (done)
 
 Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux). Planned
 2026-10-31, with [ADR 0035](adr/0035-services.md) for instances, providers, ports, data and
@@ -1494,7 +1496,7 @@ Tasks and exit criteria are in [plan.md](plan.md#phase-3-services-windows--linux
 | P3-09 | `[services]` in `kiln.toml`, `herd.yml` services | **done** | ADR 0046; CI scenario 65 checks |
 | P3-10 | `kilnd` and services | **done** | ADR 0048; CI scenario 75 checks |
 | P3-11 | Data safety: dump/restore, `--delete-data`/`--keep-data` | **done** | ADR 0049; CI scenario 82 checks |
-| P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | next | ADR 0039 |
+| P3-12 | Phase 3 exit run (CI scenario + by-hand Herd check) | **done** | CI 89 checks in each uninstall mode; Herd check passed on a developer machine |
 | P3-13 | Windows scenario on GitHub Actions | **done** | ADR 0039 §3; `scenario.yml`, `tests/ci/windows-services.ps1`; 17 checks + before/after, green in about 5 minutes |
 | P3-14 | Meilisearch, RustFS, MongoDB | **done** | ADR 0042; mongosh as a companion; CI scenario 45 checks |
 | P3-15 | phpMyAdmin and Adminer as Kiln sites | **done** | ADR 0043; `kiln tool add`; CI scenario 52 checks |
@@ -1794,6 +1796,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-04 | **Test VMs deleted** at the user's request: `kiln-win11`, `kiln-ubuntu` and `kiln-spike02` (about 124 GB on E:). Tests run on GitHub Actions (P3-13); Herd coexistence and the certificate dialog are checked by hand before a release on a developer machine with Herd. ADR 0039 amended, ADR 0024 and `dev-setup.md` updated; the VM scripts stay for rebuilding one. |
 | 2026-11-11 | **P3-10 done:** `kilnd` and services ([ADR 0048](adr/0048-kilnd-and-services.md)). The watchdog checks the services supervisor on each pass, with its own backoff: a stale PID file (a crash or a reboot) makes it run `kiln services resume`, a new hidden command that starts the supervisor again with the instances that should run and leaves stopped ones stopped; restarts are logged, counted and published as `services.repaired`. The API gains `services.status` (supervisor and instances, read from Kiln's state) and `service.start/stop/restart` (the name is checked against the state first, then the CLI does it). `kiln daemon status` shows how many services answer and how many restarts the daemon made. Also: `rusqlite` 0.41 for RUSTSEC-2026-0459 in the bundled SQLite ([I-85](issues.md#i-85)). CI kills the services supervisor and the daemon brings all 12 instances back: 75 checks, green. Next: P3-11 (data safety). |
 | 2026-11-11 | **P3-11 done:** data safety ([ADR 0049](adr/0049-data-safety.md)). `kiln db dump <instance> [database] [--output]` writes portable SQL with the service's own tool (`mysqldump`/`mariadb-dump` with a consistent snapshot, routines, events and triggers; `pg_dump --no-owner` for one database, `pg_dumpall` for the server), never over an existing file; `kiln db restore <instance> <file> [database]` loads it through the client, making the database if missing, with `psql` stopping at the first error. `kiln db <instance>` still opens the client. `kiln uninstall --keep-data` (exclusive with `--delete-data`) copies each data folder to `~/Kiln data (<date>)/<instance>` after the services stop and before anything is undone, checked by size; a failed copy stops uninstall with nothing changed. CI dumps the Laravel app's MySQL database and restores it under a new name with the same rows, does the same on PostgreSQL, and uninstalls with `--keep-data`: 82 checks, green on the first run. Next: P3-12, Phase 3's exit run. |
+| 2026-11-12 | **P3-12 done: Phase 3 is complete.** The CI scenario now covers every exit criterion: the Laravel app migrates and serves pages on MySQL, MariaDB and PostgreSQL (a page load writes its database session); `https://mailpit.test` is checked against Kiln's own root; services keep running through `kiln web stop`; a simulated reboot (daemon and services supervisor gone, the daemon started as at login) brings all 12 instances back; and the run happens twice, ending with `--delete-data` and with `--keep-data`: 89 checks each, green on the first run. The by-hand part, `tests/manual/herd-check.ps1`, ran on the developer's own machine next to a running Laravel Herd (nginx on 80 and 443): Kiln took other ports and named Herd, served an HTTPS site with a certificate Windows trusted, ran Mailpit and Redis; Herd's six listening ports and a Herd site's answer were unchanged during the run and after; uninstall removed the same certificate it had added (thumbprint checked in both Windows prompts), and the machine matched its snapshot (21 facts). Next: Phase 4 (the GUI). |
 
 ## How to update this file
 

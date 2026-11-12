@@ -153,8 +153,12 @@ macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
   `restore` round-trip a database.
 - **Uninstall.** With `--delete-data`, the machine is as it was. With `--keep-data`, the
   only thing left is the named data folder.
-- **Verification:** all of the above is checked by the Windows scenario on CI. Herd
-  coexistence is checked by hand in the VM before a release.
+- **Verification:** all of the above is checked by the Windows scenario on CI, which runs
+  once ending with `--delete-data` and once with `--keep-data`. Herd coexistence is checked
+  by hand before a release on a developer machine running Herd
+  (`tests/manual/herd-check.ps1`).
+- **Met 2026-11-12:** both CI runs pass (89 checks each), and the Herd check passed next to
+  a running Herd (P3-12).
 
 **Tasks** (status is tracked in [progress.md](progress.md#phase-3))
 
@@ -175,7 +179,7 @@ macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
 | P3-16 | Laravel Reverb for a project: `php artisan reverb:start` run and kept up by Kiln, `REVERB_*` wiring | P3-08 | **Done** 2026-11-03, [ADR 0047](adr/0047-reverb.md): providers can run in a project (`runs_in_project`, `project_launch`); schema v8 records the folder; Reverb runs with the project's PHP under the services supervisor; `kiln env use` wires it; `[services]` and `herd.yml` take `reverb` |
 | P3-10 | `kilnd` and services: the watchdog restarts the services supervisor after a crash or reboot; `service.*` API methods | P3-01 | **Done** 2026-11-11, [ADR 0048](adr/0048-kilnd-and-services.md): `kiln services resume` (hidden) after a crash or reboot, own backoff, `services.repaired` events; `services.status`, `service.start/stop/restart`; `kiln daemon status` shows services. Extends ADR 0026 |
 | P3-11 | Data safety: `kiln db dump/restore`; `--keep-data` at uninstall moves data out | P3-04 | **Done** 2026-11-11, [ADR 0049](adr/0049-data-safety.md): `kiln db dump`/`restore` for MySQL, MariaDB and PostgreSQL (one database or all, never overwriting, restore into a new name); `kiln uninstall --keep-data` copies the data folders to the home folder first |
-| P3-12 | The Phase 3 exit run: the CI scenario covering every criterion, plus a by-hand Herd coexistence check in the Windows VM | all | Extends [ADR 0024](adr/0024-integration-test-vms.md) |
+| P3-12 | The Phase 3 exit run: the CI scenario covering every criterion, plus a by-hand Herd coexistence check on a developer machine | all | **Done** 2026-11-12: CI in both uninstall modes (pages on every database, HTTPS `mailpit.test`, services through `web stop` and a simulated reboot), and `tests/manual/herd-check.ps1` passed next to a running Herd. ADR 0039 (amended) |
 
 **Order:** the table's: P3-13 first (tests on CI), then PostgreSQL, Redis, the other
 services, the admin UIs, the wiring tasks, Reverb, `kilnd`, data safety, and P3-12 last.
