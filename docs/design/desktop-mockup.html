@@ -32,6 +32,7 @@
   --glass:rgba(255,253,250,.62);
   --glass-strong:rgba(255,255,255,.86);
   --glass-solid:#fbf9f6;
+  --selected-solid:#ebe6df;
   --rim:rgba(255,255,255,.85);
   --glass-edge:rgba(41,37,36,.10);
   --blur:blur(22px) saturate(165%);
@@ -66,6 +67,7 @@
   --glass:rgba(41,37,34,.60);
   --glass-strong:rgba(68,62,57,.70);
   --glass-solid:#26221f;
+  --selected-solid:#3a3430;
   --rim:rgba(255,255,255,.09);
   --glass-edge:rgba(255,255,255,.07);
   --shadow-float:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
@@ -85,7 +87,7 @@
   --focus:#fb923c;
 }
 /* Windows' "Transparency effects" off: every glass layer turns solid. */
-:root[data-solid]{--glass:var(--glass-solid);--glass-strong:var(--glass-solid);--blur:none}
+:root[data-solid]{--glass:var(--glass-solid);--glass-strong:var(--selected-solid);--blur:none}
 @media (forced-colors:active){
   :root{--glass:Canvas;--glass-strong:Canvas;--blur:none}
   .glass,.pill[aria-current="page"]{border:1px solid CanvasText!important}
@@ -102,18 +104,19 @@ button{font:inherit;color:inherit;cursor:default}
 .ic{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 
 /* review bar: not part of the design */
-.review{position:fixed;top:10px;left:50%;transform:translateX(-50%);display:flex;gap:6px;align-items:center;padding:5px 6px 5px 12px;border-radius:10px;background:rgba(0,0,0,.45);color:#fff;font-size:12px;z-index:100}
+.review{position:fixed;bottom:8px;left:8px;display:flex;gap:6px;align-items:center;padding:5px 6px 5px 12px;border-radius:10px;background:rgba(0,0,0,.45);color:#fff;font-size:12px;z-index:100}
 .review button{border:0;background:rgba(255,255,255,.12);color:#fff;border-radius:6px;padding:3px 9px;font-size:12px}
 .review button[aria-pressed="true"]{background:#fff;color:#111}
 
 /* ---------- the window ---------- */
-.win{position:absolute;left:50%;top:calc(50% - 6px);transform:translate(-50%,-50%);width:min(1120px,calc(100% - 40px));height:min(720px,calc(100% - 120px));border-radius:8px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow-win);outline:1px solid rgba(0,0,0,.25);display:grid;grid-template-rows:44px 1fr}
+/* The app's smallest window is 880 x 560; narrower previews clip instead of squeezing. */
+.win{position:absolute;left:max(20px,calc(50% - 560px));top:max(16px,calc(50% - 366px));width:max(880px,min(1120px,calc(100% - 40px)));height:max(560px,min(720px,calc(100% - 100px)));border-radius:8px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow-win);outline:1px solid rgba(0,0,0,.25);display:grid;grid-template-rows:44px 1fr}
 .win::before{content:"";position:absolute;inset:0;background:var(--bg-glow);pointer-events:none}
 .win.dim{filter:saturate(.9) brightness(.98)}
 
 .tbar{position:relative;display:flex;align-items:center;gap:10px;padding-left:16px;user-select:none}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;letter-spacing:-.01em;width:204px}
-.goto{display:flex;align-items:center;gap:8px;width:min(420px,40%);height:30px;margin:0 auto;padding:0 8px 0 10px;border-radius:8px;border:1px solid var(--line);background:var(--hover);color:var(--text-3);font-size:13px;text-align:left}
+.goto{white-space:nowrap;overflow:hidden;min-width:0;display:flex;align-items:center;gap:8px;width:min(420px,40%);height:30px;margin:0 auto;padding:0 8px 0 10px;border-radius:8px;border:1px solid var(--line);background:var(--hover);color:var(--text-3);font-size:13px;text-align:left}
 .goto:hover{border-color:var(--line-strong)}
 .goto kbd{margin-left:auto;font:11px var(--font);color:var(--text-3);border:1px solid var(--line-strong);border-radius:4px;padding:0 5px}
 .caps{display:flex;align-self:stretch}
@@ -141,8 +144,9 @@ button{font:inherit;color:inherit;cursor:default}
 .daemon{display:flex;align-items:center;gap:8px;padding:8px 10px 4px;font-size:12px;color:var(--text-3)}
 
 /* content */
-.content{position:relative;min-height:0;overflow:auto;border-radius:14px;scroll-padding-top:72px}
-.phead{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;height:56px;padding:0 16px 0 28px;border-radius:14px;margin-bottom:4px;transition:background .15s,box-shadow .15s,border-color .15s;border:1px solid transparent}
+/* Content fades out above the floating header, so nothing peeks round its corners. */
+.content{position:relative;min-height:0;overflow:auto;border-radius:14px;scroll-padding-top:72px;-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 6px,#000 22px);mask-image:linear-gradient(to bottom,transparent 0,transparent 6px,#000 22px)}
+.phead{position:sticky;top:6px;z-index:2;display:flex;align-items:center;gap:8px;height:56px;padding:0 16px 0 28px;border-radius:14px;margin-bottom:4px;transition:background .15s,box-shadow .15s,border-color .15s;border:1px solid transparent}
 .phead.stuck{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-color:var(--glass-edge);box-shadow:inset 0 1px 0 var(--rim),var(--shadow-float)}
 .phead h1{font-size:20px;line-height:28px;font-weight:650;letter-spacing:-.02em;margin:0 auto 0 0}
 .page{padding:4px 28px 40px;max-width:980px}
@@ -437,7 +441,7 @@ function showPop(on) {
 function showWindow() {
   showPop(false);
   win.hidden = false;
-  win.animate([{opacity:.6, transform:'translate(-50%,-49%) scale(.99)'}, {opacity:1, transform:'translate(-50%,-50%)'}], {duration:160, easing:'ease-out'});
+  win.animate([{opacity:.6, transform:'translateY(6px) scale(.99)'}, {opacity:1, transform:'none'}], {duration:160, easing:'ease-out'});
   content.focus();
 }
 tray.addEventListener('click', showWindow);
