@@ -65,6 +65,7 @@ working name). Start here.
 | [0047](adr/0047-reverb.md) | Laravel Reverb as a service that runs in its project: `php artisan reverb:start` with the project's PHP under the services supervisor (schema v8 records the project); `kiln env use` sets `BROADCAST_CONNECTION` and `REVERB_SERVER_*`/`REVERB_*`, never the app's keys | accepted (Phase 3) |
 | [0048](adr/0048-kilnd-and-services.md) | `kilnd` and services: the watchdog runs `kiln services resume` when the services supervisor exited on its own (a crash or a reboot), leaving stopped instances stopped; the API gains `services.status` and `service.start/stop/restart` (names checked, run through the CLI) | accepted (Phase 3) |
 | [0049](adr/0049-data-safety.md) | Data safety: `kiln db dump` / `restore` with the services' own tools (`mysqldump`, `mariadb-dump`, `pg_dump`, `pg_dumpall`; never overwrite; restore makes the database); `kiln uninstall --keep-data` copies each data folder to `~/Kiln data (<date>)` before anything is undone | accepted (Phase 3) |
+| [0050](adr/0050-desktop-app.md) | The desktop app on Windows: a Tauri tray app over `kilnd`'s API; close to tray, quit leaves services running, one login item starts the app and `kilnd`; the API grows to cover the app with the CLI's `--json` mode; visual design chosen in P4-02 | accepted (Phase 4) |
 
 ## Conventions
 

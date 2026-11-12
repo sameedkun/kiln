@@ -184,10 +184,71 @@ macOS is Phase 4b ([ADR 0007](adr/0007-platform-delivery-order.md), amended).
 **Order:** the table's: P3-13 first (tests on CI), then PostgreSQL, Redis, the other
 services, the admin UIs, the wiring tasks, Reverb, `kilnd`, data safety, and P3-12 last.
 
+## Phase 4: the desktop app (Windows)
+
+Design: [ADR 0050](adr/0050-desktop-app.md), on [ADR 0002](adr/0002-rust-core-and-tauri-gui.md)'s
+Tauri app over `kilnd`'s API. Windows only: macOS (Phase 4b) and Linux wait, at the user's
+request (2026-11-12).
+
+**Exit criteria** (Windows)
+
+- **Tray.** The app starts at login and shows Kiln's state in the tray. Closing its window
+  keeps it in the tray; quitting it leaves the web server and services running.
+- **Everything the CLI does, from the app:** sites (park, link, HTTPS, PHP per site,
+  proxies), PHP and Node versions and extensions, services (add, ports, start/stop, logs,
+  wiring a project, dump and restore), projects (`[services]`, `herd.yml`), history with
+  undo, doctor and settings. Every change shows the same preview as the CLI first, and
+  appears in `kiln history`.
+- **First run.** Onboarding previews each system change (trusting the CA, the hosts file,
+  the shims on PATH, starting at login) and makes none without consent.
+- **Developer tools:** a log viewer that follows logs live; a project's queue worker,
+  scheduler and Vite run as project processes; Xdebug per PHP, triggered per request; dumps
+  from `dump()` collected and shown.
+- **Data viewers:** WhoDB opens every Kiln database, Redis and MongoDB, already connected.
+  phpMyAdmin and Adminer stay.
+- **Verification:** the app's end-to-end tests run on CI's Windows runner, and uninstall
+  removes the app's login item and leaves the machine as it was.
+
+**Tasks** (status is tracked in [progress.md](progress.md#phase-4))
+
+| ID | Task | Depends on | Notes |
+|---|---|---|---|
+| P4-01 | The API for the app: read methods for everything it shows; change methods that run the CLI with a new `--json` mode; previews; progress events for downloads; API version 2 | Phase 3 | ADR 0050 §3 |
+| P4-02 | The visual design: the user's design made with Claude, or Kiln's mockup; Windows 11 look (Mica, Segoe UI Variable, light and dark); design tokens and page layouts in the repo | — | Needs the user's choice |
+| P4-03 | The app's shell: Tauri 2 in `apps/desktop`; tray icon with state and menu; close to tray; one instance; starts at login and starts `kilnd` (one journaled login item) | P4-01 | ADR 0050 §2 |
+| P4-04 | Sites, PHP and Node pages | P4-03 | |
+| P4-05 | Services page: the catalog with download progress, instances, ports, logs, wiring a project, dump and restore, the data tools | P4-03 | |
+| P4-06 | First-run onboarding: each system change previewed, consent per change | P4-03 | ADR 0004 previews |
+| P4-07 | History with undo, doctor and settings pages | P4-03 | |
+| P4-08 | Log viewer: Caddy, PHP errors per site, services, `kilnd`; follow live | P4-03 | |
+| P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047 |
+| P4-10 | Xdebug: per PHP version, triggered per request (cookie or browser extension); a separate debug worker so other requests stay fast | P4-03 | |
+| P4-11 | Dump capture: `dump()`/`dd()` output collected and shown, by an open-source collector chosen in a spike | P4-03 | |
+| P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | Its server binds every interface: see below |
+| P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task |
+| P4-14 | The Phase 4 exit run: CI plus a by-hand check on a developer machine | all | |
+
+**WhoDB (P4-12).** WhoDB (Apache-2.0) covers what Adminer doesn't: MongoDB, Redis and Valkey,
+SQLite, ClickHouse, Elasticsearch, as well as MySQL, MariaDB and PostgreSQL. It can be given
+connection profiles through `WHODB_MYSQL`, `WHODB_POSTGRES`, `WHODB_MONGODB`, `WHODB_REDIS`
+and others. Two facts shape how Kiln can use it (release 0.138.0):
+- Its server listens on every network interface (`":" + PORT`), with no setting to limit it
+  to 127.0.0.1. Kiln's services listen on loopback only, so its server can't be run as it is.
+- Its Windows release is a desktop app (Wails), not the server.
+The spike checks the desktop app: does it open a network port, does it read the connection
+profiles from its environment, and what does it send (an install heartbeat that
+`WHODB_HEARTBEAT_DISABLED` turns off; analytics behind consent). If it passes, Kiln opens it
+with its instances preconfigured. If not, Kiln builds the server from source with a
+loopback setting and offers that setting upstream.
+
+**Order:** P4-01 and P4-02 first (the API, and the design with the user), then P4-03, the
+pages (P4-04 to P4-07), the developer tools and WhoDB (P4-08 to P4-12), with P4-13 growing
+alongside, and P4-14 last.
+
 ## Phase 3–5 scope (summary)
 
 - **Phase 3:** see above.
-- **Phase 4:** Tauri tray app (sites, PHP/Node, services, onboarding that previews every system
+- **Phase 4:** see above (Windows). The summary as first planned: a Tauri tray app (sites, PHP/Node, services, onboarding that previews every system
   change, journal viewer with undo); log viewer; dev processes; Xdebug cookie routing; dump
   capture via an open-source collector.
 - **Phase 4b:** macOS adapters (resolver file plus stub, Keychain, launchd, a privileged
