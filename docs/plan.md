@@ -214,7 +214,7 @@ request (2026-11-12).
 | ID | Task | Depends on | Notes |
 |---|---|---|---|
 | P4-01 | The API for the app: read methods for everything it shows; change methods that run the CLI with a new `--json` mode; previews; progress events for downloads; API version 2 | Phase 3 | ADR 0050 §3 |
-| P4-02 | The visual design: glass over Kiln's own backdrop, light and dark; the tray popup; a mockup reviewed with the user, then design tokens and base components in the repo | — | [ADR 0051](adr/0051-desktop-visual-design.md); in progress since 2026-11-12 |
+| P4-02 | The visual design: glass over Kiln's own backdrop, light and dark; the tray popup; a mockup reviewed with the user, then design tokens and base components in the repo | — | [ADR 0051](adr/0051-desktop-visual-design.md); **Done** 2026-11-12 |
 | P4-03 | The app's shell: Tauri 2 in `apps/desktop`; tray icon with state and menu; close to tray; one instance; starts at login and starts `kilnd` (one journaled login item) | P4-01 | ADR 0050 §2 |
 | P4-04 | Sites, PHP and Node pages | P4-03 | |
 | P4-05 | Services page: the catalog with download progress, instances, ports, logs, wiring a project, dump and restore, the data tools | P4-03 | |

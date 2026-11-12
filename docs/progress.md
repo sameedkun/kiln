@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-02 in progress (ADR 0051, mockup under review), P4-01 next) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-02 done (ADR 0051), P4-01 next) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1477,7 +1477,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | P4-01 | The API for the app (`--json`, previews, progress, API v2) | next | |
-| P4-02 | The visual design | in progress | [ADR 0051](adr/0051-desktop-visual-design.md); the user's review of [the mockup](design/desktop-mockup.html), then tokens and base components |
+| P4-02 | The visual design | **done** 2026-11-12 | [ADR 0051](adr/0051-desktop-visual-design.md); [the approved mockup](design/desktop-mockup.html); `apps/desktop`: design values, base components, the design gallery; contrast, axe and high-contrast checks on CI |
 | P4-03 | The app's shell: tray, close to tray, starts at login | planned | |
 | P4-04 | Sites, PHP and Node pages | planned | |
 | P4-05 | Services page | planned | |
@@ -1821,6 +1821,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-12 | **P3-12 done: Phase 3 is complete.** The CI scenario now covers every exit criterion: the Laravel app migrates and serves pages on MySQL, MariaDB and PostgreSQL (a page load writes its database session); `https://mailpit.test` is checked against Kiln's own root; services keep running through `kiln web stop`; a simulated reboot (daemon and services supervisor gone, the daemon started as at login) brings all 12 instances back; and the run happens twice, ending with `--delete-data` and with `--keep-data`: 89 checks each, green on the first run. The by-hand part, `tests/manual/herd-check.ps1`, ran on the developer's own machine next to a running Laravel Herd (nginx on 80 and 443): Kiln took other ports and named Herd, served an HTTPS site with a certificate Windows trusted, ran Mailpit and Redis; Herd's six listening ports and a Herd site's answer were unchanged during the run and after; uninstall removed the same certificate it had added (thumbprint checked in both Windows prompts), and the machine matched its snapshot (21 facts). Next: Phase 4 (the GUI). |
 | 2026-11-12 | **Phase 4 planned** (Windows only, at the user's request): [ADR 0050](adr/0050-desktop-app.md), a Tauri tray app over `kilnd`'s API that keeps running when its window is closed; 14 tasks (P4-01 to P4-14). WhoDB added as a data viewer beside phpMyAdmin and Adminer, after a spike: its server binds every network interface and its Windows release is a desktop app. Next: P4-01 (the API) and P4-02 (the visual design, with the user). |
 | 2026-11-12 | **P4-02 started:** [ADR 0051](adr/0051-desktop-visual-design.md), the visual design the user chose: glass only for what floats (sidebar, page header, dialogs, menus, tray popup) over Kiln's own painted backdrop, not Mica; ink primary actions and an ember brand colour, so it doesn't look templated; tray left click opens the window and right click a glass popup, as in Herd; "start in the tray". [The mockup](design/desktop-mockup.html) (home page and tray popup, light and dark, transparency off) is with the user for review. |
+| 2026-11-12 | **P4-02 done:** the user approved [the mockup](design/desktop-mockup.html) after two fixes it asked for (the selected page lost its colour with transparency off; content peeked round the page header). `apps/desktop` (frontend only; Tauri in P4-03): every design value in `tokens.css`, Tailwind 4 reading them, one glass recipe, `setAppearance` as the one place that sets theme and transparency, and the base components (title bar, sidebar with a sliding selection, page with a floating header, notice, rows, buttons, status, switch, text field, menu, dialog, toast, tray popup) in a design gallery. Measured contrast moved five colours from the mockup; stop and start became filled icons. CI job `desktop`: types, 26 unit tests (contrast in 4 appearances), build with no network calls, `npm audit`, axe in Edge in 4 appearances plus high contrast. |
 
 ## How to update this file
 

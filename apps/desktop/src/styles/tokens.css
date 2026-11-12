@@ -1,0 +1,117 @@
+/*
+ * Kiln's design values (ADR 0051): the one source. Components use these names only.
+ *
+ * Light is the default; `data-theme="dark"` on <html> switches to dark, and `data-solid`
+ * turns every glass layer solid (Windows' "Transparency effects" off). Both attributes are
+ * set by src/appearance.ts and nowhere else.
+ *
+ * src/styles/contrast.test.ts reads this file: keep one `--name: value;` per line, and
+ * colours as hex or rgba().
+ */
+:root {
+  color-scheme: light;
+
+  --font: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+
+  /* Kiln's own backdrop: a quiet surface, one faint ember glow in a corner. */
+  --bg: #f5f2ed;
+  --bg-glow: rgba(234, 88, 12, 0.1);
+  --line: rgba(41, 37, 36, 0.09);
+  --line-strong: rgba(41, 37, 36, 0.16);
+  --hover: rgba(41, 37, 36, 0.045);
+  --press: rgba(41, 37, 36, 0.08);
+
+  /* Glass: only for what floats. */
+  --glass: rgba(244, 240, 234, 0.64);
+  --glass-strong: rgba(255, 255, 255, 0.94);
+  --glass-solid: #fbf9f6;
+  --selected-solid: #ebe6df;
+  --rim: rgba(255, 255, 255, 0.85);
+  --glass-edge: rgba(41, 37, 36, 0.1);
+  --blur: blur(22px) saturate(165%);
+  --shadow-float: 0 1px 2px rgba(41, 37, 36, 0.06), 0 8px 24px rgba(41, 37, 36, 0.08);
+  --shadow-pop: 0 2px 6px rgba(20, 16, 12, 0.1), 0 24px 60px rgba(20, 16, 12, 0.24);
+  --smoke: rgba(28, 25, 23, 0.22);
+
+  /* Text, and the two identity colours: ink for the main action, ember for the brand. */
+  --text: #1c1917;
+  --text-2: #57534e;
+  --text-3: #625b55;
+  --ink: #1c1917;
+  --on-ink: #fafaf9;
+  --ember: #c2410c;
+  --ember-soft: rgba(194, 65, 12, 0.1);
+
+  /* Statuses: always shown with a word. */
+  --ok: #15803d;
+  --warn: #85500b;
+  --warn-soft: rgba(202, 138, 4, 0.12);
+  --bad: #b91c1c;
+  --bad-soft: rgba(220, 38, 38, 0.09);
+  --off: #736c66;
+  --focus: #c2410c;
+
+  /* Shape and motion. */
+  --radius-panel: 14px;
+  --radius-pop: 12px;
+  --radius-control: 8px;
+  --radius-item: 9px;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #171412;
+  --bg-glow: rgba(234, 88, 12, 0.16);
+  --line: rgba(245, 245, 244, 0.08);
+  --line-strong: rgba(245, 245, 244, 0.14);
+  --hover: rgba(245, 245, 244, 0.05);
+  --press: rgba(245, 245, 244, 0.09);
+
+  --glass: rgba(41, 37, 34, 0.6);
+  --glass-strong: rgba(68, 62, 57, 0.7);
+  --glass-solid: #26221f;
+  --selected-solid: #3a3430;
+  --rim: rgba(255, 255, 255, 0.09);
+  --glass-edge: rgba(255, 255, 255, 0.07);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.4), 0 24px 60px rgba(0, 0, 0, 0.55);
+  --smoke: rgba(0, 0, 0, 0.4);
+
+  --text: #f5f5f4;
+  --text-2: #b5aea8;
+  --text-3: #a8a09a;
+  --ink: #f5f5f4;
+  --on-ink: #1c1917;
+  --ember: #fb923c;
+  --ember-soft: rgba(251, 146, 60, 0.14);
+
+  --ok: #4ade80;
+  --warn: #facc15;
+  --warn-soft: rgba(250, 204, 21, 0.1);
+  --bad: #fc8a8a;
+  --bad-soft: rgba(248, 113, 113, 0.1);
+  --off: #948c86;
+  --focus: #fb923c;
+}
+
+/* Transparency effects off: glass turns solid, and the selected item keeps its own colour. */
+:root[data-solid] {
+  --glass: var(--glass-solid);
+  --glass-strong: var(--selected-solid);
+  --blur: none;
+}
+
+/* High contrast: no glass; the system's colours. */
+@media (forced-colors: active) {
+  :root {
+    --glass: Canvas;
+    --glass-strong: Canvas;
+    --blur: none;
+    --rim: transparent;
+  }
+}

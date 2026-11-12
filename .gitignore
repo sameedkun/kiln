@@ -9,3 +9,9 @@
 /spikes/**/Cargo.lock
 /spikes/windows-dns/sandbox/results/
 /spikes/windows-dns/sandbox/tools/*.exe
+
+# The desktop app (apps/desktop)
+node_modules/
+/apps/desktop/dist/
+/apps/desktop/test-results/
+/apps/desktop/playwright-report/

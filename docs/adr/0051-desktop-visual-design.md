@@ -1,6 +1,6 @@
 # 0051. The desktop app's visual design: glass over Kiln's own backdrop
 
-- **Status:** accepted; the mockup ([docs/design/desktop-mockup.html](../design/desktop-mockup.html)) is under the user's review
+- **Status:** accepted; the user approved the mockup ([docs/design/desktop-mockup.html](../design/desktop-mockup.html)) on 2026-11-12. Since then the design values live in `apps/desktop/src/styles/tokens.css` (see "Learned building it")
 - **Date:** 2026-11-12
 - **Task:** P4-02 · Amends [ADR 0050](0050-desktop-app.md) §2 and §4
 
@@ -135,6 +135,24 @@ The prototype also uses things a real Windows app can't or shouldn't:
 - **Fonts bundled:** about 1 MB of fonts are added to the app.
 - **Before the pages:** the mockup is reviewed with the user before any page is built. The
   tokens and the base components follow, with screenshot and contrast checks on CI (P4-13).
+
+## Learned building it
+
+These came from the user's review of the mockup and from the checks. Each is now a rule.
+
+- **The selected item has its own solid colour.** With transparency off, the selected page
+  was the same colour as the sidebar (the user saw it). `--selected-solid` fixes it, and
+  the contrast test checks the selected item stands out in every mode.
+- **The page header sits beside the scroller, not inside it.** Content fades out under the
+  header, so nothing peeks round its corners. A fade on the scroller would also fade a
+  header inside it.
+- **The window has a minimum size, 880 × 560.** Below that, the title bar and the rows
+  squeeze.
+- **Measured contrast moved some colours.** Faint text, amber, the "stopped" ring, the light
+  sidebar glass and dark red changed from the mockup to reach WCAG AA on every fill, glow
+  included. `tokens.css` is the source now, not the mockup.
+- **Stop and start are filled icons.** An outlined square next to "Running" read as an empty
+  checkbox.
 
 ## Alternatives considered
 

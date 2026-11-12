@@ -23,6 +23,10 @@ Optional: `cargo install cargo-deny --locked` to run the license and advisory ch
 `kiln-state` compiles SQLite from source (`rusqlite` with `bundled`), so a C compiler is
 required on every platform. That's MSVC on Windows; the toolchains listed above cover this.
 
+The desktop app's frontend (`apps/desktop`, [ADR 0050](adr/0050-desktop-app.md)) also
+needs **Node 26** with npm. The rest of the workspace builds with Rust alone. Its checks
+in a browser drive the Microsoft Edge that Windows already has; no browser is downloaded.
+
 ## Where things are
 
 | Crate | Role | `unsafe` |
@@ -47,6 +51,21 @@ required on every platform. That's MSVC on Windows; the toolchains listed above 
 | `kiln-daemon` | `kilnd`, the optional per-user daemon ([ADR 0026](adr/0026-kilnd-daemon-and-local-api.md)): JSON-RPC 2.0 messages, the per-user socket, server, client, web-stack and services watchdog ([ADR 0048](adr/0048-kilnd-and-services.md)), rotating log | forbidden |
 | `kiln-cli` | The `kiln` binary (`plan hosts`, `state info`, `hosts set/sync/clear`, `ca init/info/trust/renew`, `link`, `unlink`, `park`, `unpark`, `secure`, `unsecure`, `sites`, `web install/start/stop/reload/restart/status/config`, `php available/install/list/remove/default/workers/update/rollback`, `php ext list/on/off`, `node available/install/list/remove/default`, `isolate`, `unisolate`, `which`, `composer install`, `shims install`, `doctor`, `daemon start/stop/status/call/enable/disable`, `import herd`, `new`, `proxy`, `unproxy`, `history`, `undo`, `uninstall`, `plan uninstall`) | forbidden |
 
+### The desktop app (`apps/desktop`)
+
+The frontend: TypeScript, React, Vite and Tailwind. Tauri joins in P4-03. Its design is
+[ADR 0051](adr/0051-desktop-visual-design.md).
+
+| Path | Role |
+|---|---|
+| `src/styles/tokens.css` | Every design value (colours, glass, radii, motion) in light, dark and transparency off: the one source |
+| `src/styles/app.css` | Tailwind's names for those values; the one glass recipe (`glass`, `glass-pop`), the backdrop, the fade under the page header |
+| `src/appearance.ts` | The one place that sets the theme and transparency (`setAppearance`) |
+| `src/components/` | Base components: title bar, sidebar, page, notice, rows, buttons, status, tag, switch, text field, menu, dialog, toast, tray popup |
+| `src/gallery/` | The design gallery: the components with sample data, for review and for the checks |
+| `src/styles/contrast.test.ts` | Contrast measured from the design values: each fill blended over the backdrop, WCAG AA |
+| `e2e/gallery.spec.ts` | axe in Edge in each appearance and high contrast; screenshots under `test-results/` |
+
 ## Everyday commands
 
 ```sh
@@ -55,6 +74,17 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo deny check
+```
+
+The desktop app, from `apps/desktop`:
+
+```sh
+npm ci
+npm run dev          # the design gallery at http://localhost:1420
+npm run typecheck
+npm test
+npm run build && npm run check:offline
+npm run e2e          # builds must be current: runs the gallery in Edge
 ```
 
 More property-test cases (CI uses 512):
