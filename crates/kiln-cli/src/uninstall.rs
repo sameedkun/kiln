@@ -198,63 +198,63 @@ fn build_plan() -> Result<Plan, String> {
 }
 
 fn print_plan(plan: &Plan, keep_files: bool) {
-    println!("Uninstall plan:");
-    println!("1. Stop");
+    say!("Uninstall plan:");
+    say!("1. Stop");
     if plan.stop.is_empty() {
-        println!("     (nothing running)");
+        say!("     (nothing running)");
     }
     for item in &plan.stop {
-        println!("     {item}");
+        say!("     {item}");
     }
-    println!("2. Undo, newest first (each puts back what was there before)");
+    say!("2. Undo, newest first (each puts back what was there before)");
     if plan.undo.is_empty() {
-        println!("     (no system changes in effect)");
+        say!("     (no system changes in effect)");
     }
     for (id, what) in &plan.undo {
-        println!("     #{id}  {what}");
+        say!("     #{id}  {what}");
     }
     for (id, what, state) in &plan.attention {
-        println!(
+        say!(
             "     #{id}  {what}  [{state}: not undone automatically; see `kiln undo {id} --force`]"
         );
     }
     if !plan.wired.is_empty() {
-        println!(
+        say!(
             "   Left as they are: projects' .env files Kiln pointed at its services (`kiln undo <number>` before uninstalling puts one back)"
         );
         for (id, what) in &plan.wired {
-            println!("     #{id}  {what}");
+            say!("     #{id}  {what}");
         }
     }
-    println!("3. Delete Kiln's folders");
+    say!("3. Delete Kiln's folders");
     if keep_files {
-        println!("     (skipped: --keep-files)");
+        say!("     (skipped: --keep-files)");
     }
     for folder in &plan.folders {
         match &folder.keep_because {
-            _ if keep_files => println!("     keep {}", folder.path.display()),
-            Some(why) => println!("     keep {} ({why})", folder.path.display()),
-            None => println!("     {}  ({})", folder.path.display(), mb(folder.bytes)),
+            _ if keep_files => say!("     keep {}", folder.path.display()),
+            Some(why) => say!("     keep {} ({why})", folder.path.display()),
+            None => say!("     {}  ({})", folder.path.display(), mb(folder.bytes)),
         }
     }
     if plan.folders.is_empty() {
-        println!("     (none exist)");
+        say!("     (none exist)");
     }
     if plan.key_in_keyring && !keep_files {
-        println!("     and the CA root key's entry in your desktop keyring");
+        say!("     and the CA root key's entry in your desktop keyring");
     }
     if !plan.service_data.is_empty() && !keep_files {
-        println!(
+        say!(
             "     including the services' data (--keep-data copies it to your home folder first; --delete-data deletes it):"
         );
         for (path, bytes) in &plan.service_data {
-            println!("       {}  ({})", path.display(), mb(*bytes));
+            say!("       {}  ({})", path.display(), mb(*bytes));
         }
     }
-    println!(
+    say!(
         "Never touched: your project folders (linked or parked), other tools such as Laravel Herd"
     );
-    println!("and other PHP installs, and the kiln programs themselves.");
+    say!("and other PHP installs, and the kiln programs themselves.");
 }
 
 /// `kiln uninstall`'s flags.
@@ -337,7 +337,7 @@ fn keep_data(data: &[(PathBuf, u64)]) -> Result<PathBuf, String> {
                 folder.display()
             ));
         }
-        println!("  kept {} ({})", target.display(), mb(copied));
+        say!("  kept {} ({})", target.display(), mb(copied));
     }
     Ok(kept)
 }
@@ -345,22 +345,22 @@ fn keep_data(data: &[(PathBuf, u64)]) -> Result<PathBuf, String> {
 /// Stops what Kiln runs: the daemon first, so it doesn't restart what is stopped next.
 fn stop_everything() -> Result<(), String> {
     if crate::daemon::stop_quietly()? {
-        println!("Stopped Kiln's daemon.");
+        say!("Stopped Kiln's daemon.");
     }
     if let Some(pid) = crate::web::server()?.stop().map_err(|e| e.to_string())? {
-        println!("Stopped the web server (PID {pid}).");
+        say!("Stopped the web server (PID {pid}).");
     }
     if let Some(pid) = crate::pool::supervisor()?
         .stop()
         .map_err(|e| e.to_string())?
     {
-        println!("Stopped the PHP workers (supervisor PID {pid}).");
+        say!("Stopped the PHP workers (supervisor PID {pid}).");
     }
     if let Some(pid) = crate::service::supervisor()?
         .stop()
         .map_err(|e| e.to_string())?
     {
-        println!("Stopped the services (supervisor PID {pid}).");
+        say!("Stopped the services (supervisor PID {pid}).");
     }
     Ok(())
 }
@@ -390,12 +390,12 @@ pub fn uninstall(options: Options) -> Result<(), String> {
     let plan = build_plan()?;
     print_plan(&plan, keep_files);
     if options.dry_run {
-        println!("Dry run: nothing was changed.");
+        say!("Dry run: nothing was changed.");
         return Ok(());
     }
     refuse_data_loss(&plan, options)?;
     if !options.yes && !crate::apply::confirm("Uninstall Kiln as shown?") {
-        println!("Nothing was changed.");
+        say!("Nothing was changed.");
         return Ok(());
     }
 
@@ -407,7 +407,7 @@ pub fn uninstall(options: Options) -> Result<(), String> {
         let kept = keep_data(&plan.service_data).map_err(|e| {
             format!("{e}\nUninstall stopped here; the services are stopped, and nothing was undone or deleted.")
         })?;
-        println!("Copied the services' data to {}.", kept.display());
+        say!("Copied the services' data to {}.", kept.display());
     }
 
     // 2. Undo, newest first; stop at the first failure and delete nothing.
@@ -417,10 +417,10 @@ pub fn uninstall(options: Options) -> Result<(), String> {
         crate::apply::revert_quietly(&ids).map_err(|e| {
             format!("{e}\nUninstall stopped here and deleted nothing; fix the cause and run `kiln uninstall` again.")
         })?;
-        println!("Undid {} operation(s).", ids.len());
+        say!("Undid {} operation(s).", ids.len());
     }
     if keep_files {
-        println!("Done. Kiln's folders were kept (--keep-files).");
+        say!("Done. Kiln's folders were kept (--keep-files).");
         return Ok(());
     }
     // The root key may live outside Kiln's folders (the Secret Service, ADR 0021 §3). If it
@@ -429,11 +429,11 @@ pub fn uninstall(options: Options) -> Result<(), String> {
     let forgotten =
         crate::apply::ca_store().and_then(|ca| ca.forget_root_key().map_err(|e| e.to_string()));
     let key_left = if let Err(e) = &forgotten {
-        println!("Couldn't remove the CA root key from your keyring: {e}");
+        say!("Couldn't remove the CA root key from your keyring: {e}");
         true
     } else {
         if plan.key_in_keyring {
-            println!("Removed the CA root key from your keyring.");
+            say!("Removed the CA root key from your keyring.");
         }
         false
     };
@@ -457,32 +457,32 @@ pub fn uninstall(options: Options) -> Result<(), String> {
     let state_dir = kiln_state::default_state_dir().map(|d| canonical(&d));
     for folder in &plan.folders {
         if let Some(why) = &folder.keep_because {
-            println!("Kept {} ({why}).", folder.path.display());
+            say!("Kept {} ({why}).", folder.path.display());
             continue;
         }
         if unresolved > 0 && Some(&folder.path) == state_dir.as_ref() {
-            println!(
+            say!(
                 "Kept {}: {unresolved} operation(s) still need attention (`kiln history`).",
                 folder.path.display()
             );
             continue;
         }
         if key_left && Some(&folder.path) == state_dir.as_ref() {
-            println!(
+            say!(
                 "Kept {}: it refers to the CA root key still in your keyring. Run `kiln uninstall` again from a terminal on the desktop to finish.",
                 folder.path.display()
             );
             continue;
         }
         match std::fs::remove_dir_all(&folder.path) {
-            Ok(()) => println!("Deleted {}.", folder.path.display()),
-            Err(e) => println!("Couldn't delete {}: {e}", folder.path.display()),
+            Ok(()) => say!("Deleted {}.", folder.path.display()),
+            Err(e) => say!("Couldn't delete {}: {e}", folder.path.display()),
         }
     }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
-    println!(
+    say!(
         "Kiln is uninstalled. The kiln programs themselves{} are left in place.",
         exe_dir.map_or_else(String::new, |d| format!(" ({})", d.display()))
     );

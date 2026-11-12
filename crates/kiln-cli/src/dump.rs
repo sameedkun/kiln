@@ -120,13 +120,13 @@ pub fn dump(name: &str, database: Option<&str>, output: Option<PathBuf>) -> Resu
         return Err(e);
     }
     let size = std::fs::metadata(&output).map_or(0, |m| m.len());
-    println!(
+    say!(
         "Wrote {} ({}) with {}'s own dump tool.",
         output.display(),
         crate::uninstall::mb(size),
         provider.display_name()
     );
-    println!(
+    say!(
         "`kiln db restore {name} {}{}` loads it back.",
         output.display(),
         database.map(|d| format!(" {d}")).unwrap_or_default()
@@ -145,13 +145,13 @@ pub fn restore(name: &str, file: &Path, database: Option<&str>) -> Result<(), St
         .ok_or_else(|| format!("{} has no restore in Kiln", provider.display_name()))?;
     if let Some(db) = database {
         match provider.create_database(&dirs, &record.ports, db) {
-            Some(Ok(true)) => println!("Created the database {db} on {name}."),
+            Some(Ok(true)) => say!("Created the database {db} on {name}."),
             Some(Ok(false)) | None => {}
             Some(Err(e)) => return Err(format!("cannot make the database {db}: {e}")),
         }
     }
     run(&launch, Stdio::from(input), Stdio::null())?;
-    println!(
+    say!(
         "Loaded {} into {name}{}.",
         file.display(),
         database.map(|d| format!(" ({d})")).unwrap_or_default()

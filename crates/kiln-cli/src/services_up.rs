@@ -41,7 +41,7 @@ fn release_for(
                 false,
             ),
         };
-    println!(
+    say!(
         "Kiln has no {} {}; using {}{}.",
         provider.display_name(),
         version.unwrap_or_default(),
@@ -69,12 +69,12 @@ fn instance_for(
         .filter(|s| s.kind == provider.kind() && provider.series(&s.version) == series)
         .max_by_key(|s| s.enabled);
     if let Some(record) = existing {
-        println!("{}: using {}.", provider.kind(), record.name);
+        say!("{}: using {}.", provider.kind(), record.name);
         if let Some(port) = want.port
             && let Some(main) = provider.ports().first()
             && record.ports.get(main.role) != Some(&port)
         {
-            println!(
+            say!(
                 "  Note: kiln.toml asks for port {port}; {} is on {}. `kiln service port {} {}={port}` moves it.",
                 record.name,
                 record.ports.get(main.role).copied().unwrap_or_default(),
@@ -106,7 +106,7 @@ fn project_instance(
         .into_iter()
         .find(|s| s.kind == provider.kind() && s.project.as_deref() == Some(dir.as_path()));
     if let Some(record) = existing {
-        println!("{}: using {}.", provider.kind(), record.name);
+        say!("{}: using {}.", provider.kind(), record.name);
         return Ok(record.name);
     }
     let ports: Vec<String> = match (want.port, provider.ports().first()) {
@@ -149,7 +149,7 @@ pub fn up(project: Option<PathBuf>, yes: bool) -> Result<(), String> {
     }
     let names: Vec<String> = chosen.iter().map(|(name, _)| name.clone()).collect();
     crate::service::start(&names)?;
-    println!("Running: {}.", names.join(", "));
+    say!("Running: {}.", names.join(", "));
     wire(&dir, &chosen, yes)
 }
 
@@ -161,7 +161,7 @@ fn wire(
     yes: bool,
 ) -> Result<(), String> {
     if !dir.join(".env").is_file() {
-        println!(
+        say!(
             "{} has no .env, so nothing was wired; `kiln env use <instance>` does it later.",
             dir.display()
         );
@@ -171,7 +171,7 @@ fn wire(
     for (name, provider) in chosen {
         if provider.has_databases() {
             if let Some(first) = database {
-                println!(
+                say!(
                     "{name} is a second database; .env stays on {first} (`kiln env use {name}` switches it)."
                 );
                 continue;

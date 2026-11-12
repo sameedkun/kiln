@@ -38,9 +38,9 @@ pub fn history(all: bool) -> Result<(), String> {
         .collect();
     if shown.is_empty() {
         if entries.is_empty() {
-            println!("Kiln hasn't changed anything on this machine yet.");
+            say!("Kiln hasn't changed anything on this machine yet.");
         } else {
-            println!(
+            say!(
                 "Nothing Kiln changed is in effect any more ({} past operation(s): `kiln history --all`).",
                 entries.len()
             );
@@ -51,7 +51,7 @@ pub fn history(all: bool) -> Result<(), String> {
         let at = times
             .get(&entry.id)
             .map_or_else(|| "?".to_owned(), |(created, _)| when(*created));
-        println!(
+        say!(
             "#{:<4} {at}  {:<14} {}",
             entry.id,
             crate::apply::state_word(entry.state),
@@ -60,9 +60,9 @@ pub fn history(all: bool) -> Result<(), String> {
     }
     let hidden = entries.iter().filter(|e| !current(e.state)).count();
     if !all && hidden > 0 {
-        println!("({hidden} undone or rolled-back operation(s) hidden: `kiln history --all`)");
+        say!("({hidden} undone or rolled-back operation(s) hidden: `kiln history --all`)");
     }
-    println!(
+    say!(
         "Undo the newest with `kiln undo`, or one with `kiln undo <n>`; everything with `kiln uninstall`."
     );
     Ok(())

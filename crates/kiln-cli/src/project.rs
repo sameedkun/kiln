@@ -39,18 +39,18 @@ pub fn import_herd(folder: Option<PathBuf>, force: bool) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
 
     let m = &imported.manifest;
-    println!("Wrote {} from {}:", target.display(), source.display());
+    say!("Wrote {} from {}:", target.display(), source.display());
     if let Some(name) = &m.name {
-        println!("  name:    {name}");
+        say!("  name:    {name}");
     }
     if let Some(php) = &m.php {
-        println!("  PHP:     {php}");
+        say!("  PHP:     {php}");
     }
     if let Some(secure) = m.secure {
-        println!("  HTTPS:   {}", if secure { "yes" } else { "no" });
+        say!("  HTTPS:   {}", if secure { "yes" } else { "no" });
     }
     if !m.aliases.is_empty() {
-        println!("  aliases: {}", m.aliases.join(", "));
+        say!("  aliases: {}", m.aliases.join(", "));
     }
     if !m.services.is_empty() {
         let list: Vec<String> = m
@@ -58,13 +58,13 @@ pub fn import_herd(folder: Option<PathBuf>, force: bool) -> Result<(), String> {
             .iter()
             .map(|s| format!("{} {}", s.kind, s.version.as_deref().unwrap_or("*")))
             .collect();
-        println!(
+        say!(
             "  services: {} (`kiln services up` starts them)",
             list.join(", ")
         );
     }
     for note in &imported.notes {
-        println!("Note: {note}");
+        say!("Note: {note}");
     }
 
     let store = crate::web::open_store()?;
@@ -75,14 +75,14 @@ pub fn import_herd(folder: Option<PathBuf>, force: bool) -> Result<(), String> {
         .find(|s| s.alias_of.is_none() && s.project == folder)
         .map(|s| s.host.to_string());
     if let Some(host) = served {
-        println!("{host} already serves this folder; the settings apply from now on.");
+        say!("{host} already serves this folder; the settings apply from now on.");
         crate::web::apply_site_change(&store)?;
     } else {
         drop(store);
         crate::web::link(None, Some(folder), false)?;
     }
     if !m.aliases.is_empty() {
-        println!("Run `kiln hosts sync` so the new names resolve.");
+        say!("Run `kiln hosts sync` so the new names resolve.");
     }
     Ok(())
 }

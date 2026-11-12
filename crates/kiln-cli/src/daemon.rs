@@ -58,7 +58,7 @@ fn pid_of(client: &mut Client) -> Result<u64, String> {
 pub fn start() -> Result<(), String> {
     let paths = paths()?;
     if let Some(mut client) = connect(&paths)? {
-        println!(
+        say!(
             "Kiln's daemon is already running (PID {}).",
             pid_of(&mut client)?
         );
@@ -74,7 +74,7 @@ pub fn start() -> Result<(), String> {
     let deadline = Instant::now() + WAIT;
     loop {
         if let Some(mut client) = connect(&paths)? {
-            println!(
+            say!(
                 "Kiln's daemon started (PID {}). It keeps the web server running and logs to {}.",
                 pid_of(&mut client)?,
                 paths.log.display()
@@ -120,9 +120,9 @@ pub fn stop_quietly() -> Result<bool, String> {
 
 pub fn stop() -> Result<(), String> {
     if stop_quietly()? {
-        println!("Kiln's daemon stopped. The web server keeps running; `kiln web stop` stops it.");
+        say!("Kiln's daemon stopped. The web server keeps running; `kiln web stop` stops it.");
     } else {
-        println!("Kiln's daemon isn't running.");
+        say!("Kiln's daemon isn't running.");
     }
     Ok(())
 }
@@ -151,7 +151,7 @@ fn autostart_on(exe: &std::path::Path) -> bool {
 
 fn print_autostart() {
     let on = exe().is_ok_and(|exe| autostart_on(&exe));
-    println!(
+    say!(
         "  Starts at login: {}",
         if on {
             "yes (`kiln daemon disable` turns it off)"
@@ -164,7 +164,7 @@ fn print_autostart() {
 pub fn status() -> Result<(), String> {
     let paths = paths()?;
     let Some(mut client) = connect(&paths)? else {
-        println!("Kiln's daemon isn't running. `kiln daemon start` starts it.");
+        say!("Kiln's daemon isn't running. `kiln daemon start` starts it.");
         print_autostart();
         return Ok(());
     };
@@ -173,7 +173,7 @@ pub fn status() -> Result<(), String> {
     };
     let status = call(&mut client, "daemon.status")?;
     let web = call(&mut client, "web.status")?;
-    println!(
+    say!(
         "Kiln's daemon {} is running (PID {}, up {}).",
         status["version"].as_str().unwrap_or("?"),
         status["pid"],
@@ -185,14 +185,14 @@ pub fn status() -> Result<(), String> {
     ] {
         let state = &web[key];
         match state["state"].as_str() {
-            Some("running") => println!("  {label}: running (PID {})", state["pid"]),
-            Some("exited") => println!("  {label}: exited on its own; the daemon restarts it"),
-            _ => println!("  {label}: stopped"),
+            Some("running") => say!("  {label}: running (PID {})", state["pid"]),
+            Some("exited") => say!("  {label}: exited on its own; the daemon restarts it"),
+            _ => say!("  {label}: stopped"),
         }
     }
     let repairs = status["repairs"].as_array().map_or(0, Vec::len);
     if repairs > 0 {
-        println!("  Restarts by the daemon: {repairs}");
+        say!("  Restarts by the daemon: {repairs}");
     }
     // Services (ADR 0048): their supervisor, and how many instances answer.
     if let Ok(services) = call(&mut client, "services.status") {
@@ -203,34 +203,34 @@ pub fn status() -> Result<(), String> {
         let wanted = instances.iter().filter(|i| i["enabled"] == true).count();
         let answering = instances.iter().filter(|i| i["answers"] == true).count();
         match services["supervisor"]["state"].as_str() {
-            Some("running") => println!(
+            Some("running") => say!(
                 "  Services: {answering} of {wanted} running (supervisor PID {})",
                 services["supervisor"]["pid"]
             ),
             Some("exited") => {
-                println!("  Services: their supervisor exited on its own; the daemon restarts it");
+                say!("  Services: their supervisor exited on its own; the daemon restarts it");
             }
-            _ if instances.is_empty() => println!("  Services: none"),
-            _ => println!("  Services: stopped"),
+            _ if instances.is_empty() => say!("  Services: none"),
+            _ => say!("  Services: stopped"),
         }
     }
     let service_repairs = status["service_repairs"].as_array().map_or(0, Vec::len);
     if service_repairs > 0 {
-        println!("  Services restarted by the daemon: {service_repairs}");
+        say!("  Services restarted by the daemon: {service_repairs}");
     }
     let ca = &status["ca"];
     if let Some(days) = ca["intermediate_days_left"].as_i64() {
-        println!(
+        say!(
             "  Intermediate certificate: {days} day(s) left; renewed by the daemon when fewer than {} are left",
             ca["renew_before_days"]
         );
     }
     let renewals = ca["renewals"].as_array().map_or(0, Vec::len);
     if renewals > 0 {
-        println!("  Renewals by the daemon: {renewals}");
+        say!("  Renewals by the daemon: {renewals}");
     }
     print_autostart();
-    println!("  Log: {}", paths.log.display());
+    say!("  Log: {}", paths.log.display());
     Ok(())
 }
 
@@ -251,7 +251,7 @@ pub fn call(method: &str, params: Option<&str>) -> Result<(), String> {
     let paths = paths()?;
     let mut client = connect(&paths)?.ok_or_else(|| ClientError::NotRunning.to_string())?;
     let result = client.call(method, params).map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "{}",
         serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
     );

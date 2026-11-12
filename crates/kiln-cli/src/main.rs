@@ -9,6 +9,9 @@ use clap::{Parser, Subcommand};
 use kiln_core::Tld;
 use kiln_platform::hosts;
 
+// First: its `say!` and `say_err!` macros are used by every module after it.
+#[macro_use]
+mod out;
 mod apply;
 mod coexist;
 mod daemon;
@@ -36,6 +39,14 @@ mod web;
     about = "Local PHP development environment (pre-alpha)"
 )]
 struct Cli {
+    /// Print JSON Lines for programs instead of text (ADR 0053): events, then one `result`
+    /// or `error`. Never asks on the terminal.
+    #[arg(long, global = true)]
+    json: bool,
+    /// With --json: answer yes to the command's confirmation. Without it, a command that
+    /// asks stops there with exit code 3, after showing its preview.
+    #[arg(long, global = true)]
+    confirmed: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -107,11 +118,8 @@ enum Command {
     Unisolate { site: Option<String> },
     /// Check Kiln's health: state, ports, web server, PHP, sites, DNS, certificates, shims.
     /// Changes nothing; exits with 1 if something failed.
-    Doctor {
-        /// Print the findings as JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    /// With --json, the findings are the result's data.
+    Doctor,
     /// Show what `php`, `composer` and `node` run in a folder (default: the current one), and
     /// why.
     Which { path: Option<PathBuf> },
@@ -600,26 +608,26 @@ fn state_info(dir: Option<PathBuf>) -> Result<(), String> {
         .or_else(kiln_state::default_state_dir)
         .ok_or("cannot determine the state directory (APPDATA/HOME not set)")?;
     let db = dir.join(kiln_state::DB_FILE);
-    println!("State directory: {}", dir.display());
+    say!("State directory: {}", dir.display());
     if !db.is_file() {
-        println!("No state database yet ({} does not exist).", db.display());
+        say!("No state database yet ({} does not exist).", db.display());
         if dir.join(kiln_state::LEGACY_JOURNAL_FILE).is_file() {
-            println!("A legacy journal.jsonl is present; it will be imported on first use.");
+            say!("A legacy journal.jsonl is present; it will be imported on first use.");
         }
         return Ok(());
     }
     let store = kiln_state::StateStore::open(&db).map_err(|e| e.to_string())?;
-    println!("Database:        {}", db.display());
-    println!(
+    say!("Database:        {}", db.display());
+    say!(
         "Schema version:  {} (this build: {})",
         store.schema_version().map_err(|e| e.to_string())?,
         kiln_state::SCHEMA_VERSION
     );
     let counts = store.counts_by_state().map_err(|e| e.to_string())?;
     let total: u64 = counts.iter().map(|(_, n)| n).sum();
-    println!("Operations:      {total}");
+    say!("Operations:      {total}");
     for (state, n) in counts {
-        println!("  {state:?}: {n}");
+        say!("  {state:?}: {n}");
     }
     Ok(())
 }
@@ -667,25 +675,25 @@ fn plan_hosts(names: &[String], tld: Option<&str>, file: Option<PathBuf>) -> Res
     let updated = hosts::upsert_block(&current, &entries).map_err(|e| e.to_string())?;
     let after = hosts::read_block(&updated).map_err(|e| e.to_string())?;
 
-    println!("Plan: update Kiln's block in {}", path.display());
+    say!("Plan: update Kiln's block in {}", path.display());
     for (ip, name) in &before {
         if !after.contains(&(ip.clone(), name.clone())) {
-            println!("  - {ip} {name}");
+            say!("  - {ip} {name}");
         }
     }
     for (ip, name) in &after {
         if !before.contains(&(ip.clone(), name.clone())) {
-            println!("  + {ip} {name}");
+            say!("  + {ip} {name}");
         }
     }
     if before == after {
-        println!("  (no changes)");
+        say!("  (no changes)");
     }
     let other = hosts::remove_block(&current)
         .map_err(|e| e.to_string())?
         .len();
-    println!("Lines outside Kiln's block stay unchanged ({other} bytes of other content).");
-    println!("Nothing was written. Use `kiln hosts set` to apply.");
+    say!("Lines outside Kiln's block stay unchanged ({other} bytes of other content).");
+    say!("Nothing was written. Use `kiln hosts set` to apply.");
     Ok(())
 }
 
@@ -699,7 +707,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Sites
             | Command::Which { .. }
             | Command::History { .. }
-            | Command::Doctor { .. }
+            | Command::Doctor
             | Command::Uninstall { .. }
             | Command::Daemon {
                 action: DaemonAction::Start
@@ -748,7 +756,7 @@ fn change_lock() -> Result<Option<std::fs::File>, String> {
     match file.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
-            eprintln!("Waiting for another kiln command (or Kiln's daemon) to finish…");
+            say_err!("Waiting for another kiln command (or Kiln's daemon) to finish…");
             file.lock()
                 .map_err(|e| format!("cannot lock {}: {e}", path.display()))?;
         }
@@ -787,12 +795,23 @@ fn quiet_on_closed_output() {
 fn main() -> ExitCode {
     quiet_on_closed_output();
     let cli = Cli::parse();
-    if let Command::Doctor { json } = cli.command {
-        return if doctor::run(json) {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
+    out::start(cli.json, cli.confirmed);
+    if cli.confirmed && !cli.json {
+        return out::finish(Err(
+            "--confirmed goes with --json; on a terminal, use the command's --yes".into(),
+        ));
+    }
+    if matches!(cli.command, Command::Doctor) {
+        // A failed check is still a successful read: the final line says so, the exit code
+        // is 1 as before (ADR 0053 §1).
+        let healthy = doctor::run();
+        let code = out::finish(Ok(()));
+        return if healthy { code } else { ExitCode::FAILURE };
+    }
+    if cli.json && is_interactive(&cli.command) {
+        return out::finish(Err(
+            "this command talks to the terminal, so it doesn't run with --json".into(),
+        ));
     }
     // One change at a time, whether from another `kiln` or from the daemon (ADR 0026 §1).
     let result = if changes_state(&cli.command) {
@@ -800,13 +819,19 @@ fn main() -> ExitCode {
     } else {
         run(cli.command)
     };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("error: {message}");
-            ExitCode::FAILURE
+    out::finish(result)
+}
+
+/// Commands that hand the terminal to another program: a database client.
+fn is_interactive(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Db {
+            action: None,
+            name: Some(_),
+            ..
         }
-    }
+    )
 }
 
 fn run_ca(action: CaAction) -> Result<(), String> {
@@ -914,7 +939,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
 
 fn run(command: Command) -> Result<(), String> {
     match command {
-        Command::Doctor { .. } => unreachable!("handled in main"),
+        Command::Doctor => unreachable!("handled in main"),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, tld.as_deref(), file),

@@ -278,7 +278,7 @@ pub(crate) fn choose_port(
     }
     match alternative {
         Some(port) => {
-            println!(
+            say!(
                 "{} port {current} is {}; Kiln uses {port}.",
                 kind.purpose,
                 why_busy(listeners, current)
@@ -333,7 +333,7 @@ pub(crate) fn note_shared_names(store: &StateStore, names: &[String]) {
     let urls = web::site_urls(store);
     for (name, claim) in shared {
         let url = urls.get(&name).map_or("", String::as_str);
-        println!(
+        say!(
             "Note: {name} is also in the hosts file for {}. Both point to this computer, so the port decides which server answers; Kiln's is {url}",
             claim.owner()
         );

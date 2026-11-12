@@ -114,12 +114,12 @@ fn notes(kind: &str, project: &Path, drivers: bool) {
             .join("predis")
             .is_dir()
     {
-        println!(
+        say!(
             "Laravel talks to Redis through the predis package here: run `composer require predis/predis` in the project."
         );
     }
     if drivers {
-        println!("Cached config? Run `php artisan config:clear` so Laravel reads the new .env.");
+        say!("Cached config? Run `php artisan config:clear` so Laravel reads the new .env.");
     }
 }
 
@@ -174,11 +174,11 @@ pub fn use_instance(
 
     let op: Box<dyn Operation> = Box::new(EnvKeysOp::new(env.clone(), keys));
     if unchanged {
-        println!("{} already points at {name}.", env.display());
+        say!("{} already points at {name}.", env.display());
     } else {
         crate::apply::print_preview(&op.preview().map_err(|e| e.to_string())?, "(not set)");
         if !yes && !crate::apply::confirm(&format!("Point this project at {name}?")) {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(None);
         }
     }
@@ -189,8 +189,8 @@ pub fn use_instance(
             ));
         }
         match provider.create_database(&dirs, &record.ports, db) {
-            Some(Ok(true)) => println!("Created the database {db} on {name}."),
-            Some(Ok(false)) => println!("The database {db} is already on {name}."),
+            Some(Ok(true)) => say!("Created the database {db} on {name}."),
+            Some(Ok(false)) => say!("The database {db} is already on {name}."),
             Some(Err(e)) => return Err(format!("cannot make the database {db}: {e}")),
             None => {}
         }
@@ -199,7 +199,7 @@ pub fn use_instance(
         return Ok(None);
     }
     let id = crate::apply::apply_quietly(&[op])?.first().copied();
-    println!(
+    say!(
         "{} now points at {name}{}.",
         env.display(),
         id.map(|id| format!(" (undo with `kiln undo {id}`)"))

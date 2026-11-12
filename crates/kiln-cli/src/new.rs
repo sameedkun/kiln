@@ -136,11 +136,11 @@ pub fn new(
     let local =
         kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
     if !local.join(COMPOSER_PHAR).is_file() {
-        println!("Composer isn't installed yet; installing it first.");
+        say!("Composer isn't installed yet; installing it first.");
         crate::php::composer_install()?;
     }
 
-    println!(
+    say!(
         "Creating {} with PHP {} and Composer ({SKELETON})...",
         project.display(),
         record.version
@@ -168,9 +168,9 @@ pub fn new(
         // Ctrl+C goes to Composer (same console); Kiln waits for it to stop.
         let _ = kiln_sys::win::survive_ctrl_c();
     }
-    let status = command
-        .status()
-        .map_err(|e| format!("cannot run Composer: {e}"))?;
+    // Its output is shown; with --json, as notes (ADR 0053 §1).
+    let status =
+        crate::out::run_shown(&mut command).map_err(|e| format!("cannot run Composer: {e}"))?;
     if !status.success() {
         let left = if project.exists() {
             format!(
@@ -190,14 +190,14 @@ pub fn new(
         let toml = project.join(manifest::FILE);
         std::fs::write(&toml, manifest_for(spec))
             .map_err(|e| format!("cannot write {}: {e}", toml.display()))?;
-        println!("Wrote {}: PHP {spec} for this project.", toml.display());
+        say!("Wrote {}: PHP {spec} for this project.", toml.display());
     }
 
     serve(&name, &tld, &project, secure)?;
     if let Some(instance) = db {
         wire_database(&instance, &project, &record)?;
     }
-    println!(
+    say!(
         "Next: `cd {}`, then `npm install` and `npm run dev` for its front end.",
         project.display()
     );
@@ -216,14 +216,14 @@ fn serve(name: &str, tld: &Tld, project: &Path, secure: bool) -> Result<(), Stri
     if !served {
         return crate::web::link(Some(name.to_owned()), Some(project.to_path_buf()), secure);
     }
-    println!("{name}.{tld} already serves it (its folder is parked).");
+    say!("{name}.{tld} already serves it (its folder is parked).");
     if secure {
         crate::web::set_secure(name, true)?;
     }
     if let Some(url) =
         crate::web::site_urls(&crate::web::open_store()?).get(&format!("{name}.{tld}"))
     {
-        println!("URL: {url}");
+        say!("URL: {url}");
     }
     Ok(())
 }
@@ -239,11 +239,12 @@ fn wire_database(instance: &str, project: &Path, record: &PhpRecord) -> Result<(
         false,
         true,
     )?;
-    println!("Running its migrations on {instance}...");
-    let status = std::process::Command::new(record.dir.join(kiln_php::PHP_EXE))
+    say!("Running its migrations on {instance}...");
+    let mut migrate = std::process::Command::new(record.dir.join(kiln_php::PHP_EXE));
+    migrate
         .args(["artisan", "migrate", "--force"])
-        .current_dir(project)
-        .status()
+        .current_dir(project);
+    let status = crate::out::run_shown(&mut migrate)
         .map_err(|e| format!("cannot run php artisan migrate: {e}"))?;
     if status.success() {
         Ok(())

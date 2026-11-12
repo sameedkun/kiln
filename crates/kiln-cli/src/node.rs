@@ -42,7 +42,7 @@ pub fn available() -> Result<(), String> {
     let platform = platform()?;
     let releases = releases(&crate::php::fetcher()?)?;
     let installed = kiln_node::installed(&node_root()?);
-    println!(
+    say!(
         "Node releases for {} from nodejs.org (newest of each line):",
         platform.suffix
     );
@@ -57,12 +57,15 @@ pub fn available() -> Result<(), String> {
         } else {
             ""
         };
-        println!(
+        say!(
             "  {:<4} {:<9} {:<12} {}{mark}",
-            release.numbers[0], release.version, lts, release.date
+            release.numbers[0],
+            release.version,
+            lts,
+            release.date
         );
     }
-    println!("Install one with `kiln node install <version>`, e.g. `kiln node install lts`.");
+    say!("Install one with `kiln node install <version>`, e.g. `kiln node install lts`.");
     Ok(())
 }
 
@@ -75,7 +78,7 @@ pub fn install(spec: &str) -> Result<(), String> {
     let fetcher = crate::php::fetcher()?;
     let releases = releases(&fetcher)?;
     let release = index::resolve(&releases, &spec, platform).map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Node {}{} for {}",
         release.version,
         release
@@ -97,17 +100,17 @@ pub fn install(spec: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let node = &installed.node;
     if installed.already {
-        println!(
+        say!(
             "Node {} is already installed in {}.",
             node.version,
             node.dir.display()
         );
     } else {
-        println!(
+        say!(
             "Checked SHASUMS256.txt's signature (key {}), then the archive's SHA-256.",
             installed.signer.as_deref().unwrap_or("?")
         );
-        println!(
+        say!(
             "Installed Node {} in {}. It checked out: `node --version` reports v{}.",
             node.version,
             node.dir.display(),
@@ -121,7 +124,7 @@ pub fn install(spec: &str) -> Result<(), String> {
         .join(kiln_runtime::shim::Tool::Node.file_name())
         .is_file()
     {
-        println!("Run `kiln shims install` to get `node`, `npm`, `npx` and `corepack` on PATH.");
+        say!("Run `kiln shims install` to get `node`, `npm`, `npx` and `corepack` on PATH.");
     }
     Ok(())
 }
@@ -130,7 +133,7 @@ pub fn install(spec: &str) -> Result<(), String> {
 pub fn list() -> Result<(), String> {
     let installed = kiln_node::installed(&node_root()?);
     if installed.is_empty() {
-        println!("No Node installed by Kiln yet. See `kiln node available`.");
+        say!("No Node installed by Kiln yet. See `kiln node available`.");
         return Ok(());
     }
     let default_spec = default_spec()?;
@@ -146,7 +149,7 @@ pub fn list() -> Result<(), String> {
         } else {
             ""
         };
-        println!(
+        say!(
             "{:<9} {:<12} {}{mark}",
             node.version,
             lts,
@@ -182,7 +185,7 @@ pub fn remove(version: &str) -> Result<(), String> {
             node.dir.display()
         )
     })?;
-    println!("Removed Node {} ({}).", node.version, node.dir.display());
+    say!("Removed Node {} ({}).", node.version, node.dir.display());
     Ok(())
 }
 
@@ -198,7 +201,7 @@ pub fn set_default(spec: &str) -> Result<(), String> {
     crate::web::open_store()?
         .set_setting(DEFAULT_KEY, &parsed.to_string())
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Node {} is now the default (where no project asks for a version; it follows {parsed}).",
         node.version
     );

@@ -29,6 +29,9 @@ pub fn site_entries(names: &[String], tld: Tld) -> Result<(Tld, Vec<DnsEntry>), 
 
 /// Asks `question [y/N]` on the terminal; anything but y/yes (including no input) is "no".
 pub fn confirm(question: &str) -> bool {
+    if crate::out::json() {
+        return crate::out::confirm(question);
+    }
     print!("{question} [y/N] ");
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
@@ -96,7 +99,7 @@ mod system {
         let dir = kiln_state::default_state_dir().ok_or("cannot determine the state directory")?;
         let (store, report) = StateStore::open_dir(&dir).map_err(|e| e.to_string())?;
         if let Some(import) = report.imported {
-            println!(
+            say!(
                 "Imported {} journal events from the previous format.",
                 import.events
             );
@@ -141,13 +144,13 @@ mod system {
         let mut engine = Engine::new(store, registry);
         let recovery = engine.recover().map_err(|e| e.to_string())?;
         if !recovery.rolled_back.is_empty() {
-            println!(
+            say!(
                 "Rolled back interrupted operations: {:?}",
                 recovery.rolled_back
             );
         }
         for (id, error) in &recovery.stuck {
-            println!("Operation #{id} could not be rolled back and needs attention: {error}");
+            say!("Operation #{id} could not be rolled back and needs attention: {error}");
         }
         Ok(Context {
             engine,
@@ -158,8 +161,8 @@ mod system {
 
     fn report_elevation(session: &HelperSession) {
         match session.launches() {
-            0 => println!("No administrator approval was needed."),
-            n => println!("Administrator approval used: {n} prompt(s)."),
+            0 => say!("No administrator approval was needed."),
+            n => say!("Administrator approval used: {n} prompt(s)."),
         }
     }
 
@@ -174,14 +177,15 @@ mod system {
         ));
         print_preview(&op.preview().map_err(|e| e.to_string())?, "(no Kiln block)");
         if !yes && !confirm(&format!("Apply this change? {APPROVAL}")) {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(());
         }
         let report = ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Done. Recorded as operation #{} (undo with `kiln undo {}`).",
-            report.entry_ids[0], report.entry_ids[0]
+            report.entry_ids[0],
+            report.entry_ids[0]
         );
         report_elevation(&ctx.session);
         Ok(())
@@ -214,14 +218,14 @@ mod system {
                 super::state_word(entry.state)
             ));
         }
-        println!("Undo operation #{id}: {what}.");
+        say!("Undo operation #{id}: {what}.");
         if !yes && !confirm(&format!("Undo it? {APPROVAL}")) {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(());
         }
         ctx.engine.revert(id, force).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
-        println!("Undone.");
+        say!("Undone.");
         if entry.kind == kiln_platform::php_ext::PHP_EXT_KIND {
             let version = entry.params["version"].as_str().unwrap_or_default();
             return crate::web::restart_php(&crate::web::open_store()?, version);
@@ -257,7 +261,7 @@ mod system {
         let item = platform_item().ok_or("cannot tell where login items go (no home folder)")?;
         let content = content_for(exe);
         if item.read().map_err(|e| e.to_string())?.as_deref() == Some(content.as_str()) {
-            println!("Kiln's daemon already starts when you log in.");
+            say!("Kiln's daemon already starts when you log in.");
             return Ok(false);
         }
         let mut ctx = open()?;
@@ -266,12 +270,12 @@ mod system {
         if !yes
             && !confirm("Start Kiln's daemon when you log in? (`kiln daemon disable` turns it off)")
         {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(false);
         }
         ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
-        println!("Kiln's daemon now starts when you log in.");
+        say!("Kiln's daemon now starts when you log in.");
         Ok(true)
     }
 
@@ -288,18 +292,18 @@ mod system {
             .map(|e| e.id)
             .collect();
         if ids.is_empty() {
-            println!("Kiln's daemon doesn't start at login.");
+            say!("Kiln's daemon doesn't start at login.");
             return Ok(());
         }
         if !yes && !confirm("Stop starting Kiln's daemon at login?") {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(());
         }
         for id in ids {
             ctx.engine.revert(id, false).map_err(|e| e.to_string())?;
         }
         ctx.session.finish().map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Kiln's daemon no longer starts at login. It keeps running until you log out or run `kiln daemon stop`."
         );
         Ok(())
@@ -338,7 +342,7 @@ mod system {
                 )
             })?;
         }
-        println!("Shims written to {}.", shims.display());
+        say!("Shims written to {}.", shims.display());
 
         super::say_what_shims_change(&std::env::var("PATH").unwrap_or_default(), &shims);
 
@@ -346,15 +350,16 @@ mod system {
         let op: Box<dyn Operation> = Box::new(UserPathOp::new(&shims, Rc::new(RegistryPath)));
         print_preview(&op.preview().map_err(|e| e.to_string())?, "(empty)");
         if !yes && !confirm("Change your user PATH? (`kiln undo` puts it back)") {
-            println!("Nothing was changed on PATH. The shims are in place but not on PATH.");
+            say!("Nothing was changed on PATH. The shims are in place but not on PATH.");
             return Ok(());
         }
         let report = ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Done. Recorded as operation #{} (undo with `kiln undo {}`).",
-            report.entry_ids[0], report.entry_ids[0]
+            report.entry_ids[0],
+            report.entry_ids[0]
         );
-        println!("Open a new terminal to use it; terminals already open keep their old PATH.");
+        say!("Open a new terminal to use it; terminals already open keep their old PATH.");
         Ok(())
     }
 
@@ -377,13 +382,14 @@ mod system {
                 "Trust it? Windows will show a security warning naming this certificate; choose Yes there.",
             )
         {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(());
         }
         let report = ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Trusted. Recorded as operation #{} (remove with `kiln undo {}`).",
-            report.entry_ids[0], report.entry_ids[0]
+            report.entry_ids[0],
+            report.entry_ids[0]
         );
         Ok(())
     }
@@ -435,7 +441,7 @@ mod system {
         for tool in Tool::ALL {
             install_executable(&source, &shims.join(tool.file_name()))?;
         }
-        println!("Shims written to {}.", shims.display());
+        say!("Shims written to {}.", shims.display());
 
         // Kiln's own scripts: put the shims first on PATH, once (ADR 0023 §2).
         let dir = shims.to_string_lossy();
@@ -493,16 +499,16 @@ mod system {
         if !yes
             && !confirm("Change these shell startup files? (`kiln undo` takes the lines back out)")
         {
-            println!("Nothing was changed. The shims are in place but not on PATH.");
+            say!("Nothing was changed. The shims are in place but not on PATH.");
             return Ok(());
         }
         let report = ctx.engine.apply(&ops).map_err(|e| e.to_string())?;
         let ids: Vec<String> = report.entry_ids.iter().map(|id| format!("#{id}")).collect();
-        println!(
+        say!(
             "Done. Recorded as operation(s) {} (`kiln undo` removes them, newest first).",
             ids.join(", ")
         );
-        println!(
+        say!(
             "Open a new terminal to use it. Apps started from the desktop (an IDE) see it after you log in again."
         );
         Ok(())
@@ -558,14 +564,14 @@ mod system {
                     )));
                 }
                 if databases.is_empty() {
-                    println!(
+                    say!(
                         "No browser certificate database found (Firefox or a Chromium browser that has been started once)."
                     );
                 }
             }
             None if databases.is_empty() => {}
             None => {
-                println!(
+                say!(
                     "Browsers ({}) need `certutil` to trust Kiln's CA: {CERTUTIL_HINT}.",
                     databases
                         .iter()
@@ -589,7 +595,7 @@ mod system {
             )));
         }
         if ops.is_empty() {
-            println!(
+            say!(
                 "Nothing to trust it in. `kiln ca trust --system` trusts it for command-line tools."
             );
             return Ok(());
@@ -603,21 +609,21 @@ mod system {
             "Trust it?".to_owned()
         };
         if !yes && !confirm(&question) {
-            println!("Nothing was changed.");
+            say!("Nothing was changed.");
             return Ok(());
         }
         let report = ctx.engine.apply(&ops).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
         let ids: Vec<String> = report.entry_ids.iter().map(|id| format!("#{id}")).collect();
-        println!(
+        say!(
             "Trusted. Recorded as operation(s) {} (`kiln undo` removes them, newest first).",
             ids.join(", ")
         );
         if !databases.is_empty() {
-            println!("Restart Chrome or Firefox if they are open, so they read the change.");
+            say!("Restart Chrome or Firefox if they are open, so they read the change.");
         }
         if !system {
-            println!(
+            say!(
                 "Command-line tools (curl, PHP, Node) use the system store: `kiln ca trust --system` adds it there too."
             );
         }
@@ -629,15 +635,19 @@ mod system {
 /// Prints a preview's summary and before/after lines.
 #[cfg_attr(not(windows), allow(dead_code))] // only the Windows commands change the system so far
 pub fn print_preview(preview: &kiln_ops::Preview, empty: &str) {
-    println!("{}", preview.summary);
+    if crate::out::json() {
+        crate::out::preview(preview);
+        return;
+    }
+    say!("{}", preview.summary);
     for change in &preview.changes {
         let indent = |s: &str| s.replace('\n', "\n            ");
-        println!("  in {}:", change.target);
-        println!(
+        say!("  in {}:", change.target);
+        say!(
             "    before: {}",
             indent(change.before.as_deref().unwrap_or(empty))
         );
-        println!(
+        say!(
             "    after:  {}",
             indent(change.after.as_deref().unwrap_or(empty))
         );
@@ -654,9 +664,9 @@ pub fn ca_store() -> Result<kiln_pki::CaStore, String> {
 }
 
 fn print_cert(label: &str, info: &kiln_pki::CertInfo) {
-    println!("{label}: {}", info.subject);
-    println!("  SHA-256: {}", info.sha256);
-    println!("  expires: {}", info.not_after.date());
+    say!("{label}: {}", info.subject);
+    say!("  SHA-256: {}", info.sha256);
+    say!("  expires: {}", info.not_after.date());
 }
 
 /// The TLD in the root's name constraint: what its intermediates must be issued for.
@@ -684,7 +694,7 @@ pub fn ca_init(tld: Option<&str>) -> Result<(), String> {
                 "Kiln's root CA can only vouch for names under .{tld}, and changing the TLD needs a new root, which Kiln can't make while this one exists. To start over under another TLD: `kiln uninstall`, then `kiln ca init --tld <name>`."
             ));
         }
-        println!("A Kiln root CA already exists (for .{tld}); keeping it.");
+        say!("A Kiln root CA already exists (for .{tld}); keeping it.");
         (ca.root().map_err(|e| e.to_string())?, tld)
     } else {
         let tld = match chosen {
@@ -723,7 +733,7 @@ pub fn ca_init(tld: Option<&str>) -> Result<(), String> {
                 .unwrap_or_else(|_| "host".into())
         );
         let root = ca.create_root(&tld, &owner).map_err(|e| e.to_string())?;
-        println!("Created a root CA that can only vouch for names under .{tld}.");
+        say!("Created a root CA that can only vouch for names under .{tld}.");
         (root, tld)
     };
     // The root decides: record its TLD, also for a root made before Kiln recorded it.
@@ -732,40 +742,40 @@ pub fn ca_init(tld: Option<&str>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     drop(store);
     if tld.as_str() != "test" {
-        println!("Sites are served as <name>.{tld}.");
+        say!("Sites are served as <name>.{tld}.");
     }
     print_cert("Root", &root);
     let inter = ca.issue_intermediate(&tld).map_err(|e| e.to_string())?;
     print_cert("Intermediate (for the web server)", &inter);
     let kept = ca.root_key_description().unwrap_or("missing");
     if kept.contains("file permissions only") {
-        println!("Warning: the root key is {kept}.");
+        say!("Warning: the root key is {kept}.");
         if cfg!(target_os = "linux") {
-            println!(
+            say!(
                 "  On a desktop, Kiln keeps it in your keyring instead; run `kiln ca init` from a desktop session before the first one to get that."
             );
         }
     } else {
-        println!("The root key is {kept}, and never given to the web server.");
+        say!("The root key is {kept}, and never given to the web server.");
     }
-    println!("Next: `kiln ca trust` so browsers accept these certificates.");
+    say!("Next: `kiln ca trust` so browsers accept these certificates.");
     Ok(())
 }
 
 /// Shows the CA's certificates and where they live.
 pub fn ca_info() -> Result<(), String> {
     let ca = ca_store()?;
-    println!("CA directory: {}", ca.dir().display());
+    say!("CA directory: {}", ca.dir().display());
     if !ca.root_exists() {
-        println!("No root CA yet; run `kiln ca init`.");
+        say!("No root CA yet; run `kiln ca init`.");
         return Ok(());
     }
     print_cert("Root", &ca.root().map_err(|e| e.to_string())?);
     match ca.intermediate().map_err(|e| e.to_string())? {
         Some(i) => print_cert("Intermediate", &i),
-        None => println!("No intermediate yet; run `kiln ca init`."),
+        None => say!("No intermediate yet; run `kiln ca init`."),
     }
-    println!(
+    say!(
         "Root key: {}",
         ca.root_key_description().unwrap_or("missing")
     );
@@ -824,21 +834,21 @@ pub(crate) fn say_what_shims_change(path_now: &str, shims: &std::path::Path) {
         let machine = on_machine_path(&found);
         let found = found.display();
         if tool.is_node() && machine {
-            println!(
+            say!(
                 "`{name}` in new terminals: stays {found}. It is on the machine PATH, which Windows puts before your user PATH; to use Kiln's shim, remove that folder from the machine PATH (Kiln doesn't change it)."
             );
         } else if tool.is_node() {
-            println!(
+            say!(
                 "`{name}` in new terminals: now {found}; after this, Kiln's shim, which keeps running that one until you install a Node with Kiln."
             );
         } else {
-            println!(
+            say!(
                 "`{name}` in new terminals: now {found}; after this, Kiln's shim (it follows each site's PHP)."
             );
         }
     }
     if !not_found.is_empty() {
-        println!(
+        say!(
             "{} in new terminals: now not found; after this, Kiln's shims.",
             not_found.join(", ")
         );

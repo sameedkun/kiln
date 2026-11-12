@@ -224,7 +224,7 @@ fn static_build(record: &PhpRecord) -> String {
 pub fn list(spec: Option<&str>) -> Result<(), String> {
     let record = target(&open_store()?, spec)?;
     let all = inspect(&record)?;
-    println!("PHP {} ({})", record.version, ini_path(&record).display());
+    say!("PHP {} ({})", record.version, ini_path(&record).display());
     let names = |kind: Kind| -> Vec<&str> {
         all.iter()
             .filter(|e| e.kind == kind)
@@ -233,14 +233,14 @@ pub fn list(spec: Option<&str>) -> Result<(), String> {
     };
     let toggles: Vec<&Extension> = all.iter().filter(|e| e.kind == Kind::Toggle).collect();
     if is_static(&record) {
-        println!("{}", static_build(&record));
+        say!("{}", static_build(&record));
     } else if toggles.is_empty() {
-        println!("No extension files to turn on or off.");
+        say!("No extension files to turn on or off.");
     } else {
-        println!("Can be turned on or off (`kiln php ext on|off <name>`):");
+        say!("Can be turned on or off (`kiln php ext on|off <name>`):");
         let width = toggles.iter().map(|e| e.name.len()).max().unwrap_or(0);
         for e in toggles {
-            println!(
+            say!(
                 "  {:<width$}  {}",
                 e.name,
                 if e.loaded { "on" } else { "off" }
@@ -249,11 +249,11 @@ pub fn list(spec: Option<&str>) -> Result<(), String> {
     }
     let built_in = names(Kind::BuiltIn);
     if !built_in.is_empty() {
-        println!("Built in, always on:\n{}", wrapped(&built_in, 90));
+        say!("Built in, always on:\n{}", wrapped(&built_in, 90));
     }
     let distribution = names(Kind::Distribution);
     if !distribution.is_empty() {
-        println!(
+        say!(
             "Loaded by your distribution's configuration (`sudo phpdismod -v {} <name>` turns one off):\n{}",
             minor(&record.version),
             wrapped(&distribution, 90)
@@ -281,7 +281,7 @@ fn plan_one(
     };
     match ext.kind {
         Kind::BuiltIn if on => {
-            println!("{name} is built into PHP {version}: always on.");
+            say!("{name} is built into PHP {version}: always on.");
             return Ok(None);
         }
         Kind::BuiltIn => {
@@ -298,7 +298,7 @@ fn plan_one(
         Kind::Distribution | Kind::Toggle => {}
     }
     if ext.loaded == on {
-        println!("{name} is already {} for PHP {version}.", word(on));
+        say!("{name} is already {} for PHP {version}.", word(on));
         return Ok(None);
     }
     Ok(Some(PhpExtOp::new(ini_path(record), version, name, on)))
@@ -337,7 +337,7 @@ pub fn toggle(names: &[String], spec: Option<&str>, on: bool) -> Result<(), Stri
         crate::apply::revert_quietly(&failed.iter().map(|(id, _)| *id).collect::<Vec<_>>())?;
     }
     for (id, name) in &done {
-        println!(
+        say!(
             "{name} is now {} for PHP {} (undo with `kiln undo {id}`).",
             word(on),
             record.version
@@ -406,7 +406,7 @@ pub fn carry_over(old: &PhpRecord, new: &PhpRecord) -> Result<(), String> {
     let mut carried = Vec::new();
     for (name, on) in states {
         let Some(ext) = all.iter().find(|e| e.name == name) else {
-            println!(
+            say!(
                 "PHP {} has no {name} extension, so it isn't turned {} there.",
                 new.version,
                 word(on)
@@ -428,7 +428,7 @@ pub fn carry_over(old: &PhpRecord, new: &PhpRecord) -> Result<(), String> {
         return Ok(());
     }
     crate::apply::apply_quietly(&ops)?;
-    println!(
+    say!(
         "Extensions carried over from PHP {}: {}.",
         old.version,
         carried.join(", ")

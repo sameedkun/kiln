@@ -27,10 +27,20 @@ fn open_store() -> Result<StateStore, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Prints download progress on one line, about every 5%.
+/// Prints download progress on one line, about every 5%; with --json, a `progress` event
+/// about every 2%.
 pub fn progress_printer(label: &str) -> impl FnMut(u64, Option<u64>) + '_ {
     let mut last_step = None;
     move |done, total| {
+        if crate::out::json() {
+            // Without a total, every 4 MB.
+            let step = total.map_or(done / 4_194_304, |t| done * 50 / t.max(1));
+            if Some(step) != last_step || total == Some(done) {
+                last_step = Some(step);
+                crate::out::progress(label, done, total);
+            }
+            return;
+        }
         let mb = |n: u64| {
             #[allow(clippy::cast_precision_loss)] // display only
             let n = n as f64 / 1_048_576.0;
@@ -47,7 +57,7 @@ pub fn progress_printer(label: &str) -> impl FnMut(u64, Option<u64>) + '_ {
         }
         let _ = std::io::stdout().flush();
         if total == Some(done) {
-            println!();
+            say!();
         }
     }
 }
@@ -71,19 +81,21 @@ pub fn available() -> Result<(), String> {
         .into_iter()
         .map(|r| r.version)
         .collect();
-    println!("Installable PHP builds (x64, non-thread-safe) from windows.php.net:");
+    say!("Installable PHP builds (x64, non-thread-safe) from windows.php.net:");
     for release in releases.iter().rev() {
         let mark = if installed.contains(&release.version) {
             "  (installed)"
         } else {
             ""
         };
-        println!(
+        say!(
             "  {:<6} {:<8} {}{mark}",
-            release.minor, release.version, release.archive
+            release.minor,
+            release.version,
+            release.archive
         );
     }
-    println!("Install one with `kiln php install <version>`, e.g. `kiln php install 8.4`.");
+    say!("Install one with `kiln php install <version>`, e.g. `kiln php install 8.4`.");
     Ok(())
 }
 
@@ -105,7 +117,7 @@ pub fn install(spec: &str, system: bool) -> Result<(), String> {
     let release = kiln_php::index::resolve(&releases, spec).map_err(|e| e.to_string())?;
     let mut store = open_store()?;
     let php_root = local_dir()?.join("php");
-    println!(
+    say!(
         "PHP {} ({}), {} {}",
         release.version,
         release.build,
@@ -125,19 +137,19 @@ pub fn install(spec: &str, system: bool) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     if installed.already {
-        println!(
+        say!(
             "PHP {} is already installed in {}.",
             installed.version,
             installed.dir.display()
         );
     } else {
-        println!(
+        say!(
             "Verified and installed PHP {} in {}.",
             installed.version,
             installed.dir.display()
         );
-        println!("php.ini enables: {}", installed.extensions.join(", "));
-        println!("It checked out: `php -v` reports {}.", installed.version);
+        say!("php.ini enables: {}", installed.extensions.join(", "));
+        say!("It checked out: `php -v` reports {}.", installed.version);
     }
     Ok(())
 }
@@ -159,30 +171,30 @@ fn available_linux() -> Result<(), String> {
             ""
         }
     };
-    println!("Downloadable (static-php-cli, {arch}, SHA-256 pinned in Kiln):");
+    say!("Downloadable (static-php-cli, {arch}, SHA-256 pinned in Kiln):");
     let builds: Vec<_> = linux::STATIC_BUILDS
         .iter()
         .filter(|b| b.arch == arch)
         .collect();
     if builds.is_empty() {
-        println!("  (none for {arch} yet)");
+        say!("  (none for {arch} yet)");
     }
     for build in builds.iter().rev() {
-        println!(
+        say!(
             "  {:<6} {:<8}{}",
             build.minor(),
             build.version,
             mark(build.version)
         );
     }
-    println!("From your distribution (`kiln php install <version> --system`):");
+    say!("From your distribution (`kiln php install <version> --system`):");
     let system = linux::find_system(std::path::Path::new("/"), None);
     if system.is_empty() {
-        println!("  (none with PHP-FPM; e.g. `sudo apt install php8.3-fpm php8.3-cli`)");
+        say!("  (none with PHP-FPM; e.g. `sudo apt install php8.3-fpm php8.3-cli`)");
     }
     for php in system {
         let version = linux::version_of(&php.php).unwrap_or_else(|_| "?".into());
-        println!(
+        say!(
             "  {:<8} {} + {}{}",
             version,
             php.php.display(),
@@ -212,7 +224,7 @@ fn install_static(spec: &str) -> Result<(), String> {
     let fetcher = fetcher()?;
     let mut store = open_store()?;
     let php_root = local_dir()?.join("php");
-    println!(
+    say!(
         "PHP {} (static-php-cli, {}), SHA-256 pinned in Kiln",
         build.version,
         std::env::consts::ARCH
@@ -234,18 +246,18 @@ fn install_static(spec: &str) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     if installed.already {
-        println!(
+        say!(
             "PHP {} is already installed in {}.",
             installed.version,
             installed.dir.display()
         );
     } else {
-        println!(
+        say!(
             "Verified and installed PHP {} (php and php-fpm) in {}.",
             installed.version,
             installed.dir.display()
         );
-        println!(
+        say!(
             "Extensions are built in (`{} -m` lists them). intl, opcache and sodium aren't; for those use your distribution's PHP: `kiln php install {} --system`.",
             installed.dir.join(linux::PHP_BIN).display(),
             build.minor()
@@ -295,13 +307,13 @@ fn install_system(spec: &str) -> Result<(), String> {
             sha256: String::new(),
         })
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Using your distribution's PHP {version}: {} and {}, linked into {}.",
         system.php.display(),
         system.fpm.display(),
         installed.dir.display()
     );
-    println!(
+    say!(
         "Kiln's php.ini there sets development defaults; extensions come from your distribution's packages."
     );
     Ok(())
@@ -315,7 +327,7 @@ fn install_system(_spec: &str) -> Result<(), String> {
 pub fn list() -> Result<(), String> {
     let records = open_store()?.php_versions().map_err(|e| e.to_string())?;
     if records.is_empty() {
-        println!("No PHP installed by Kiln yet. See `kiln php available`.");
+        say!("No PHP installed by Kiln yet. See `kiln php available`.");
         return Ok(());
     }
     for record in records {
@@ -329,7 +341,7 @@ pub fn list() -> Result<(), String> {
         } else {
             ""
         };
-        println!(
+        say!(
             "{:<8} {}{origin}{state}",
             record.version,
             record.dir.display()
@@ -375,7 +387,7 @@ pub fn remove(version: &str) -> Result<(), String> {
         _ => {}
     }
     store.remove_php(version).map_err(|e| e.to_string())?;
-    println!("Removed PHP {version} ({}).", record.dir.display());
+    say!("Removed PHP {version} ({}).", record.dir.display());
     Ok(())
 }
 
@@ -436,7 +448,7 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
         }
     }
     for record in installed.iter().filter(|r| is_system(r)) {
-        println!(
+        say!(
             "PHP {} is your distribution's: your package manager updates it.",
             record.version
         );
@@ -451,7 +463,7 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
         minors = vec![wanted];
     }
     if minors.is_empty() {
-        println!("No PHP installed by Kiln to update. See `kiln php available`.");
+        say!("No PHP installed by Kiln to update. See `kiln php available`.");
         return Ok(());
     }
     let (offered, source) = newest_offered(&minors)?;
@@ -463,14 +475,14 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
             continue;
         };
         let Some((_, newest)) = offered.iter().find(|(m, _)| m == minor) else {
-            println!("PHP {minor}: {source} no longer offers it; staying on {current}.");
+            say!("PHP {minor}: {source} no longer offers it; staying on {current}.");
             continue;
         };
         if version_numbers(newest) <= version_numbers(&current) {
-            println!("PHP {minor}: {current} is the newest in {source}.");
+            say!("PHP {minor}: {current} is the newest in {source}.");
             continue;
         }
-        println!("PHP {minor}: {current} → {newest}");
+        say!("PHP {minor}: {current} → {newest}");
         install(newest, false)?;
         let mut store = open_store()?;
         let now = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
@@ -492,24 +504,25 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
             store
                 .set_setting(DEFAULT_KEY, newest)
                 .map_err(|e| e.to_string())?;
-            println!("The default PHP moves to {newest}.");
+            say!("The default PHP moves to {newest}.");
         }
         for (host, pin) in store.isolations().map_err(|e| e.to_string())? {
             if pin == current {
-                println!(
+                say!(
                     "{host} is pinned to {current} exactly, and stays on it (`kiln isolate {minor} {host}` follows updates)."
                 );
             }
         }
-        println!("PHP {current} is kept for `kiln php rollback {minor}`.");
+        say!("PHP {current} is kept for `kiln php rollback {minor}`.");
         for older in installed.iter().filter(|r| {
             r.version != current
                 && minor_of(&r.version).as_deref() == Ok(minor.as_str())
                 && version_numbers(&r.version) < version_numbers(&current)
         }) {
-            println!(
+            say!(
                 "PHP {} is no longer used by default; `kiln php remove {}` frees its space.",
-                older.version, older.version
+                older.version,
+                older.version
             );
         }
         updated = true;
@@ -608,7 +621,7 @@ pub fn rollback(minor: Option<&str>) -> Result<(), String> {
         ));
     }
 
-    println!("PHP {minor}: {} → {previous}", current.version);
+    say!("PHP {minor}: {} → {previous}", current.version);
     if store
         .setting(DEFAULT_KEY)
         .map_err(|e| e.to_string())?
@@ -618,7 +631,7 @@ pub fn rollback(minor: Option<&str>) -> Result<(), String> {
         store
             .set_setting(DEFAULT_KEY, &previous)
             .map_err(|e| e.to_string())?;
-        println!("The default PHP moves back to {previous}.");
+        say!("The default PHP moves back to {previous}.");
     }
     // Out of use first, then the pools switch back, then the folder goes.
     store
@@ -630,7 +643,7 @@ pub fn rollback(minor: Option<&str>) -> Result<(), String> {
     crate::web::apply_site_change(&store)?;
     crate::ext::forget(&current)?;
     remove_build_dir(&current.dir);
-    println!(
+    say!(
         "Rolled back to PHP {previous}. The {} download stays cached: `kiln php update {minor}` installs it again.",
         current.version
     );
@@ -651,7 +664,7 @@ fn remove_build_dir(dir: &std::path::Path) {
                     dir.join(kiln_php::install::INCOMPLETE_MARKER),
                     b"kiln: rolled back; remove this folder\n",
                 );
-                println!(
+                say!(
                     "Note: {} couldn't be deleted yet ({e}); it is out of use, and `kiln uninstall` or the next install of that version removes it.",
                     dir.display()
                 );
@@ -675,7 +688,7 @@ pub fn set_default(version: &str) -> Result<(), String> {
     store
         .set_setting(crate::pool::DEFAULT_KEY, version)
         .map_err(|e| e.to_string())?;
-    println!("PHP {version} now serves sites.");
+    say!("PHP {version} now serves sites.");
     apply_pool_change(&store)
 }
 
@@ -689,7 +702,7 @@ pub fn set_workers(count: usize) -> Result<(), String> {
     store
         .set_setting(crate::pool::WORKERS_KEY, &count.to_string())
         .map_err(|e| e.to_string())?;
-    println!("{count} php-cgi worker(s) per pool.");
+    say!("{count} php-cgi worker(s) per pool.");
     apply_pool_change(&store)
 }
 
@@ -740,7 +753,7 @@ pub fn isolate(version: &str, site: Option<String>) -> Result<(), String> {
         ));
     }
     if let Some(wanted) = site.manifest.as_ref().and_then(|m| m.php.as_deref()) {
-        println!(
+        say!(
             "{host}'s kiln.toml asks for PHP {wanted}; this pin overrides it on this machine (`kiln unisolate` goes back to it)."
         );
     }
@@ -753,13 +766,13 @@ pub fn isolate(version: &str, site: Option<String>) -> Result<(), String> {
     store
         .isolate(&host, version.trim())
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "{host} now uses PHP {} (pinned to {}).",
         php.version,
         version.trim()
     );
     if version.trim().split('.').count() == 2 {
-        println!("It follows the newest installed {}.x.", version.trim());
+        say!("It follows the newest installed {}.x.", version.trim());
     }
     crate::web::apply_site_change(&store)
 }
@@ -773,7 +786,7 @@ pub fn unisolate(site: Option<String>) -> Result<(), String> {
     }
     let installed = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
     let default = kiln_runtime::default_php(&store, &installed).map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "{host} uses the default PHP again ({}).",
         default.map_or_else(|| "none installed".to_owned(), |p| p.version)
     );
@@ -803,24 +816,24 @@ pub fn which(dir: Option<PathBuf>) -> Result<(), String> {
     };
     match &here.php.php {
         Some(php) => {
-            println!("php      → PHP {} ({why})", php.version);
-            println!("           {}", php.dir.join(kiln_php::PHP_EXE).display());
+            say!("php      → PHP {} ({why})", php.version);
+            say!("           {}", php.dir.join(kiln_php::PHP_EXE).display());
         }
-        None => println!("php      → none: no PHP installed by Kiln (`kiln php install 8.4`)"),
+        None => say!("php      → none: no PHP installed by Kiln (`kiln php install 8.4`)"),
     }
     let phar = local_dir()?.join(kiln_runtime::shim::COMPOSER_PHAR);
     if phar.is_file() {
-        println!("composer → {} with that PHP", phar.display());
+        say!("composer → {} with that PHP", phar.display());
     } else {
-        println!("composer → not installed (`kiln composer install`)");
+        say!("composer → not installed (`kiln composer install`)");
     }
     which_node(&store, &dir)?;
     let shims = local_dir()?.join(kiln_runtime::shim::SHIMS_DIR);
     let has = |tool: kiln_runtime::shim::Tool| shims.join(tool.file_name()).is_file();
     if !has(kiln_runtime::shim::Tool::Php) {
-        println!("The `php`, `composer` and `node` commands use this after `kiln shims install`.");
+        say!("The `php`, `composer` and `node` commands use this after `kiln shims install`.");
     } else if !has(kiln_runtime::shim::Tool::Node) {
-        println!(
+        say!(
             "Run `kiln shims install` again to add the `node`, `npm`, `npx` and `corepack` shims."
         );
     }
@@ -840,7 +853,7 @@ fn which_node(store: &StateStore, dir: &std::path::Path) -> Result<(), String> {
         .as_ref()
         .map(|w| format!("{} asks for {}", w.file.display(), w.text));
     let Some(node) = &here.node else {
-        println!(
+        say!(
             "node     → none from Kiln, so the shims run the next `node` on PATH (`kiln node install lts`){}",
             asks.map(|a| format!("; {a}")).unwrap_or_default()
         );
@@ -851,8 +864,8 @@ fn which_node(store: &StateStore, dir: &std::path::Path) -> Result<(), String> {
         (Some(asks), true) => format!("{asks}, which isn't installed, so the default"),
         (None, _) => "no kiln.toml, .nvmrc or .node-version asks, so the default".to_owned(),
     };
-    println!("node     → Node {} ({why})", node.version);
-    println!("           {}", node.node_exe().display());
+    say!("node     → Node {} ({why})", node.version);
+    say!("           {}", node.node_exe().display());
     Ok(())
 }
 
@@ -878,7 +891,7 @@ pub fn composer_install() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let expected = kiln_fetch::Expected::sha256(sum.split_whitespace().next().unwrap_or(""))
         .map_err(|e| format!("unexpected Composer checksum file: {e}"))?;
-    println!("Composer {version}, SHA-256 {}", expected.hex());
+    say!("Composer {version}, SHA-256 {}", expected.hex());
     let label = format!("Downloading composer {version}");
     let cached = fetcher
         .fetch(
@@ -896,7 +909,7 @@ pub fn composer_install() -> Result<(), String> {
     open_store()?
         .set_setting("composer.version", version)
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Verified and installed Composer {version} as {}.",
         dest.display()
     );

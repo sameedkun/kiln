@@ -77,19 +77,22 @@ pub fn add(name: &str) -> Result<(), String> {
     let parent = dir.join(tool.name);
     let root = tool.root(&dir);
     if root.join(tool.release.executable).is_file() {
-        println!(
+        say!(
             "{} {} is already installed.",
-            tool.display, tool.release.version
+            tool.display,
+            tool.release.version
         );
     } else {
         let archive = crate::service::download(&tool.release)?;
         kiln_services::install_into_folder(&tool.release, &archive, &parent)
             .map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
-            tool.release.archive, tool.display, tool.release.version
+            tool.release.archive,
+            tool.display,
+            tool.release.version
         );
-        println!("License: {}.", tool.license);
+        say!("License: {}.", tool.license);
     }
     let temp = parent.join("tmp");
     std::fs::create_dir_all(&temp).map_err(|e| format!("cannot create {}: {e}", temp.display()))?;
@@ -109,10 +112,10 @@ pub fn remove(name: &str) -> Result<(), String> {
         return Err(format!("{} isn't installed", tool.display));
     }
     if let Err(e) = crate::web::unlink(tool.site) {
-        println!("Note: {e}.");
+        say!("Note: {e}.");
     }
     std::fs::remove_dir_all(&parent)
         .map_err(|e| format!("cannot delete {}: {e}", parent.display()))?;
-    println!("Removed {} ({}).", tool.display, parent.display());
+    say!("Removed {} ({}).", tool.display, parent.display());
     Ok(())
 }

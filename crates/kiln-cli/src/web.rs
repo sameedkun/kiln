@@ -94,7 +94,7 @@ pub(crate) fn ca_files() -> Result<CaFiles, String> {
         let issued = ca
             .issue_intermediate(&apply::root_tld(&ca)?)
             .map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Issued a new intermediate certificate for the web server (expires {}).",
             issued.not_after.date()
         );
@@ -123,7 +123,7 @@ pub fn ca_renew(force: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .map(|i| (i.not_after - time::OffsetDateTime::now_utc()).whole_days());
     if let Some(days) = days_left.filter(|&d| !force && d >= INTERMEDIATE_MIN_DAYS) {
-        println!(
+        say!(
             "The web server's intermediate certificate is valid for {days} more days; it is renewed when fewer than {INTERMEDIATE_MIN_DAYS} are left."
         );
         return Ok(());
@@ -131,12 +131,12 @@ pub fn ca_renew(force: bool) -> Result<(), String> {
     let issued = ca
         .issue_intermediate(&apply::root_tld(&ca)?)
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Issued a new intermediate certificate for the web server (expires {}).",
         issued.not_after.date()
     );
     if is_running()? && restart_if_ca_changed(&open_store()?)? {
-        println!("HTTPS sites now use it.");
+        say!("HTTPS sites now use it.");
     }
     Ok(())
 }
@@ -172,7 +172,7 @@ fn restart_if_ca_changed(store: &StateStore) -> Result<bool, String> {
         record_issuer(&config)?;
         return Ok(false);
     }
-    println!(
+    say!(
         "Kiln's CA changed since the web server started; restarting it so sites get certificates from the new one."
     );
     // Only Caddy restarts: the PHP workers don't depend on the CA, and the new config is
@@ -180,7 +180,7 @@ fn restart_if_ca_changed(store: &StateStore) -> Result<bool, String> {
     record_issuer(&config)?;
     let pid = server()?.restart(&config).map_err(|e| e.to_string())?;
     wait_for_certificates(store)?;
-    println!("Web server restarted (PID {pid}); the PHP workers kept running.");
+    say!("Web server restarted (PID {pid}); the PHP workers kept running.");
     Ok(true)
 }
 
@@ -290,7 +290,7 @@ fn describe(site: &kiln_sites::Site) -> String {
 /// beside them and old ones retire after Caddy has moved (ADR 0012, ADR 0016 §7).
 pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
     if !is_running()? {
-        println!("The web server isn't running; it takes effect at `kiln web start`.");
+        say!("The web server isn't running; it takes effect at `kiln web start`.");
         return Ok(());
     }
     if restart_if_ca_changed(store)? {
@@ -304,7 +304,7 @@ pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
         (Some(old), Some(new)) if old != new => {
             crate::pool::switch(new, reload_with_pools).map_err(saved)?;
             wait_for_certificates(store)?;
-            println!("Web server and PHP pools updated without a restart.");
+            say!("Web server and PHP pools updated without a restart.");
             print_php(Some(new));
             return Ok(());
         }
@@ -324,7 +324,7 @@ pub fn apply_site_change(store: &StateStore) -> Result<(), String> {
             .map_err(|e| saved(e.to_string()))?;
     }
     wait_for_certificates(store)?;
-    println!("Web server reloaded with the change.");
+    say!("Web server reloaded with the change.");
     Ok(())
 }
 
@@ -346,7 +346,7 @@ fn wait_for_certificates(store: &StateStore) -> Result<(), String> {
             return Ok(());
         }
         if std::time::Instant::now() > deadline {
-            println!(
+            say!(
                 "Caddy is still issuing the certificate for {}; HTTPS answers once it's done.",
                 missing.join(", ")
             );
@@ -368,7 +368,7 @@ pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
         None
     };
     let Some(running) = running.filter(|r| r.pools.iter().any(|p| p.id == version)) else {
-        println!("No site is served by PHP {version} right now; its next start uses the change.");
+        say!("No site is served by PHP {version} right now; its next start uses the change.");
         return Ok(());
     };
     let others = Pools {
@@ -385,13 +385,13 @@ pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
     crate::pool::switch(&planned, reload_with_pools).map_err(|e| {
         format!("the change is saved, but PHP {version}'s workers didn't restart: {e}")
     })?;
-    println!("PHP {version}'s workers restarted with the change.");
+    say!("PHP {version}'s workers restarted with the change.");
     Ok(())
 }
 
 pub(crate) fn hosts_hint(host: &str) {
     if !hosts_names().iter().any(|n| n == host) {
-        println!("Note: {host} isn't in the hosts file yet; run `kiln hosts sync`.");
+        say!("Note: {host} isn't in the hosts file yet; run `kiln hosts sync`.");
     }
 }
 
@@ -448,18 +448,18 @@ pub fn link(name: Option<String>, path: Option<PathBuf>, secure: bool) -> Result
         })
         .map_err(|e| e.to_string())?;
     match previous {
-        Some(old) if old.root != root => println!(
+        Some(old) if old.root != root => say!(
             "Re-linked {host}: {} (was {}).",
             root.display(),
             old.root.display()
         ),
-        Some(_) => println!("{host} was already linked to {}.", root.display()),
-        None => println!("Linked {host} → {}.", root.display()),
+        Some(_) => say!("{host} was already linked to {}.", root.display()),
+        None => say!("Linked {host} → {}.", root.display()),
     }
     let config = web_config(&store)?;
     if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
-        println!("Detected: {}.", describe(site));
-        println!("URL: {}", config.site_url(&spec(site, &BTreeMap::new())));
+        say!("Detected: {}.", describe(site));
+        say!("URL: {}", config.site_url(&spec(site, &BTreeMap::new())));
     }
     if secure {
         trust_hint()?;
@@ -490,13 +490,13 @@ pub fn park(path: Option<PathBuf>) -> Result<(), String> {
     let folder = folder_arg(path)?;
     let mut store = open_store()?;
     if store.park(&folder).map_err(|e| e.to_string())? {
-        println!(
+        say!(
             "Parked {}: each subfolder is served as <name>.{}.",
             folder.display(),
             kiln_runtime::tld(&store).map_err(|e| e.to_string())?
         );
     } else {
-        println!("{} is already parked.", folder.display());
+        say!("{} is already parked.", folder.display());
     }
     let all = resolved(&store)?;
     let here: Vec<&kiln_sites::Site> = all
@@ -505,24 +505,24 @@ pub fn park(path: Option<PathBuf>) -> Result<(), String> {
         .filter(|s| s.source == kiln_sites::Source::Parked(folder.clone()))
         .collect();
     for site in &here {
-        println!("  {:<24} {}", site.host.as_str(), describe(site));
+        say!("  {:<24} {}", site.host.as_str(), describe(site));
     }
     if here.is_empty() {
-        println!("  (no subfolders yet)");
+        say!("  (no subfolders yet)");
     }
     for skipped in all
         .skipped
         .iter()
         .filter(|s| s.folder.parent() == Some(folder.as_path()))
     {
-        println!("  skipped {}: {}", skipped.folder.display(), skipped.reason);
+        say!("  skipped {}: {}", skipped.folder.display(), skipped.reason);
     }
     let missing = here
         .iter()
         .filter(|s| !hosts_names().iter().any(|n| n == s.host.as_str()))
         .count();
     if missing > 0 {
-        println!("{missing} of them aren't in the hosts file yet; run `kiln hosts sync`.");
+        say!("{missing} of them aren't in the hosts file yet; run `kiln hosts sync`.");
     }
     let names: Vec<String> = here.iter().map(|s| s.host.to_string()).collect();
     crate::coexist::note_shared_names(&store, &names);
@@ -539,7 +539,7 @@ pub fn unpark(path: Option<PathBuf>) -> Result<(), String> {
             folder.display()
         ));
     }
-    println!(
+    say!(
         "Unparked {}. Its folders are untouched; `kiln hosts sync` removes their names.",
         folder.display()
     );
@@ -572,15 +572,15 @@ pub fn unlink(name: &str) -> Result<(), String> {
         }
         return Err(format!("{host} isn't linked"));
     }
-    println!("Unlinked {host}. Its files are untouched.");
+    say!("Unlinked {host}. Its files are untouched.");
     // A secured parked site was pinned as a link (ADR 0015 §8); it falls back to parked.
     if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
-        println!(
+        say!(
             "It's still served from its parked folder, over plain HTTP: {}.",
             describe(site)
         );
     } else if hosts_names().iter().any(|n| n == host.as_str()) {
-        println!("It's still in the hosts file; `kiln hosts sync` removes it.");
+        say!("It's still in the hosts file; `kiln hosts sync` removes it.");
     }
     apply_site_change(&store)
 }
@@ -614,13 +614,13 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
                         secure: true,
                     })
                     .map_err(|e| e.to_string())?;
-                println!(
+                say!(
                     "{host} comes from a parked folder; pinned it as a link to {} so it can keep HTTPS.",
                     site.project.display()
                 );
             }
             Some(_) => {
-                println!("{host} is a parked site and already uses plain HTTP.");
+                say!("{host} is a parked site and already uses plain HTTP.");
                 return Ok(());
             }
             None => {
@@ -639,14 +639,14 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
         .unwrap_or_default();
     let still_secure = config.sites.iter().any(|s| s.host == host && s.secure);
     if secure {
-        println!("{host} now uses HTTPS: {url} (HTTP redirects there).");
+        say!("{host} now uses HTTPS: {url} (HTTP redirects there).");
         trust_hint()?;
     } else if still_secure {
-        println!(
+        say!(
             "{host} keeps HTTPS: its kiln.toml has `secure = true` (ADR 0027). Change it there to serve plain HTTP."
         );
     } else {
-        println!("{host} is back to plain HTTP: {url}");
+        say!("{host} is back to plain HTTP: {url}");
     }
     apply_site_change(&store)
 }
@@ -658,7 +658,7 @@ pub(crate) fn trust_hint() -> Result<(), String> {
         .and_then(|store| store.contains(&root.sha1))
         .unwrap_or(false);
     if !trusted {
-        println!("Browsers won't trust it until you run `kiln ca trust`.");
+        say!("Browsers won't trust it until you run `kiln ca trust`.");
     }
     Ok(())
 }
@@ -679,7 +679,7 @@ pub(crate) fn trust_hint() -> Result<(), String> {
                 .all(|db| certutil.contains(&db.path, &nickname).unwrap_or(false))
     });
     if !trusted {
-        println!("Browsers won't trust it until you run `kiln ca trust`.");
+        say!("Browsers won't trust it until you run `kiln ca trust`.");
     }
     Ok(())
 }
@@ -716,12 +716,12 @@ pub fn sites() -> Result<(), String> {
     let store = open_store()?;
     let parked = store.parked().map_err(|e| e.to_string())?;
     for dir in &parked {
-        println!("Parked: {}", dir.display());
+        say!("Parked: {}", dir.display());
     }
     let all = resolved(&store)?;
     let proxies = proxy_specs(&store)?;
     if all.sites.is_empty() && proxies.is_empty() {
-        println!(
+        say!(
             "No sites yet. Run `kiln link` in a project folder, or `kiln park` in a folder of projects."
         );
         return Ok(());
@@ -741,7 +741,7 @@ pub fn sites() -> Result<(), String> {
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_default();
-        println!(
+        say!(
             "{:<34} {:<17} {:<17} {:<6} {target}{}",
             config.site_url(proxy),
             "dev server",
@@ -781,17 +781,17 @@ pub fn sites() -> Result<(), String> {
             (None, kiln_sites::Source::Link) => "link",
             (None, kiln_sites::Source::Parked(_)) => "parked",
         };
-        println!(
+        say!(
             "{url:<34} {:<17} {php:<17} {source:<6} {}{dns}",
             site.driver.name(),
             site.document_root.display()
         );
     }
     for skipped in &all.skipped {
-        println!("skipped {}: {}", skipped.folder.display(), skipped.reason);
+        say!("skipped {}: {}", skipped.folder.display(), skipped.reason);
     }
     for warning in &all.warnings {
-        println!("warning: {warning}");
+        say!("warning: {warning}");
     }
     Ok(())
 }
@@ -832,7 +832,7 @@ pub fn install(archive: Option<PathBuf>) -> Result<(), String> {
     store
         .set_setting(CADDY_VERSION_KEY, installed.version)
         .map_err(|e| e.to_string())?;
-    println!(
+    say!(
         "Verified {} (SHA-512 matches the pinned release) and installed Caddy {} as {}.",
         installed.archive,
         installed.version,
@@ -891,14 +891,14 @@ pub fn start(
     };
     // The URLs below should work at once (I-69).
     wait_for_certificates(&store)?;
-    println!("Web server started (PID {pid}).");
+    say!("Web server started (PID {pid}).");
     print_listeners(&config);
     print_php(pools.as_ref());
     for site in &config.sites {
-        println!("  {}", config.site_url(site));
+        say!("  {}", config.site_url(site));
     }
     if config.sites.is_empty() {
-        println!("No sites linked yet. Run `kiln link` in a project folder.");
+        say!("No sites linked yet. Run `kiln link` in a project folder.");
     }
     Ok(())
 }
@@ -909,13 +909,13 @@ fn print_php(pools: Option<&Pools>) {
             for pool in &pools.pools {
                 let ports: Vec<String> = pool.workers.iter().map(|w| w.port.to_string()).collect();
                 match pool.kind {
-                    kiln_supervisor::pools::PoolKind::Cgi => println!(
+                    kiln_supervisor::pools::PoolKind::Cgi => say!(
                         "PHP {}: {} php-cgi workers on 127.0.0.1:{}.",
                         pool.id,
                         pool.workers.len(),
                         ports.join(", ")
                     ),
-                    kiln_supervisor::pools::PoolKind::Fpm => println!(
+                    kiln_supervisor::pools::PoolKind::Fpm => say!(
                         "PHP {}: PHP-FPM on 127.0.0.1:{}.",
                         pool.id,
                         ports.join(", ")
@@ -925,7 +925,7 @@ fn print_php(pools: Option<&Pools>) {
                 }
             }
         }
-        None => println!(
+        None => say!(
             "No PHP installed, so sites are served as static files. Add PHP with `kiln php install 8.4`."
         ),
     }
@@ -933,7 +933,7 @@ fn print_php(pools: Option<&Pools>) {
 
 fn print_listeners(config: &WebConfig) {
     let listeners: Vec<String> = config.listeners().iter().map(ToString::to_string).collect();
-    println!(
+    say!(
         "Listening on {} (this computer only).",
         listeners.join(", ")
     );
@@ -941,14 +941,14 @@ fn print_listeners(config: &WebConfig) {
 
 pub fn stop() -> Result<(), String> {
     match server()?.stop().map_err(|e| e.to_string())? {
-        Some(pid) => println!("Web server stopped (PID {pid})."),
-        None => println!("The web server wasn't running."),
+        Some(pid) => say!("Web server stopped (PID {pid})."),
+        None => say!("The web server wasn't running."),
     }
     if let Some(pid) = crate::pool::supervisor()?
         .stop()
         .map_err(|e| format!("cannot stop the PHP supervisor: {e}"))?
     {
-        println!("PHP workers stopped (supervisor PID {pid}).");
+        say!("PHP workers stopped (supervisor PID {pid}).");
     }
     Ok(())
 }
@@ -966,7 +966,7 @@ pub fn reload() -> Result<(), String> {
     }
     let config = web_config(&store)?;
     server()?.reload(&config).map_err(|e| e.to_string())?;
-    println!("Web server reloaded.");
+    say!("Web server reloaded.");
     print_listeners(&config);
     Ok(())
 }
@@ -978,48 +978,48 @@ pub fn status() -> Result<(), String> {
         .setting(CADDY_VERSION_KEY)
         .map_err(|e| e.to_string())?;
     match (server.exe().is_file(), installed) {
-        (true, Some(version)) => println!("Caddy {version}: {}", server.exe().display()),
-        (true, None) => println!("Caddy: {}", server.exe().display()),
-        (false, _) => println!("Caddy isn't installed; run `kiln web install`."),
+        (true, Some(version)) => say!("Caddy {version}: {}", server.exe().display()),
+        (true, None) => say!("Caddy: {}", server.exe().display()),
+        (false, _) => say!("Caddy isn't installed; run `kiln web install`."),
     }
     match server.status().map_err(|e| e.to_string())? {
         Status::Running { pid } => {
-            println!("Running (PID {pid}).");
+            say!("Running (PID {pid}).");
             if let Ok(config) = web_config(&store) {
                 print_listeners(&config);
             }
         }
-        Status::Stale { pid } => println!(
+        Status::Stale { pid } => say!(
             "Not running (PID {pid} from a previous start has exited). Start it with `kiln web start`."
         ),
-        Status::Stopped => println!("Not running. Start it with `kiln web start`."),
+        Status::Stopped => say!("Not running. Start it with `kiln web start`."),
     }
     let supervisor = crate::pool::supervisor()?;
     match supervisor.status().map_err(|e| e.to_string())? {
         kiln_sys::background::ProcStatus::Running { pid } => {
             let pools = supervisor.pools().map_err(|e| e.to_string())?;
             print_php(pools.as_ref());
-            println!(
+            say!(
                 "PHP supervisor PID {pid}; log: {}",
                 supervisor.log_path().display()
             );
         }
         _ => match crate::pool::chosen_php(&store)? {
-            Some(php) => println!(
+            Some(php) => say!(
                 "PHP {} will serve sites when the server starts.",
                 php.version
             ),
             None => print_php(None),
         },
     }
-    println!("Config: {}", server.config_path().display());
+    say!("Config: {}", server.config_path().display());
     Ok(())
 }
 
 pub fn print_config() -> Result<(), String> {
     let store = open_store()?;
     let json = web_config(&store)?.render().map_err(|e| e.to_string())?;
-    println!("{json}");
+    say!("{json}");
     Ok(())
 }
 

@@ -122,7 +122,7 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
             match project_launch(store, provider, &record) {
                 Ok(launch) => launch,
                 Err(why) => {
-                    println!("Note: {} isn't started: {why}.", record.name);
+                    say!("Note: {} isn't started: {why}.", record.name);
                     continue;
                 }
             }
@@ -221,12 +221,12 @@ fn apply(store: &StateStore) -> Result<(), String> {
         .filter_map(|record| Some((provider_of(&record.kind).ok()?, dirs_of(&record).ok()?)))
         .collect();
     if !wait_released(&gone, &stopping) {
-        println!("Note: a service is taking long to stop; it may still be finishing.");
+        say!("Note: a service is taking long to stop; it may still be finishing.");
     }
     // The web tools list the instances as they now are (ADR 0043). Only a convenience: a
     // failure is reported, never in the way of the services themselves.
     if let Err(e) = crate::tool::write_servers(store) {
-        println!("Note: the web tools' server list wasn't updated: {e}");
+        say!("Note: the web tools' server list wasn't updated: {e}");
     }
     Ok(())
 }
@@ -359,9 +359,10 @@ fn choose_ports(
                     &crate::coexist::system_services(),
                 ),
             };
-            println!(
+            say!(
                 "Port {} ({}) is {why}; using {port}.",
-                role.usual, role.what
+                role.usual,
+                role.what
             );
         }
         chosen.insert(role.role.to_owned(), port);
@@ -451,7 +452,7 @@ pub fn port(name: &str, values: &[String]) -> Result<(), String> {
     {
         crate::proxy::proxy(site, &new, proxy.secure)?;
     }
-    println!(
+    say!(
         "{name} now uses {}{}.",
         describe_ports(provider, &record.ports),
         if record.enabled {
@@ -460,7 +461,7 @@ pub fn port(name: &str, values: &[String]) -> Result<(), String> {
             ""
         }
     );
-    println!(
+    say!(
         "Projects wired to its old ports need their .env changed (`kiln env use` comes with P3-08)."
     );
     Ok(())
@@ -534,7 +535,7 @@ fn install_binaries(
     bin: &Path,
 ) -> Result<(), String> {
     if provider.executable(bin).is_file() {
-        println!(
+        say!(
             "{} {} is already installed.",
             provider.display_name(),
             release.version
@@ -542,13 +543,13 @@ fn install_binaries(
     } else {
         let archive = download(release)?;
         kiln_services::install(provider, release, &archive, bin).map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
             release.archive,
             provider.display_name(),
             release.version,
         );
-        println!("License: {}.", provider.license());
+        say!("License: {}.", provider.license());
     }
     // After the server: installing it clears `bin`, companions included.
     for companion in provider.companions(release) {
@@ -558,7 +559,7 @@ fn install_binaries(
         }
         let archive = download(companion)?;
         kiln_services::install_into_folder(companion, &archive, bin).map_err(|e| e.to_string())?;
-        println!(
+        say!(
             "Verified {} (SHA-256 matches the pinned release) and installed it with {}.",
             companion.archive,
             provider.display_name(),
@@ -714,24 +715,24 @@ pub fn add(
             "{name} was added but didn't start: {e}\nSee `kiln service logs {name}`."
         ));
     }
-    println!(
+    say!(
         "{} {version} is running as {name}: {}.",
         provider.display_name(),
         describe_ports(provider, &record.ports)
     );
     match &project {
-        Some(dir) => println!(
+        Some(dir) => say!(
             "It listens on this computer only, and runs in {} with its PHP.",
             dir.display()
         ),
-        None => println!(
+        None => say!(
             "It listens on this computer only. Its data is in {}.",
             dirs.data.display()
         ),
     }
     // Its web UI as a site: a convenience, so a failure is reported, not fatal.
     if let Err(e) = attach_ui(provider, &record) {
-        println!("Note: its web UI wasn't served as a site: {e}");
+        say!("Note: its web UI wasn't served as a site: {e}");
     }
     Ok(name)
 }
@@ -767,7 +768,7 @@ pub fn list() -> Result<(), String> {
             .iter()
             .map(|p| p.kind())
             .collect();
-        println!(
+        say!(
             "No services yet. Add one with `kiln service add <kind>` ({}).",
             kinds.join(", ")
         );
@@ -788,9 +789,11 @@ pub fn list() -> Result<(), String> {
             || format!("{:?}", record.ports),
             |p| describe_ports(p, &record.ports),
         );
-        println!(
+        say!(
             "{}  {} {}  {ports}  {state}",
-            record.name, record.kind, record.version
+            record.name,
+            record.kind,
+            record.version
         );
     }
     Ok(())
@@ -812,7 +815,7 @@ fn set_enabled(names: &[String], enabled: bool) -> Result<(), String> {
         names.to_vec()
     };
     if targets.is_empty() {
-        println!("No services yet. Add one with `kiln service add <kind>`.");
+        say!("No services yet. Add one with `kiln service add <kind>`.");
         return Ok(());
     }
     for name in &targets {
@@ -822,7 +825,7 @@ fn set_enabled(names: &[String], enabled: bool) -> Result<(), String> {
     }
     apply(&store)?;
     let verb = if enabled { "Running" } else { "Stopped" };
-    println!("{verb}: {}.", targets.join(", "));
+    say!("{verb}: {}.", targets.join(", "));
     Ok(())
 }
 
@@ -841,9 +844,9 @@ pub fn resume() -> Result<(), String> {
         .collect();
     apply(&store)?;
     if running.is_empty() {
-        println!("No services should be running.");
+        say!("No services should be running.");
     } else {
-        println!("Running again: {}.", running.join(", "));
+        say!("Running again: {}.", running.join(", "));
     }
     Ok(())
 }
@@ -870,7 +873,7 @@ pub fn restart(name: &str) -> Result<(), String> {
         .set_service_enabled(name, true)
         .map_err(|e| e.to_string())?;
     apply(&store)?;
-    println!("Restarted {name}.");
+    say!("Restarted {name}.");
     Ok(())
 }
 
@@ -892,15 +895,15 @@ pub fn logs(name: &str, lines: usize) -> Result<(), String> {
             continue;
         }
         if logs.len() > 1 {
-            println!("== {}", log.display());
+            say!("== {}", log.display());
         }
         for line in &all[all.len().saturating_sub(lines)..] {
-            println!("{line}");
+            say!("{line}");
         }
         wrote = true;
     }
     if !wrote {
-        println!("{name} hasn't written anything yet.");
+        say!("{name} hasn't written anything yet.");
     }
     Ok(())
 }
@@ -947,7 +950,7 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
         loop {
             match std::fs::remove_dir_all(dirs.instance()) {
                 Ok(()) => {
-                    println!("Deleted {} and its data.", dirs.instance().display());
+                    say!("Deleted {} and its data.", dirs.instance().display());
                     break;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
@@ -960,7 +963,7 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
             }
         }
     } else {
-        println!(
+        say!(
             "Kept its data: {} ({}). Delete that folder when you no longer need it; `kiln uninstall --delete-data` deletes it too.",
             dirs.data.display(),
             crate::uninstall::mb(crate::uninstall::dir_size(&dirs.data))
@@ -979,7 +982,7 @@ pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
             let _ = std::fs::remove_dir(parent);
         }
     }
-    println!("Removed {name}.");
+    say!("Removed {name}.");
     // Its web UI site goes with it, if it was Kiln's for this instance.
     if let Ok(provider) = provider_of(&record.kind)
         && let Some((site, target)) = ui_target(provider, &record.ports)
@@ -1123,7 +1126,7 @@ fn attach_ui(provider: &dyn ServiceProvider, record: &ServiceRecord) -> Result<(
             .is_some();
     drop(store);
     if taken {
-        println!(
+        say!(
             "Its web UI is at {target}; {host} is already taken, so `kiln proxy <name> {target}` serves it under another name."
         );
         return Ok(());
@@ -1131,7 +1134,7 @@ fn attach_ui(provider: &dyn ServiceProvider, record: &ServiceRecord) -> Result<(
     let secure = crate::web::ca_files().is_ok();
     crate::proxy::proxy(site, &target, secure)?;
     if !secure {
-        println!(
+        say!(
             "It's served over HTTP until Kiln's CA is set up: `kiln ca init`, then `kiln secure {site}`."
         );
     }

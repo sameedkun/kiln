@@ -32,23 +32,23 @@ pub fn proxy(name: &str, target: &str, secure: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     match previous {
         Some(old) if old.target != target.to_string() => {
-            println!("{host} now proxies to {target} (was {}).", old.target);
+            say!("{host} now proxies to {target} (was {}).", old.target);
         }
-        Some(_) => println!("{host} already proxies to {target}."),
-        None => println!("{host} proxies to {target}."),
+        Some(_) => say!("{host} already proxies to {target}."),
+        None => say!("{host} proxies to {target}."),
     }
     if let Some(site) = resolved(&store)?
         .sites
         .iter()
         .find(|s| s.host == host && s.alias_of.is_none())
     {
-        println!(
+        say!(
             "It takes the name from the parked folder {}, which is served again after `kiln unproxy {name}`.",
             site.project.display()
         );
     }
     if let Some(url) = crate::web::site_urls(&store).get(host.as_str()) {
-        println!("URL: {url}");
+        say!("URL: {url}");
     }
     if secure {
         crate::web::trust_hint()?;
@@ -68,14 +68,14 @@ pub fn unproxy(name: &str) -> Result<(), String> {
     store
         .remove_proxy(host.as_str())
         .map_err(|e| e.to_string())?;
-    println!("{host} no longer proxies to {}.", old.target);
+    say!("{host} no longer proxies to {}.", old.target);
     if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
-        println!(
+        say!(
             "It's served from its parked folder again: {}.",
             site.project.display()
         );
     } else if crate::web::hosts_names().iter().any(|n| n == host.as_str()) {
-        println!("It's still in the hosts file; `kiln hosts sync` removes it.");
+        say!("It's still in the hosts file; `kiln hosts sync` removes it.");
     }
     apply_site_change(&store)
 }

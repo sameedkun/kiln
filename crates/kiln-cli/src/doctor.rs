@@ -19,12 +19,12 @@ use kiln_sys::background::ProcStatus;
 use crate::coexist::{self, Listeners};
 use crate::web;
 
-/// Prints the report; returns whether nothing failed.
-pub fn run(json: bool) -> bool {
+/// Prints the report (with --json, it is the result's data); returns whether nothing failed.
+pub fn run() -> bool {
     let facts = gather();
     let report = kiln_doctor::diagnose(&facts);
-    if json {
-        println!("{}", report.to_json());
+    if crate::out::json() {
+        crate::out::data(serde_json::from_str(&report.to_json()).unwrap_or_default());
     } else {
         print!("{}", report.render());
     }
