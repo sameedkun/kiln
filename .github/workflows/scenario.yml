@@ -6,6 +6,17 @@ name: Scenario
 on:
   push:
     branches: [main]
+    # Only what the scenario exercises: two 40-minute Windows jobs are wasted on a push that
+    # changes docs or the desktop app alone (I-91). The nightly run catches anything else.
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tests/ci/**"
+      - "tests/vm/windows/**"
+      - ".github/workflows/scenario.yml"
+  schedule:
+    - cron: "41 2 * * *"
   workflow_dispatch:
 
 permissions:

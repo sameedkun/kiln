@@ -100,7 +100,7 @@ commits and PRs.
 | [I-88](#i-88) | design | axe can't measure text contrast on translucent glass: it reports it as incomplete, not failed | 📌 (contrast measured from the design values) |
 | [I-89](#i-89) | design | The tray popup's glass over a dark desktop left its quieter text near 3:1 in light mode | 📌 (Kiln's backdrop under the popup) |
 | [I-90](#i-90) | design | An outlined stop square next to "Running" read as an empty checkbox | ✅ |
-| [I-91](#i-91) | CI | GitHub Actions stopped starting jobs: the account's payments failed or its spending limit was reached | 🔶 (the user's account) |
+| [I-91](#i-91) | CI | GitHub Actions stopped starting jobs: the private repository's free minutes were used up | ✅ (repository made public; the Scenario runs only for the code it tests) |
 
 ---
 
@@ -1298,7 +1298,7 @@ commits and PRs.
 
 ## P4-03: the desktop app's shell
 
-### I-91: CI jobs not started (open)
+### I-91: CI jobs not started (fixed)
 
 - **Seen:** 2026-11-13, on the first P4-03 push. Every job of the CI workflow ended at once,
   without starting: "The job was not started because recent account payments have failed or
@@ -1307,5 +1307,10 @@ commits and PRs.
   each push is checked locally (the workspace's fmt, clippy and tests; the app's fmt,
   clippy, tests, build and `cargo deny`; the frontend's types, tests, build and browser
   checks), and the commits say so.
-- **Fix:** the account's billing settings on GitHub (the user's). Then rerun the workflows for
-  the newest commit, and the Scenario.
+- **Cause:** the repository was private, with 2,000 free minutes a month, and Windows minutes
+  count double. The Scenario (two Windows jobs of about 40 minutes) ran on every push: 56
+  runs in November used the month up.
+- **Fix (2026-11-13):** the user made the repository public, as Kiln was always meant to be
+  (Apache-2.0), so standard runners cost nothing. The Scenario now runs only when what it
+  tests changes (`crates/`, the lockfiles, `tests/ci/`, `tests/vm/windows/`, its workflow), and
+  nightly.
