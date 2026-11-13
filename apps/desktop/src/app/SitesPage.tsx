@@ -8,7 +8,7 @@ import { Detail, Row, RowName, Section } from "../components/Rows";
 import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
 import { TextField } from "../components/TextField";
-import { openFolder, openSite, pickFolder, proxyTarget, siteName, type Proxy, type Site, type SitesList } from "./api";
+import { openFolder, pickFolder, proxyTarget, siteName, type Proxy, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -40,7 +40,7 @@ function folderName(path: string): string {
 // Every site, grouped by how Kiln found it (ADR 0055): a parked folder, a link, a proxy.
 export function SitesPage({ go }: { go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
-  const { run, ask } = useChanges();
+  const { run, ask, open } = useChanges();
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "proxy" }>(null);
 
@@ -64,7 +64,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
       columns={cols}
       actions={
         <>
-          <Button variant="quiet" aria-label={`Open ${s.host}`} icon={<Open16Regular />} onClick={() => openSite(s.host)} />
+          <Button variant="quiet" aria-label={`Open ${s.host}`} icon={<Open16Regular />} onClick={() => open(s.host)} />
           <Button variant="quiet" aria-label={`Open ${s.host}'s folder`} icon={<Folder16Regular />} onClick={() => openFolder(s.host)} />
           <Menu
             label={`More for ${s.host}`}
@@ -117,7 +117,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
       columns={cols}
       actions={
         <>
-          <Button variant="quiet" aria-label={`Open ${p.host}`} icon={<Open16Regular />} onClick={() => openSite(p.host)} />
+          <Button variant="quiet" aria-label={`Open ${p.host}`} icon={<Open16Regular />} onClick={() => open(p.host)} />
           <Button
             variant="quiet"
             aria-label={`Remove ${p.host}`}

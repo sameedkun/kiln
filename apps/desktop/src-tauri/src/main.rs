@@ -105,6 +105,10 @@ async fn open_site(host: String, app: AppHandle, shell: State<'_, Shell>) -> Res
     .await
     .map_err(|e| e.to_string())??;
     let url = site_url(&sites, &host).ok_or_else(|| format!("no site called {host}"))?;
+    // A name Windows can't resolve would open a dead page: the page offers `hosts sync`.
+    if !in_hosts(&sites, &host) {
+        return Err(format!("{NOT_IN_HOSTS}{host} isn't in the hosts file yet"));
+    }
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
@@ -185,6 +189,19 @@ async fn pick_save(title: String, name: String, app: AppHandle) -> Option<String
     .ok()
     .flatten()?;
     chosen.into_path().ok().map(|p| p.display().to_string())
+}
+
+/// How an `open_site` error starts when the site's name isn't in the hosts file.
+const NOT_IN_HOSTS: &str = "not-in-hosts: ";
+
+/// Whether `sites.list` says `host`'s name is in the hosts file.
+fn in_hosts(sites: &Value, host: &str) -> bool {
+    ["sites", "proxies"]
+        .iter()
+        .filter_map(|list| sites[list].as_array())
+        .flatten()
+        .find(|site| site["host"] == host)
+        .is_some_and(|site| site["in_hosts"] != false)
 }
 
 /// The URL `sites.list` gives for `host`, among its sites and proxies.
@@ -673,6 +690,17 @@ mod tests {
             login_item_kind(Some(r#""C:\Other\thing.exe""#), Some(me)),
             "other"
         );
+    }
+
+    #[test]
+    fn a_site_not_in_the_hosts_file_says_so() {
+        let sites = json!({
+            "sites": [{"host": "shop.test", "in_hosts": true}, {"host": "new.test", "in_hosts": false}],
+            "proxies": [{"host": "mailpit.test", "in_hosts": false}],
+        });
+        assert!(in_hosts(&sites, "shop.test"));
+        assert!(!in_hosts(&sites, "new.test"));
+        assert!(!in_hosts(&sites, "mailpit.test"));
     }
 
     #[test]

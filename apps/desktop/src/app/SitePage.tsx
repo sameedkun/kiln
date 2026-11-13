@@ -6,8 +6,9 @@ import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
+import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { openFolder, openSite, type EnvShow, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { openFolder, type EnvShow, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 import { framework } from "./SitesPage";
@@ -41,7 +42,10 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
   // Without Kiln's certificate authority, HTTPS needs setting up first.
   const ca = useRead<{ intermediate_days_left: number | null }>("ca.status");
   const caReady = ca.data ? ca.data.intermediate_days_left !== null : true;
-  const { run, ask, confirm } = useChanges();
+  const { run, ask, confirm, open } = useChanges();
+  const [tab, setTab] = useState("overview");
+  // Switching PHP starts the other version's workers and reloads the web server: seconds.
+  const [switching, setSwitching] = useState(false);
   const site = sites.data?.sites.find((s) => s.host === host);
 
   const back = <Button variant="quiet" aria-label="Back to Sites" icon={<ArrowLeft16Regular />} onClick={() => go("sites")} />;
@@ -71,7 +75,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       actions={
         <>
           <Button variant="quiet" aria-label="Open the folder" title="Open the folder" icon={<Folder16Regular />} onClick={() => openFolder(site.host)} />
-          <Button icon={<Open16Regular />} onClick={() => openSite(site.host)}>
+          <Button icon={<Open16Regular />} onClick={() => open(site.host)}>
             Open {site.host}
           </Button>
         </>
@@ -83,6 +87,18 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         </Notice>
       )}
 
+      <Tabs
+        tabs={[
+          { id: "overview", label: "Overview" },
+          { id: "env", label: ".env" },
+        ]}
+        current={tab}
+        onSelect={setTab}
+      >
+      {tab === "env" ? (
+        <SiteEnv site={site} />
+      ) : (
+      <>
       <Section title="How it runs">
         <li className="flex flex-wrap items-start gap-x-10 gap-y-4 border-b border-line px-1 py-4">
           {site.php ? (
@@ -90,18 +106,26 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
               <Select
                 label="PHP"
                 value={current}
-                disabled={site.source === "alias" || lines.length === 0}
-                onChange={(e) => {
+                disabled={switching || site.source === "alias" || lines.length === 0}
+                onChange={async (e) => {
                   const v = e.target.value;
-                  if (v === "default") run(["unisolate", site.host], `${site.host} uses the default PHP now.`);
-                  else run(["isolate", v, site.host], `${site.host} uses PHP ${v} now.`);
+                  setSwitching(true);
+                  if (v === "default") await run(["unisolate", site.host], `${site.host} uses the default PHP now.`);
+                  else await run(["isolate", v, site.host], `${site.host} uses PHP ${v} now.`);
+                  setSwitching(false);
                 }}
                 options={[{ value: "default", label: "Default" }, ...lines.map((l) => ({ value: l, label: `PHP ${l}` }))]}
               />
-              <p className="m-0 mt-1.5 max-w-[34ch] text-xs text-text-3">
-                {site.php.version ? `Runs ${site.php.version}. ` : ""}
-                {phpWhy(site, php.data?.default ?? null)}
-                {site.source === "alias" ? " An alias follows its main site." : ""}
+              <p className="m-0 mt-1.5 max-w-[34ch] text-xs text-text-3" aria-live="polite">
+                {switching ? (
+                  "Switching: starting that version's workers…"
+                ) : (
+                  <>
+                    {site.php.version ? `Runs ${site.php.version}. ` : ""}
+                    {phpWhy(site, php.data?.default ?? null)}
+                    {site.source === "alias" ? " An alias follows its main site." : ""}
+                  </>
+                )}
               </p>
             </div>
           ) : (
@@ -147,9 +171,6 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       </Section>
 
       <SiteServices site={site} go={go} />
-      <SiteEnv site={site} />
-
-      <p className="m-0 mb-6 max-w-[64ch] px-1 text-[13px] text-text-3">Its logs come with the log viewer (P4-08), and its requests with P4-18.</p>
 
       {site.source === "link" && (
         <Button
@@ -161,6 +182,9 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         </Button>
       )}
       {site.source === "parked" && <p className="m-0 px-1 text-[13px] text-text-2">It's served because its folder is in {site.parked_in}. Moving it out, or unparking that folder, stops it.</p>}
+      </>
+      )}
+      </Tabs>
     </Page>
   );
 }

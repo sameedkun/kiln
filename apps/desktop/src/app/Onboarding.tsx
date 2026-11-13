@@ -55,7 +55,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     <div role="dialog" aria-modal="true" aria-labelledby="onboarding-title" className="backdrop absolute inset-x-0 bottom-0 top-11 z-30 grid grid-cols-[260px_1fr]">
       <aside className="glass m-2 mr-0 flex flex-col rounded-panel p-5">
         <div className="mb-6 flex items-center gap-2.5 font-semibold">
-          <Logo size={22} /> Set up Kiln
+          <Logo size={22} /> Set up
         </div>
         <ol className="m-0 flex list-none flex-col gap-1 p-0">
           {steps.map((s, i) => {
@@ -165,7 +165,7 @@ function StepBody({ id, status, done, reload }: { id: string; status?: SetupStat
       return (
         <Heading title="Welcome to Kiln">
           <p className="mt-0">Kiln serves your PHP projects at names like shop.test, with their own PHP and Node, the databases they need, and HTTPS. Setting it up takes a few steps:</p>
-          <ul className="my-3 pl-5">
+          <ul className="my-3 list-disc pl-5 marker:text-text-3">
             <li>a web server and PHP, downloaded and checked against pinned hashes;</li>
             <li>its own certificate authority, so HTTPS works without warnings;</li>
             <li>your projects' names in the hosts file;</li>
@@ -292,7 +292,7 @@ function StepBody({ id, status, done, reload }: { id: string; status?: SetupStat
     default:
       return (
         <Heading title="Kiln is set up">
-          <ul className="my-3 pl-5">
+          <ul className="my-3 list-disc pl-5 marker:text-text-3">
             <li>Web server: {status?.web.running ? "running" : "not running"}</li>
             <li>PHP: {status?.php.versions.join(", ") || "none yet"}</li>
             <li>HTTPS: {status?.ca.exists && status.ca.trusted !== false ? "on" : "not set up"}</li>

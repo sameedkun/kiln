@@ -63,7 +63,7 @@ export function Menu({ trigger, label, items }: { trigger: (props: MenuTriggerPr
           role="menu"
           aria-label={label}
           onKeyDown={move}
-          className="glass-pop absolute right-0 top-full z-50 mt-1 w-max min-w-[200px] max-w-[360px] animate-[pop_.1s_var(--ease-out)] rounded-pop p-[5px]"
+          className="backdrop pop-frame absolute right-0 top-full z-50 mt-1 w-max min-w-[200px] max-w-[360px] animate-[pop_.1s_var(--ease-out)] rounded-pop p-[5px]"
         >
           {items.map((it) => (
             <div key={it.label}>

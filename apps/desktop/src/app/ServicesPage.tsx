@@ -20,7 +20,7 @@ import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { TextField } from "../components/TextField";
-import { openSite, pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServicesList, type SitesList } from "./api";
+import { pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { useRead } from "./hooks";
@@ -56,7 +56,7 @@ type Open =
 export function ServicesPage() {
   const services = useRead<ServicesList>("services.list");
   const sites = useRead<SitesList>("sites.list");
-  const { run } = useChanges();
+  const { run, open: visit } = useChanges();
   const [category, setCategory] = useState("all");
   const [open, setOpen] = useState<Open | null>(null);
   const instances = services.data?.instances ?? [];
@@ -72,7 +72,7 @@ export function ServicesPage() {
         label: host ? `Browse in ${label}` : `Add ${label} to browse it`,
         icon: <Table16Regular />,
         groupStart: n === 0,
-        onSelect: () => (host ? openSite(host) : run(["tool", "add", site === "pma" ? "phpmyadmin" : "adminer"], `${label} is set up at ${site}.test.`)),
+        onSelect: () => (host ? visit(host) : run(["tool", "add", site === "pma" ? "phpmyadmin" : "adminer"], `${label} is set up at ${site}.test.`)),
       };
     });
   };
@@ -86,7 +86,7 @@ export function ServicesPage() {
         columns={cols}
         actions={
           <>
-            {i.web && <Button variant="quiet" aria-label={`Open ${i.name}'s page`} title={`Open ${i.web}`} icon={<Open16Regular />} onClick={() => openSite(i.web!)} />}
+            {i.web && <Button variant="quiet" aria-label={`Open ${i.name}'s page`} title={`Open ${i.web}`} icon={<Open16Regular />} onClick={() => visit(i.web!)} />}
             <Button
               variant="quiet"
               aria-label={`${running ? "Stop" : "Start"} ${i.name}`}

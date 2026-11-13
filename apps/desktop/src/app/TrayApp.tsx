@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import { useToast } from "../components/Toast";
 import { TrayPopup, type TrayService, type TraySite } from "../components/TrayPopup";
-import { fitPopup, hidePopup, openSite, quit, runJob, showMain, type ServicesList, type SitesList } from "./api";
+import { fitPopup, hidePopup, quit, runJob, showMain, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { useDaemon, useRead } from "./hooks";
@@ -13,7 +13,7 @@ export function TrayApp() {
   const daemon = useDaemon();
   const sites = useRead<SitesList>("sites.list");
   const services = useRead<ServicesList>("services.list");
-  const { run } = useChanges();
+  const { run, open } = useChanges();
   const toast = useToast();
   const box = useRef<HTMLDivElement>(null);
 
@@ -78,7 +78,7 @@ export function TrayApp() {
         }
         sites={shownSites}
         services={shownServices}
-        onOpenSite={(host) => openSite(host).then(hidePopup)}
+        onOpenSite={(host) => open(host)}
         onToggleService={(name) => {
           const instance = instances.find((i) => i.name === name);
           const start = !instance?.running;

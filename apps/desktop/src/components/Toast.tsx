@@ -34,7 +34,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-[18px] left-1/2 z-[60] flex w-[min(520px,calc(100%-32px))] -translate-x-1/2 flex-col items-center gap-2">
         {toasts.map((t) => (
-          <div key={t.id} className="glass-pop pointer-events-auto flex min-h-11 animate-[rise_.16s_var(--ease-out)] items-center gap-3 rounded-full py-1.5 pl-[18px] pr-1.5 text-[13px]">
+          <div key={t.id} className="backdrop pop-frame pointer-events-auto flex min-h-11 animate-[rise_.16s_var(--ease-out)] items-center gap-3 rounded-full py-1.5 pl-[18px] pr-1.5 text-[13px]">
             <span>{t.message}</span>
             {t.action && (
               <button

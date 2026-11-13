@@ -6,7 +6,7 @@ import { Page } from "../components/Page";
 import { Detail, Row, RowName, Section } from "../components/Rows";
 import { Status, type StatusState } from "../components/Status";
 import { Tag } from "../components/Tag";
-import { openSite, type HistoryList, type Instance, type ServicesList, type SitesList } from "./api";
+import { type HistoryList, type Instance, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -30,7 +30,7 @@ export function Home({ go }: { go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
   const services = useRead<ServicesList>("services.list");
   const history = useRead<HistoryList>("history.list");
-  const { run, confirm } = useChanges();
+  const { run, confirm, open } = useChanges();
   const instances = services.data?.instances ?? [];
   const down = instances.filter((i) => i.enabled && !i.running);
   const listed = sites.data?.sites.filter((s) => s.source !== "alias") ?? [];
@@ -60,7 +60,7 @@ export function Home({ go }: { go: (page: string) => void }) {
           </Empty>
         )}
         {listed.map((s) => (
-          <Row key={s.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${s.host}`} icon={<Open16Regular />} onClick={() => openSite(s.host)} />}>
+          <Row key={s.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${s.host}`} icon={<Open16Regular />} onClick={() => open(s.host)} />}>
             <RowName before={<LockClosed12Regular aria-label={s.secure ? "HTTPS" : undefined} aria-hidden={s.secure ? undefined : true} className={`shrink-0 text-text-3 ${s.secure ? "" : "invisible"}`} />} sub={s.document_root} mono>
               <button type="button" className="hover:underline" onClick={() => go(`site:${s.host}`)}>
                 {s.host}
@@ -73,7 +73,7 @@ export function Home({ go }: { go: (page: string) => void }) {
           </Row>
         ))}
         {sites.data?.proxies.map((p) => (
-          <Row key={p.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${p.host}`} icon={<Open16Regular />} onClick={() => openSite(p.host)} />}>
+          <Row key={p.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${p.host}`} icon={<Open16Regular />} onClick={() => open(p.host)} />}>
             <RowName before={<LockClosed12Regular aria-label={p.url.startsWith("https") ? "HTTPS" : undefined} aria-hidden={p.url.startsWith("https") ? undefined : true} className={`shrink-0 text-text-3 ${p.url.startsWith("https") ? "" : "invisible"}`} />} sub={p.target ? `→ ${p.target}` : undefined} mono>
               {p.host}
             </RowName>

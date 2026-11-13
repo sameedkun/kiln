@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useState, type ReactNode } from
 import { Button } from "../components/Button";
 import { Dialog } from "../components/Dialog";
 import { useToast } from "../components/Toast";
-import { message, runJob, type JobEvent } from "./api";
+import { message, openSite, runJob, type JobEvent } from "./api";
 
 // Making a change from the app (ADR 0053 §4): commands that ask before changing anything
 // show their preview in a dialog first, and run only when the user confirms; the others
@@ -23,11 +23,13 @@ interface Changes {
   run: (args: string[], done: string, onLine?: (event: JobEvent) => void) => Promise<boolean>;
   /** Shows a command's preview, and runs it if the user confirms. */
   confirm: (title: string, args: string[], done: string) => void;
+  /** Opens a site in the browser; if its name isn't in the hosts file yet, offers to add it. */
+  open: (host: string) => void;
   /** For a change without a preview of its own (unlink, remove): asks in words first. */
   ask: (title: string, body: string, action: string, args: string[], done: string) => void;
 }
 
-const Context = createContext<Changes>({ run: async () => false, confirm: () => {}, ask: () => {} });
+const Context = createContext<Changes>({ run: async () => false, confirm: () => {}, open: () => {}, ask: () => {} });
 export const useChanges = () => useContext(Context);
 
 export function ChangeProvider({ children }: { children: ReactNode }) {
@@ -87,6 +89,15 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
       value={{
         run,
         confirm,
+        open: (host) =>
+          openSite(host).catch((e) => {
+            const text = message(e);
+            if (text.startsWith("not-in-hosts: ")) {
+              confirm(`Add ${host} to the hosts file?`, ["hosts", "sync"], `Browsers find ${host} now: open it again.`);
+            } else {
+              toast({ message: text });
+            }
+          }),
         ask: (title, body, action, args, done) => setPlain({ title, body, action, args, done, busy: false }),
       }}
     >
