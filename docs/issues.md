@@ -102,6 +102,7 @@ commits and PRs.
 | [I-90](#i-90) | design | An outlined stop square next to "Running" read as an empty checkbox | ✅ |
 | [I-91](#i-91) | CI | GitHub Actions stopped starting jobs: the private repository's free minutes were used up | ✅ (repository made public; the Scenario runs only for the code it tests) |
 | [I-92](#i-92) | services | RustFS answered 503 "waiting for iam" right after a restart, which Kiln had reported as done | ✅ |
+| [I-93](#i-93) | coexistence | A web port Kiln moved away from (80, held by Herd) stayed moved after Herd quit | ✅ |
 
 ---
 
@@ -1329,3 +1330,15 @@ commits and PRs.
 - **Fix:** a provider's `ready` hook now gets the instance's ports as well as its folders.
   RustFS is ready once `GET /` on its S3 port answers anything but 503. Starting and
   restarting wait for it, up to the usual limit.
+
+### I-93: Kiln stayed on 8080 after Herd quit (fixed)
+
+- **Seen:** 2026-11-13, by the user: with Herd not running, `kiln web restart` still listened on
+  8080 and 8443, so every URL carried a port.
+- **Cause:** the first start found 80 and 443 busy (Herd held them then) and saved 8080 and
+  8443. Each start since kept the saved port while it was free, and never looked at the
+  better one again.
+- **Fix:** a port Kiln picked moves back to the first free port earlier in its list, and says
+  so ("HTTP port 80 is free again; Kiln uses it instead of 8080"). A free port stays as it is
+  otherwise, so URLs only change for the better. A port the user chose (`--http-port`) never
+  moves.

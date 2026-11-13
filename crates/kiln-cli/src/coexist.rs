@@ -258,6 +258,21 @@ pub(crate) fn choose_port(
             .map_err(|e| e.to_string())?;
         Ok(port)
     };
+    // A port Kiln picked moves back to a better one that is free again (I-93): once Herd
+    // has quit, port 80 rather than 8080 for good. A port the user chose never moves.
+    if auto
+        && let Some(&better) = kind
+            .preferred
+            .iter()
+            .take_while(|&&p| p != current)
+            .find(|&&p| is_free(p))
+    {
+        say!(
+            "{} port {better} is free again; Kiln uses it instead of {current}.",
+            kind.purpose
+        );
+        return save(store, better);
+    }
     if is_free(current) {
         return save(store, current);
     }
@@ -415,6 +430,39 @@ mod tests {
         assert_eq!(
             choose_port(&mut store, &kind, None, false, true, &none),
             Ok(free)
+        );
+    }
+
+    #[test]
+    fn a_picked_port_moves_back_once_the_better_one_is_free_again() {
+        let (_dir, mut store, held, kind, busy, free) = setup();
+        let none = Listeners::default();
+        assert_eq!(
+            choose_port(&mut store, &kind, None, false, true, &none),
+            Ok(free)
+        );
+        // The other program goes away (Herd quits): Kiln takes its first choice again.
+        drop(held);
+        assert_eq!(
+            choose_port(&mut store, &kind, None, false, true, &none),
+            Ok(busy)
+        );
+        assert_eq!(store.setting(kind.key).unwrap(), Some(busy.to_string()));
+    }
+
+    #[test]
+    fn a_chosen_port_is_never_moved_back() {
+        let (_dir, mut store, held, kind, busy, free) = setup();
+        let none = Listeners::default();
+        assert_eq!(
+            choose_port(&mut store, &kind, Some(free), false, true, &none),
+            Ok(free)
+        );
+        drop(held);
+        assert_eq!(
+            choose_port(&mut store, &kind, None, false, true, &none),
+            Ok(free),
+            "the user's choice stays, even with {busy} free"
         );
     }
 
