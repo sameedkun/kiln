@@ -61,6 +61,10 @@ the app is Windows-only for now). It builds into the workspace's `target` folder
 `kiln-desktop.exe` sits next to `kiln.exe` and `kilnd.exe`, which it runs. It has its own
 `Cargo.lock` and `deny.toml` (the workspace's policy, plus named MPL-2.0 exceptions).
 
+Stop Kiln before rebuilding it: Windows won't let Cargo replace a program that is running
+("failed to remove file … kilnd.exe: Access is denied"). Quit the app from its tray popup,
+then `kiln daemon stop` (or `kiln uninstall`, which stops everything first).
+
 To build and run the app:
 
 ```sh
