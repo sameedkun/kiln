@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ArrowLeft16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
 import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
@@ -6,7 +7,7 @@ import { Row, Section } from "../components/Rows";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
-import { openFolder, openSite, type PhpList, type Site, type SitesList } from "./api";
+import { openFolder, openSite, type EnvShow, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 import { framework } from "./SitesPage";
@@ -37,6 +38,9 @@ function nodeWhy(site: Site): string {
 export function SitePage({ host, go }: { host: string; go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
   const php = useRead<PhpList>("php.list");
+  // Without Kiln's certificate authority, HTTPS needs setting up first.
+  const ca = useRead<{ intermediate_days_left: number | null }>("ca.status");
+  const caReady = ca.data ? ca.data.intermediate_days_left !== null : true;
   const { run, ask, confirm } = useChanges();
   const site = sites.data?.sites.find((s) => s.host === host);
 
@@ -108,13 +112,27 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
             <div className="figures mt-1 text-sm font-medium">{site.node.version ?? "none"}</div>
             <p className="m-0 mt-1 max-w-[40ch] text-xs text-text-3">{nodeWhy(site)}</p>
           </div>
-          <div className="w-[240px]">
+          <div className="w-[260px]">
             <Switch
               checked={site.secure}
+              disabled={!caReady && !site.secure}
               onChange={(on) => run([on ? "secure" : "unsecure", site.host], `${site.host} is served over ${on ? "HTTPS" : "HTTP"} now.`)}
               label="HTTPS"
-              description="With Kiln's own certificate"
+              description={caReady ? "With Kiln's own certificate" : "Needs Kiln's certificate authority, set up once for every site"}
             />
+            {!caReady && (
+              <Button
+                size="sm"
+                className="mt-2"
+                onClick={async () => {
+                  if (await run(["ca", "init"], "Kiln's certificate authority is set up.")) {
+                    confirm("Trust Kiln's certificate authority?", ["ca", "trust"], "Windows trusts Kiln's certificates now: turn HTTPS on.");
+                  }
+                }}
+              >
+                Set up HTTPS
+              </Button>
+            )}
           </div>
         </li>
       </Section>
@@ -128,9 +146,10 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         ))}
       </Section>
 
-      <p className="m-0 mb-6 max-w-[64ch] px-1 text-[13px] text-text-3">
-        Its services and <code className="font-mono">.env</code> come with the Services page (P4-05), its logs with the log viewer (P4-08), and its requests with P4-18.
-      </p>
+      <SiteServices site={site} go={go} />
+      <SiteEnv site={site} />
+
+      <p className="m-0 mb-6 max-w-[64ch] px-1 text-[13px] text-text-3">Its logs come with the log viewer (P4-08), and its requests with P4-18.</p>
 
       {site.source === "link" && (
         <Button
@@ -143,5 +162,65 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       )}
       {site.source === "parked" && <p className="m-0 px-1 text-[13px] text-text-2">It's served because its folder is in {site.parked_in}. Moving it out, or unparking that folder, stops it.</p>}
     </Page>
+  );
+}
+
+/** The services this site's .env points at (ADR 0056 §5). */
+function SiteServices({ site, go }: { site: Site; go: (page: string) => void }) {
+  const services = useRead<ServicesList>("services.list");
+  const used = (services.data?.instances ?? []).filter((i) => i.used_by.includes(site.host));
+  return (
+    <Section
+      title="Services"
+      meta="from its .env"
+      action={
+        <Button variant="quiet" size="sm" onClick={() => go("services")}>
+          Wire one on the Services page
+        </Button>
+      }
+    >
+      {services.data && used.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">Its .env doesn't point at any of Kiln's services.</li>}
+      {used.map((i) => (
+        <Row key={i.name} columns="minmax(160px,1fr) 1fr 140px">
+          <span className="text-sm font-semibold">{i.name}</span>
+          <span className="figures text-[12.5px] text-text-2">
+            {i.kind} {i.version}
+          </span>
+          <span className="text-right text-[12.5px]">{i.running ? "Running" : i.enabled ? "Not running" : "Stopped"}</span>
+        </Row>
+      ))}
+    </Section>
+  );
+}
+
+/** The site's .env: secrets hidden until shown; Kiln's own keys tagged (ADR 0056 §5). */
+function SiteEnv({ site }: { site: Site }) {
+  const env = useRead<EnvShow>("env.show", { project: site.project });
+  const [shown, setShown] = useState<string[]>([]);
+  return (
+    <Section title=".env" meta={env.data?.path}>
+      {env.error && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">{env.error}</li>}
+      {env.data?.keys.map((k) => {
+        const hidden = k.secret && k.value !== "" && !shown.includes(k.key);
+        return (
+          <Row key={k.key} columns="minmax(160px,220px) minmax(160px,1fr) 100px">
+            <span className="font-mono text-xs font-medium">{k.key}</span>
+            <span className="truncate font-mono text-xs text-text-2" title={hidden ? undefined : k.value}>
+              {hidden ? "••••••••" : k.value || "(empty)"}
+              {k.secret && k.value !== "" && (
+                <button
+                  type="button"
+                  className="ml-2 font-sans text-xs text-text hover:underline"
+                  onClick={() => setShown((s) => (s.includes(k.key) ? s.filter((x) => x !== k.key) : [...s, k.key]))}
+                >
+                  {hidden ? "Show" : "Hide"}
+                </button>
+              )}
+            </span>
+            <span className="text-right">{k.kiln && <Tag>set by Kiln</Tag>}</span>
+          </Row>
+        );
+      })}
+    </Section>
   );
 }

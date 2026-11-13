@@ -83,6 +83,65 @@ fn keys_for(
 }
 
 /// The project folder (`project`, or the current one) and its `.env`, which must exist.
+/// A key whose value is a secret: shown only when asked (ADR 0056 §2).
+#[must_use]
+pub fn is_secret(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    ["KEY", "SECRET", "PASSWORD", "TOKEN"]
+        .iter()
+        .any(|word| key.contains(word))
+}
+
+/// Every `.env` key and value Kiln would write for its instances, to tell its own apart.
+fn kiln_values() -> Vec<(&'static str, String)> {
+    let Ok(store) = crate::web::open_store() else {
+        return Vec::new();
+    };
+    store
+        .services()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| {
+            crate::service::provider_of(&r.kind)
+                .ok()
+                .map(|p| p.env_keys(&r.ports))
+        })
+        .flatten()
+        .collect()
+}
+
+/// `kiln env show` ([ADR 0056] §2): a project's `.env`, in order.
+///
+/// [ADR 0056]: ../../../docs/adr/0056-services-page.md
+pub fn show(project: Option<PathBuf>, reveal: bool) -> Result<(), String> {
+    let (_, env) = project_env(project)?;
+    let text =
+        std::fs::read_to_string(&env).map_err(|e| format!("cannot read {}: {e}", env.display()))?;
+    let settings = kiln_platform::env_file::settings(&text);
+    if crate::out::json() {
+        let ours = kiln_values();
+        crate::out::data(serde_json::json!({
+            "path": env,
+            "keys": settings.iter().map(|(key, value)| serde_json::json!({
+                "key": key,
+                "value": value,
+                "secret": is_secret(key),
+                "kiln": ours.iter().any(|(k, v)| k == key && v == value),
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
+    say!("{}", env.display());
+    for (key, value) in &settings {
+        if is_secret(key) && !reveal && !value.is_empty() {
+            say!("  {key}=•••••• (--reveal shows it)");
+        } else {
+            say!("  {key}={value}");
+        }
+    }
+    Ok(())
+}
+
 fn project_env(project: Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
     let project = match project {
         Some(path) => path,
@@ -212,6 +271,22 @@ pub fn use_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secrets_are_named_for_what_they_hold() {
+        for secret in [
+            "APP_KEY",
+            "DB_PASSWORD",
+            "STRIPE_SECRET",
+            "GITHUB_TOKEN",
+            "aws_secret_access_key",
+        ] {
+            assert!(is_secret(secret), "{secret}");
+        }
+        for plain in ["APP_NAME", "DB_PORT", "MAIL_HOST", "APP_URL"] {
+            assert!(!is_secret(plain), "{plain}");
+        }
+    }
 
     #[test]
     fn a_projects_database_is_named_after_its_folder() {

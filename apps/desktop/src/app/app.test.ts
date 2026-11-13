@@ -74,7 +74,7 @@ describe("runJob", () => {
 });
 
 describe("the tray icon", () => {
-  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, main_port: null, enabled, running, project: null });
+  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, main_port: null, used_by: [], web: null, databases: false, enabled, running, project: null });
 
   it("is stopped without the daemon, and says why", () => {
     expect(trayState("unreachable")).toEqual({ state: "stopped", tooltip: "Kiln: not running" });
@@ -94,7 +94,7 @@ describe("the tray icon", () => {
 
 describe("a service's port", () => {
   it("is the one apps connect to, not the first by name", () => {
-    const mailpit = { name: "mailpit-1", kind: "mailpit", version: "1.31.6", ports: { http: 8025, smtp: 1025 }, main_port: 1025, enabled: true, running: true, project: null };
+    const mailpit = { name: "mailpit-1", kind: "mailpit", version: "1.31.6", ports: { http: 8025, smtp: 1025 }, main_port: 1025, used_by: [], web: null, databases: false, enabled: true, running: true, project: null };
     expect(mainPort(mailpit)).toBe(1025);
   });
 });
@@ -125,5 +125,22 @@ describe("a site's framework", async () => {
     expect(framework(site("laravel", "12.38.1"))).toBe("Laravel 12.38");
     expect(framework(site("wordpress", "6.8.3"))).toBe("WordPress 6.8");
     expect(framework(site("php-public", null))).toBe("PHP");
+  });
+});
+
+describe("the Services page's helpers (ADR 0056)", async () => {
+  const { categoryOf, databaseName } = await import("./ServicesPage");
+
+  it("groups each kind", () => {
+    expect(categoryOf("mariadb")).toBe("databases");
+    expect(categoryOf("redis")).toBe("cache");
+    expect(categoryOf("reverb")).toBe("realtime");
+    expect(categoryOf("something-new")).toBe("other");
+  });
+
+  it("takes database names, never options or paths", () => {
+    expect(databaseName(" shop ")).toBe("shop");
+    expect(databaseName("shop_test")).toBe("shop_test");
+    for (const bad of ["--all", "-x", "a b", "../x", "x;drop"]) expect(databaseName(bad), bad).toBeNull();
   });
 });

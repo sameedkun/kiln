@@ -150,6 +150,43 @@ async fn pick_folder(title: String, app: AppHandle) -> Option<String> {
     chosen.into_path().ok().map(|p| p.display().to_string())
 }
 
+/// Windows' open dialog for a `.sql` file, to restore (ADR 0056 §3).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+async fn pick_sql(title: String, app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .add_filter("SQL dump", &["sql"])
+            .blocking_pick_file()
+    })
+    .await
+    .ok()
+    .flatten()?;
+    chosen.into_path().ok().map(|p| p.display().to_string())
+}
+
+/// Windows' save dialog, for where a dump goes (ADR 0056 §3).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+async fn pick_save(title: String, name: String, app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .set_file_name(name)
+            .add_filter("SQL dump", &["sql"])
+            .blocking_save_file()
+    })
+    .await
+    .ok()
+    .flatten()?;
+    chosen.into_path().ok().map(|p| p.display().to_string())
+}
+
 /// The URL `sites.list` gives for `host`, among its sites and proxies.
 fn site_url(sites: &Value, host: &str) -> Option<String> {
     ["sites", "proxies"]
@@ -525,6 +562,8 @@ fn main() {
             open_site,
             open_folder,
             pick_folder,
+            pick_sql,
+            pick_save,
             window_action,
             close_notice_read,
             show_main,

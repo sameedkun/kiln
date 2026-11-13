@@ -21,6 +21,7 @@ import { useDaemon, useRead } from "./hooks";
 import { NotYet, Settings } from "./Pages";
 import { NodePage, PhpPage } from "./RuntimePages";
 import { SitePage } from "./SitePage";
+import { ServicesPage } from "./ServicesPage";
 import { SitesPage } from "./SitesPage";
 
 function Screen({ page, go }: { page: string; go: (page: string) => void }) {
@@ -30,6 +31,8 @@ function Screen({ page, go }: { page: string; go: (page: string) => void }) {
       return <Home go={go} />;
     case "sites":
       return <SitesPage go={go} />;
+    case "services":
+      return <ServicesPage />;
     case "php":
       return <PhpPage />;
     case "node":

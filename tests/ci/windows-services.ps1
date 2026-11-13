@@ -627,6 +627,29 @@ function WaitJob($id) {
     if ($job.running) { throw "job $id still running after 180 s" }
     $job
 }
+Check 'kiln --json service list: shop.test uses mysql-8.4, read from its .env (ADR 0056)' {
+    $last = (JsonLines @(& $Kiln --json service list))[-1]
+    $mysql = $last.data.instances | Where-Object { $_.name -eq 'mysql-8.4' }
+    if (-not ($mysql.used_by -contains 'shop.test')) { throw "mysql-8.4 used by: $($mysql.used_by -join ', ')" }
+    if (-not $mysql.databases) { throw 'mysql-8.4 should hold databases' }
+    $mailpit = $last.data.instances | Where-Object { $_.name -eq 'mailpit-1' }
+    if ($mailpit.web -ne 'mailpit.test') { throw "mailpit-1's page: $($mailpit.web)" }
+}
+Check 'kiln env show: the project''s .env, secrets hidden, Kiln''s keys marked in --json' {
+    $text = Kiln env show --project $shop
+    Expect 'DB_PORT=' $text
+    if ($text -match 'APP_KEY=base64') { throw "APP_KEY not hidden:`n$text" }
+    $keys = (JsonLines @(& $Kiln --json env show --project $shop))[-1].data.keys
+    $port = $keys | Where-Object { $_.key -eq 'DB_PORT' }
+    if (-not $port.kiln) { throw "DB_PORT isn't marked as Kiln's: $($port | ConvertTo-Json)" }
+    # The daemon reads only the folder of one of Kiln's sites, exactly as `sites` gives it.
+    $project = ((JsonLines @(& $Kiln --json sites))[-1].data.sites | Where-Object { $_.host -eq 'shop.test' }).project
+    $param = (ConvertTo-Json @{ project = $project } -Compress).Replace('"', '\"')
+    Expect '"DB_DATABASE"' (Kiln daemon call env.show $param)
+    $refused = (& $Kiln daemon call env.show '{\"project\":\"C:\\\\Windows\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "isn't the folder of one of Kiln's sites") { throw "a folder outside Kiln's sites was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
 Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
     $lines = @(& $Kiln --json sites)
     if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }

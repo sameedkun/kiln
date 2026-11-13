@@ -122,6 +122,24 @@ pub fn value_of(text: &str, key: &str) -> Option<String> {
     })
 }
 
+/// Every setting in `text`, in order, each key once (its first, as dotenv loaders read it):
+/// what `kiln env show` lists ([ADR 0056] §2).
+///
+/// [ADR 0056]: ../../../docs/adr/0056-services-page.md
+#[must_use]
+pub fn settings(text: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in lines(text) {
+        let (body, _) = split_ending(line);
+        if let Some((key, raw)) = setting(body)
+            && !out.iter().any(|(k, _)| k == key)
+        {
+            out.push((key.to_owned(), read_value(raw)));
+        }
+    }
+    out
+}
+
 /// The group a key belongs to, for placing a new one: `DB_` for `DB_HOST`.
 fn group(key: &str) -> &str {
     key.find('_').map_or(key, |i| &key[..=i])
@@ -370,6 +388,19 @@ pub fn register_env_keys(registry: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_come_in_order_each_key_once() {
+        let text = "APP_NAME=\"My Shop\"\n# DB_HOST=commented\nDB_PORT=3306 # mysql\nDB_PORT=9999\r\nEMPTY=\n";
+        assert_eq!(
+            settings(text),
+            vec![
+                ("APP_NAME".to_owned(), "My Shop".to_owned()),
+                ("DB_PORT".to_owned(), "3306".to_owned()),
+                ("EMPTY".to_owned(), String::new()),
+            ]
+        );
+    }
 
     /// The shape of Laravel 12's `.env`, with SQLite and the other databases commented out.
     const LARAVEL: &str = "APP_NAME=Laravel\nAPP_KEY=base64:abc=\n\nDB_CONNECTION=sqlite\n# DB_HOST=127.0.0.1\n# DB_PORT=3306\n# DB_DATABASE=laravel\n# DB_USERNAME=root\n# DB_PASSWORD=\n\nREDIS_CLIENT=phpredis\nREDIS_HOST=127.0.0.1\nREDIS_PASSWORD=null\nREDIS_PORT=6379\n\nMAIL_MAILER=log\nMAIL_HOST=127.0.0.1 # the inbox\nMAIL_FROM_ADDRESS=\"hello@example.com\"\n";

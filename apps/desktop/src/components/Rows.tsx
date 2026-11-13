@@ -22,7 +22,7 @@ export function Section({ title, meta, action, children }: { title: string; meta
 export function Row({ columns, children, actions }: { columns: string; children: ReactNode; actions?: ReactNode }) {
   return (
     <li
-      className="group grid min-h-12 items-center gap-4 border-b border-line px-1 py-1.5 hover:bg-[linear-gradient(90deg,transparent,var(--hover)_8%,var(--hover)_92%,transparent)]"
+      className="group grid min-h-12 items-center gap-4 border-b border-line py-1.5 pl-1 pr-2 hover:bg-[linear-gradient(90deg,transparent,var(--hover)_8%,var(--hover)_92%,transparent)]"
       style={{ gridTemplateColumns: columns }}
     >
       {children}

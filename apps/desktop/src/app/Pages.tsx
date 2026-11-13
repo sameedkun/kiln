@@ -9,7 +9,6 @@ import { useChanges } from "./Change";
 // Pages whose task hasn't connected them yet (ADR 0054 §5): what they will show, and the
 // command that does it until then. Never sample data.
 const notYet: Record<string, { title: string; task: string; what: string; command: string }> = {
-  services: { title: "Services", task: "P4-05", what: "every service by kind, the catalog to add one, ports, logs and data", command: "kiln service list" },
   logs: { title: "Logs", task: "P4-08", what: "every log, followed live", command: "kiln service logs <name>" },
   history: { title: "History", task: "P4-07", what: "everything Kiln changed, with undo", command: "kiln history" },
 };

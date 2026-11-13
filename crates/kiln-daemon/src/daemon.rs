@@ -286,6 +286,8 @@ impl Daemon {
         "jobs.start",
         "jobs.get",
         "jobs.list",
+        "services.logs",
+        "env.show",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -594,6 +596,47 @@ impl Daemon {
         }
     }
 
+    /// `services.logs` (ADR 0056 §2): an instance's last lines, for an instance Kiln has.
+    fn service_logs(&self, params: &Value) -> Result<Value, RpcError> {
+        let name = params["name"]
+            .as_str()
+            .ok_or_else(|| RpcError::kiln("params.name (an instance) is missing"))?;
+        let (store, _) = kiln_state::StateStore::open_dir(&self.paths.state)
+            .map_err(|e| RpcError::kiln(e.to_string()))?;
+        if store
+            .service(name)
+            .map_err(|e| RpcError::kiln(e.to_string()))?
+            .is_none()
+        {
+            return Err(RpcError::kiln(format!("no service called {name}")));
+        }
+        drop(store);
+        let lines = params["lines"]
+            .as_u64()
+            .unwrap_or(200)
+            .clamp(1, 5000)
+            .to_string();
+        self.read(&["service", "logs", name, "--lines", &lines])
+    }
+
+    /// `env.show` (ADR 0056 §2): a project's `.env`, only for the folder of one of Kiln's
+    /// sites.
+    fn env_show(&self, params: &Value) -> Result<Value, RpcError> {
+        let project = params["project"]
+            .as_str()
+            .ok_or_else(|| RpcError::kiln("params.project (a site's folder) is missing"))?;
+        let sites = self.read(&["sites"])?;
+        let known = sites["sites"]
+            .as_array()
+            .is_some_and(|all| all.iter().any(|site| site["project"] == project));
+        if !known {
+            return Err(RpcError::kiln(format!(
+                "{project} isn't the folder of one of Kiln's sites"
+            )));
+        }
+        self.read(&["env", "show", "--project", project])
+    }
+
     /// `jobs.start`: checks the command, answers with the job's id, and runs it on its own
     /// thread, sending each line as `job.event` and the end as `job.finished`.
     fn start_job(&self, params: &Value) -> Result<Value, RpcError> {
@@ -793,6 +836,8 @@ impl Handler for Daemon {
                 }
             }
             "doctor.report" => self.read(&["doctor"]),
+            "services.logs" => self.service_logs(params),
+            "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.get" => {
                 let id = params["job"]

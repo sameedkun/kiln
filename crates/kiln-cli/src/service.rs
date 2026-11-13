@@ -760,6 +760,70 @@ fn answers(record: &ServiceRecord, listeners: &crate::coexist::Listeners) -> boo
         })
 }
 
+/// Each site's host and its `.env` text, for "used by" (ADR 0056 §1).
+fn site_projects(store: &StateStore) -> Vec<(String, String)> {
+    crate::web::resolved(store)
+        .map(|all| {
+            all.sites
+                .iter()
+                .filter(|s| s.alias_of.is_none())
+                .filter_map(|s| {
+                    std::fs::read_to_string(s.project.join(".env"))
+                        .ok()
+                        .map(|text| (s.host.to_string(), text))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The sites whose `.env` holds every key Kiln would write for this instance's port (ADR 0056
+/// §1). A key counts if its value names one of the instance's ports.
+fn used_by(record: &ServiceRecord, projects: &[(String, String)]) -> Vec<String> {
+    let Some(provider) = kiln_services::provider(&record.kind) else {
+        return Vec::new();
+    };
+    let ports: Vec<String> = record.ports.values().map(ToString::to_string).collect();
+    let keys: Vec<(&str, String)> = provider
+        .env_keys(&record.ports)
+        .into_iter()
+        .filter(|(_, value)| ports.iter().any(|p| value.contains(p.as_str())))
+        .collect();
+    uses(&keys, projects)
+}
+
+/// The hosts of `projects` whose `.env` text has every one of `keys`.
+fn uses(keys: &[(&str, String)], projects: &[(String, String)]) -> Vec<String> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    projects
+        .iter()
+        .filter(|(_, text)| {
+            keys.iter().all(|(key, value)| {
+                kiln_platform::env_file::value_of(text, key).as_deref() == Some(value.as_str())
+            })
+        })
+        .map(|(host, _)| host.clone())
+        .collect()
+}
+
+/// The host of the site serving this instance's web page (Mailpit's inbox), if Kiln serves one.
+fn web_host(record: &ServiceRecord, proxies: &[kiln_web::SiteSpec]) -> Option<String> {
+    let provider = kiln_services::provider(&record.kind)?;
+    let (_, role) = provider.web_ui()?;
+    let port = record.ports.get(role)?;
+    let suffix = format!(":{port}");
+    proxies
+        .iter()
+        .find(|p| {
+            p.proxy
+                .as_ref()
+                .is_some_and(|t| t.to_string().trim_end_matches('/').ends_with(&suffix))
+        })
+        .map(|p| p.host.to_string())
+}
+
 /// `kiln service catalog`: every kind Kiln offers, with the versions for this machine.
 pub fn catalog() {
     let here = |r: &&kiln_services::Release| {
@@ -817,6 +881,8 @@ pub fn list() -> Result<(), String> {
     let store = crate::web::open_store()?;
     let records = store.services().map_err(|e| e.to_string())?;
     if crate::out::json() {
+        let projects = site_projects(&store);
+        let proxies = crate::web::proxy_specs(&store).unwrap_or_default();
         let listeners = crate::coexist::Listeners::now();
         let running = matches!(
             supervisor()?.status().map_err(|e| e.to_string())?,
@@ -829,6 +895,10 @@ pub fn list() -> Result<(), String> {
                 "kind": r.kind,
                 "version": r.version,
                 "ports": r.ports,
+                "used_by": used_by(r, &projects),
+                "web": web_host(r, &proxies),
+                "databases": kiln_services::provider(&r.kind)
+                    .is_some_and(kiln_services::ServiceProvider::has_databases),
                 // The port apps connect to (the provider's first role), not the first by name.
                 "main_port": kiln_services::provider(&r.kind)
                     .and_then(|p| p.ports().first())
@@ -960,6 +1030,23 @@ pub fn logs(name: &str, lines: usize) -> Result<(), String> {
     let record = record_of(&store, name)?;
     let provider = provider_of(&record.kind)?;
     let logs = provider.logs(&dirs_of(&record)?);
+    if crate::out::json() {
+        let mut files = Vec::new();
+        for log in &logs {
+            let text = match std::fs::read(log) {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("cannot read {}: {e}", log.display())),
+            };
+            let all: Vec<&str> = text.lines().collect();
+            files.push(serde_json::json!({
+                "path": log,
+                "lines": all[all.len().saturating_sub(lines)..],
+            }));
+        }
+        crate::out::data(serde_json::json!({ "files": files }));
+        return Ok(());
+    }
     let mut wrote = false;
     for log in &logs {
         let text = match std::fs::read(log) {
@@ -1221,6 +1308,27 @@ fn attach_ui(provider: &dyn ServiceProvider, record: &ServiceRecord) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_site_uses_an_instance_when_its_env_names_every_port_key() {
+        let keys = vec![
+            ("DB_HOST", "127.0.0.1".to_owned()),
+            ("DB_PORT", "3306".to_owned()),
+        ];
+        let projects = vec![
+            (
+                "shop.test".to_owned(),
+                "DB_HOST=127.0.0.1\nDB_PORT=3306\n".to_owned(),
+            ),
+            (
+                "blog.test".to_owned(),
+                "DB_HOST=127.0.0.1\nDB_PORT=5432\n".to_owned(),
+            ),
+            ("docs.test".to_owned(), "APP_NAME=docs\n".to_owned()),
+        ];
+        assert_eq!(uses(&keys, &projects), vec!["shop.test".to_owned()]);
+        assert!(uses(&[], &projects).is_empty(), "no keys, no users");
+    }
 
     #[test]
     fn port_options_are_role_and_number() {

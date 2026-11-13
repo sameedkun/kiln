@@ -63,7 +63,7 @@ export function Menu({ trigger, label, items }: { trigger: (props: MenuTriggerPr
           role="menu"
           aria-label={label}
           onKeyDown={move}
-          className="glass-pop absolute right-0 top-full z-50 mt-1 min-w-[200px] animate-[pop_.1s_var(--ease-out)] rounded-pop p-[5px]"
+          className="glass-pop absolute right-0 top-full z-50 mt-1 w-max min-w-[200px] max-w-[360px] animate-[pop_.1s_var(--ease-out)] rounded-pop p-[5px]"
         >
           {items.map((it) => (
             <div key={it.label}>
@@ -76,7 +76,7 @@ export function Menu({ trigger, label, items }: { trigger: (props: MenuTriggerPr
                   close(true);
                   it.onSelect();
                 }}
-                className={`flex h-8 w-full items-center gap-2.5 rounded-md px-3 text-left text-[13px] outline-none hover:bg-hover focus-visible:bg-hover focus:bg-hover ${
+                className={`flex h-8 w-full items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-left text-[13px] outline-none hover:bg-hover focus-visible:bg-hover focus:bg-hover ${
                   it.danger ? "text-bad" : ""
                 }`}
               >

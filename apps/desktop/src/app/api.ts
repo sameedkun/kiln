@@ -44,6 +44,12 @@ export interface Instance {
   ports: Record<string, number>;
   /** The port apps connect to (for Mailpit, SMTP, not its web page). */
   main_port: number | null;
+  /** The sites whose .env points at it (ADR 0056 §1). */
+  used_by: string[];
+  /** The host of the site serving its web page, such as mailpit.test. */
+  web: string | null;
+  /** It holds databases: dump, restore and browse. */
+  databases: boolean;
   enabled: boolean;
   running: boolean;
   project: string | null;
@@ -62,6 +68,25 @@ export interface Operation {
 export interface HistoryList {
   operations: Operation[];
   hidden: number;
+}
+
+export interface ServiceKind {
+  kind: string;
+  name: string;
+  license: string;
+  versions: string[];
+  ports: { role: string; usual: number; what: string }[];
+  runs_in_project: boolean;
+}
+export interface ServicesCatalog {
+  kinds: ServiceKind[];
+}
+export interface ServiceLogs {
+  files: { path: string; lines: string[] }[];
+}
+export interface EnvShow {
+  path: string;
+  keys: { key: string; value: string; secret: boolean; kiln: boolean }[];
 }
 
 export interface PhpList {
@@ -167,6 +192,10 @@ export const quit = () => invoke("quit");
 export const openSite = (host: string) => invoke("open_site", { host });
 /** A site's folder in Explorer, by its host name (ADR 0055 §2). */
 export const openFolder = (host: string) => invoke("open_folder", { host });
+/** Windows' open dialog for a .sql file (ADR 0056 §3). */
+export const pickSql = (title: string) => invoke<string | null>("pick_sql", { title });
+/** Windows' save dialog, for where a dump goes. */
+export const pickSave = (title: string, name: string) => invoke<string | null>("pick_save", { title, name });
 /** Windows' folder dialog: the folder chosen, or null. */
 export const pickFolder = (title: string) => invoke<string | null>("pick_folder", { title });
 

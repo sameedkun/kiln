@@ -304,6 +304,16 @@ enum EnvAction {
         #[arg(long, short)]
         yes: bool,
     },
+    /// List a project's .env, secrets hidden unless --reveal (with --json: every key and value,
+    /// and which ones are Kiln's).
+    Show {
+        /// The project folder (default: the current one).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Show the values of secrets (keys with KEY, SECRET, PASSWORD or TOKEN) too.
+        #[arg(long)]
+        reveal: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -731,6 +741,9 @@ fn changes_state(command: &Command) -> bool {
             | Command::Which { .. }
             | Command::History { .. }
             | Command::Doctor
+            | Command::Env {
+                action: EnvAction::Show { .. }
+            }
             | Command::Uninstall { .. }
             | Command::Daemon {
                 action: DaemonAction::Start
@@ -922,16 +935,18 @@ fn run_services(action: ServicesAction) -> Result<(), String> {
 }
 
 fn run_env(action: EnvAction) -> Result<(), String> {
-    let EnvAction::Use {
-        name,
-        project,
-        database,
-        cache,
-        session,
-        queue,
-        yes,
-    } = action;
-    env::use_instance(&name, project, database, cache, session, queue, yes).map(|_| ())
+    match action {
+        EnvAction::Use {
+            name,
+            project,
+            database,
+            cache,
+            session,
+            queue,
+            yes,
+        } => env::use_instance(&name, project, database, cache, session, queue, yes).map(|_| ()),
+        EnvAction::Show { project, reveal } => env::show(project, reveal),
+    }
 }
 
 fn run_tool(action: ToolAction) -> Result<(), String> {
