@@ -828,6 +828,10 @@ pub fn list() -> Result<(), String> {
                 "kind": r.kind,
                 "version": r.version,
                 "ports": r.ports,
+                // The port apps connect to (the provider's first role), not the first by name.
+                "main_port": kiln_services::provider(&r.kind)
+                    .and_then(|p| p.ports().first())
+                    .and_then(|role| r.ports.get(role.role).copied()),
                 "enabled": r.enabled,
                 "running": r.enabled && running && answers(r, &listeners),
                 "project": r.project,

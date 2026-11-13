@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const { runJob } = await import("./api");
 const { trayState } = await import("./MainApp");
+const { mainPort } = await import("./Home");
 
 const send = (method: string, params: Record<string, unknown>) => handler?.({ payload: { method, params } });
 
@@ -73,7 +74,7 @@ describe("runJob", () => {
 });
 
 describe("the tray icon", () => {
-  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, enabled, running, project: null });
+  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, main_port: null, enabled, running, project: null });
 
   it("is stopped without the daemon, and says why", () => {
     expect(trayState("unreachable")).toEqual({ state: "stopped", tooltip: "Kiln: not running" });
@@ -88,5 +89,12 @@ describe("the tray icon", () => {
   it("is quiet when everything that should run does", () => {
     const services = { supervisor_running: true, instances: [instance("mysql-8.4", true, true), instance("pg", false, false)] };
     expect(trayState("running", services)).toEqual({ state: "running", tooltip: "Kiln: 1 service running" });
+  });
+});
+
+describe("a service's port", () => {
+  it("is the one apps connect to, not the first by name", () => {
+    const mailpit = { name: "mailpit-1", kind: "mailpit", version: "1.31.6", ports: { http: 8025, smtp: 1025 }, main_port: 1025, enabled: true, running: true, project: null };
+    expect(mainPort(mailpit)).toBe(1025);
   });
 });

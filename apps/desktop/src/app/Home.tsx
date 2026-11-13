@@ -19,8 +19,10 @@ export function serviceState(i: Instance): StatusState {
 }
 
 export function mainPort(i: Instance): number | undefined {
-  return Object.values(i.ports)[0];
+  return i.main_port ?? Object.values(i.ports)[0];
 }
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 // Home, from Kiln's own answers: what needs the user first, then sites, services and the
 // latest changes (ADR 0051 §4, ADR 0054 §5).
@@ -49,7 +51,7 @@ export function Home() {
         </Notice>
       )}
 
-      <Section title="Sites" meta={sites.data ? `${listed.length} sites · ${sites.data.proxies.length} proxies` : undefined}>
+      <Section title="Sites" meta={sites.data ? `${count(listed.length, "site", "sites")} · ${count(sites.data.proxies.length, "proxy", "proxies")}` : undefined}>
         {sites.error && <Empty>{sites.error}</Empty>}
         {sites.data && listed.length === 0 && sites.data.proxies.length === 0 && (
           <Empty>
@@ -66,6 +68,17 @@ export function Home() {
               <Tag>{s.driver}</Tag>
             </Detail>
             <Detail>{s.php?.version ? `PHP ${s.php.version}` : s.php ? "PHP: none installed" : "static"}</Detail>
+          </Row>
+        ))}
+        {sites.data?.proxies.map((p) => (
+          <Row key={p.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${p.host}`} icon={<Open16Regular />} onClick={() => openSite(p.host)} />}>
+            <RowName before={<LockClosed12Regular aria-label={p.url.startsWith("https") ? "HTTPS" : undefined} aria-hidden={p.url.startsWith("https") ? undefined : true} className={`shrink-0 text-text-3 ${p.url.startsWith("https") ? "" : "invisible"}`} />} sub={p.target ? `→ ${p.target}` : undefined} mono>
+              {p.host}
+            </RowName>
+            <Detail>
+              <Tag>proxy</Tag>
+            </Detail>
+            <Detail>{p.in_hosts ? "" : "not in the hosts file yet"}</Detail>
           </Row>
         ))}
       </Section>

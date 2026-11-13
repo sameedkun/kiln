@@ -38,6 +38,8 @@ export interface Instance {
   kind: string;
   version: string;
   ports: Record<string, number>;
+  /** The port apps connect to (for Mailpit, SMTP, not its web page). */
+  main_port: number | null;
   enabled: boolean;
   running: boolean;
   project: string | null;

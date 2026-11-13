@@ -99,10 +99,11 @@ the front. In the terminal:
 ```
 
 Expected: Windows' "Security Warning" about installing a certificate appears, in front or
-flashing on the taskbar. Note which. Click **Yes**. Then, with the job number it printed:
+flashing on the taskbar. Note which. Click **Yes**. Then, with the number `jobs.start`
+printed (`"job": 7` here; use yours):
 
 ```powershell
-.\target\release\kiln.exe daemon call jobs.get '{\"job\":1}'
+.\target\release\kiln.exe daemon call jobs.get '{\"job\":7}'
 ```
 
 `"ok": true` near the end means it worked.

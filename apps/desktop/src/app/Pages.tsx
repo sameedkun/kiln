@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Page } from "../components/Page";
 import { Section } from "../components/Rows";
-import { Select } from "../components/Select";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
 import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings } from "./api";
@@ -52,27 +51,24 @@ export function Settings() {
     <Page title="Settings">
       <Section title="Starting and closing">
         <SettingRow
-          title="When Kiln starts"
+          title="Start in the tray"
           control={
             settings && (
-              <Select
-                label="When Kiln starts"
+              <Switch
                 hideLabel
-                value={settings.start_in}
-                onChange={(e) => {
-                  const value = e.target.value as AppSettings["start_in"];
+                label="Start in the tray"
+                checked={settings.start_in === "tray"}
+                onChange={(on) => {
+                  const value: AppSettings["start_in"] = on ? "tray" : "window";
                   setSettings({ ...settings, start_in: value });
                   setStartIn(value);
                 }}
-                options={[
-                  { value: "window", label: "Open the window" },
-                  { value: "tray", label: "Stay in the tray" },
-                ]}
               />
             )
           }
         >
-          Starting at sign-in always stays in the tray. Closing the window leaves Kiln in the tray; Quit is in the tray's menu.
+          When you open Kiln, it starts in the background, in the tray, without its window. Starting at sign-in always does. Closing the window leaves Kiln in the tray; Quit
+          is in the tray's menu.
         </SettingRow>
         <SettingRow
           title="Start Kiln when I sign in"

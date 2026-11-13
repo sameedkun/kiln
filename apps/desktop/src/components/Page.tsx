@@ -36,7 +36,8 @@ export function Page({
         onScroll={(e) => setUnder(e.currentTarget.scrollTop > 4)}
         className="fade-top h-full overflow-auto pt-[66px] [scroll-padding-top:72px] [scrollbar-width:thin] focus:outline-none"
       >
-        <div className="max-w-[980px] px-7 pb-10">{children}</div>
+        {/* Rows use the window's width, maximised too; long text keeps its own measure. */}
+        <div className="px-7 pb-10">{children}</div>
       </div>
     </main>
   );

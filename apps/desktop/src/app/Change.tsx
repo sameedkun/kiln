@@ -72,7 +72,10 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
   };
 
   const previews = ask?.events.filter((e) => e.type === "preview") ?? [];
-  const notes = ask?.events.filter((e) => e.type === "note" || e.type === "warning") ?? [];
+  // What the command said before it asked; after the question comes only the preview run's
+  // own "Nothing was changed.", which reads wrong in a dialog that is still asking.
+  const asked = ask?.events.findIndex((e) => e.type === "confirm") ?? -1;
+  const notes = (asked >= 0 ? ask?.events.slice(0, asked) : ask?.events)?.filter((e) => e.type === "note" || e.type === "warning") ?? [];
   const question = ask?.events.find((e) => e.type === "confirm")?.question;
 
   return (
