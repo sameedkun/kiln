@@ -16,6 +16,17 @@ use std::rc::Rc;
 use kiln_ops::{Change, OpError, Operation, Preview, Receipt, Registry, Scope};
 use serde_json::{Value, json};
 
+/// What a login item's content starts, in words: Kiln's app (which starts the daemon) or
+/// the daemon itself (ADR 0054 §6).
+#[must_use]
+pub fn what_it_starts(content: &str) -> &'static str {
+    if content.contains("kiln-desktop") {
+        "Kiln's app (in the tray)"
+    } else {
+        "Kiln's daemon (kilnd)"
+    }
+}
+
 /// Journal kind of [`AutostartOp`].
 pub const AUTOSTART_KIND: &str = "daemon.autostart";
 
@@ -100,9 +111,9 @@ impl Operation for AutostartOp {
         let already = current.as_deref() == Some(self.content.as_str());
         Ok(Preview {
             summary: if already {
-                "Kiln's daemon already starts at login".into()
+                format!("{} already starts at login", what_it_starts(&self.content))
             } else {
-                "Start Kiln's daemon (kilnd) when you log in".into()
+                format!("Start {} when you log in", what_it_starts(&self.content))
             },
             changes: vec![Change {
                 target: self.item.location(),
@@ -350,6 +361,18 @@ pub fn register_autostart(registry: &mut Registry, item: Rc<dyn LoginItem>) {
 mod tests {
     use super::*;
     use kiln_ops::{Engine, MemoryJournal};
+
+    #[test]
+    fn previews_and_history_name_what_the_item_starts() {
+        assert_eq!(
+            what_it_starts(r#""C:Kilnkiln-desktop.exe" --background"#),
+            "Kiln's app (in the tray)"
+        );
+        assert_eq!(
+            what_it_starts(r#""C:Kilnkilnd.exe""#),
+            "Kiln's daemon (kilnd)"
+        );
+    }
 
     fn engine(item: Rc<dyn LoginItem>) -> Engine<MemoryJournal> {
         let mut registry = Registry::default();

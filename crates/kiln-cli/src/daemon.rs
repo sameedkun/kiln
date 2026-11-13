@@ -149,15 +149,14 @@ fn autostart_on(exe: &std::path::Path) -> bool {
         .is_some_and(|content| content == kiln_platform::autostart::content_for(exe))
 }
 
+/// What Kiln's login item starts: the app, the daemon, or nothing (ADR 0054 §6).
 fn print_autostart() {
-    let on = exe().is_ok_and(|exe| autostart_on(&exe));
+    let item =
+        kiln_platform::autostart::platform_item().and_then(|item| item.read().ok().flatten());
+    let kilnd = exe().ok();
     say!(
         "  Starts at login: {}",
-        if on {
-            "yes (`kiln daemon disable` turns it off)"
-        } else {
-            "no (`kiln daemon enable` turns it on)"
-        }
+        crate::app::login_item_says(item.as_deref(), kilnd.as_deref())
     );
 }
 

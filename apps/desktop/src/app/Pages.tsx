@@ -3,7 +3,9 @@ import { Page } from "../components/Page";
 import { Section } from "../components/Rows";
 import { Select } from "../components/Select";
 import { SettingRow } from "../components/SettingRow";
-import { setStartIn, settingsGet, type AppSettings } from "./api";
+import { Switch } from "../components/Switch";
+import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings } from "./api";
+import { useChanges } from "./Change";
 
 // Pages whose task hasn't connected them yet (ADR 0054 §5): what they will show, and the
 // command that does it until then. Never sample data.
@@ -31,9 +33,21 @@ export function NotYet({ page }: { page: string }) {
 // Settings: the app's own for now; Kiln's settings come with P4-07.
 export function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [item, setItem] = useState<Awaited<ReturnType<typeof loginItem>> | null>(null);
+  const { confirm } = useChanges();
   useEffect(() => {
     settingsGet().then(setSettings);
+    loginItem().then(setItem);
+    let stop: (() => void) | undefined;
+    onEvent((note) => note.method === "state.changed" && loginItem().then(setItem)).then((u) => (stop = u));
+    return () => stop?.();
   }, []);
+  const itemWords = {
+    app: "Starts Kiln's app in the tray, and the app starts Kiln's daemon.",
+    daemon: "Now only Kiln's daemon starts at sign-in. Turning this on starts the app instead, which starts the daemon.",
+    other: "Kiln's login item starts something else. Turning this on replaces it, and History can put it back.",
+    none: "Starts Kiln's app in the tray, and the app starts Kiln's daemon.",
+  };
   return (
     <Page title="Settings">
       <Section title="Starting and closing">
@@ -59,6 +73,27 @@ export function Settings() {
           }
         >
           Starting at sign-in always stays in the tray. Closing the window leaves Kiln in the tray; Quit is in the tray's menu.
+        </SettingRow>
+        <SettingRow
+          title="Start Kiln when I sign in"
+          control={
+            item && (
+              <Switch
+                hideLabel
+                label="Start Kiln when I sign in"
+                checked={item === "app"}
+                onChange={(on) =>
+                  confirm(
+                    on ? "Start Kiln when you sign in?" : "Stop starting Kiln at sign-in?",
+                    ["app", on ? "enable" : "disable"],
+                    on ? "Kiln now starts in the tray when you sign in." : "Nothing of Kiln's starts at sign-in now.",
+                  )
+                }
+              />
+            )
+          }
+        >
+          {item ? itemWords[item] : ""}
         </SettingRow>
       </Section>
     </Page>

@@ -214,9 +214,53 @@ fn fit_popup(height: f64, app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
 fn quit(app: AppHandle) {
-    remember_place(&app);
+    leave(&app);
+}
+
+/// What Kiln's login item starts (ADR 0054 §6): `app`, `daemon`, `other` or `none`.
+/// Changing it is `kiln app enable|disable`, a job with a preview.
+#[tauri::command]
+fn login_item() -> &'static str {
+    #[cfg(windows)]
+    {
+        let item = kiln_sys::win::read_user_reg_string(kiln_sys::win::USER_RUN_KEY, "Kiln")
+            .ok()
+            .flatten()
+            .map(|v| v.value);
+        let me = std::env::current_exe().ok();
+        login_item_kind(item.as_deref(), me.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        "none"
+    }
+}
+
+/// What a login item's content starts, against this app's path.
+fn login_item_kind(item: Option<&str>, me: Option<&std::path::Path>) -> &'static str {
+    let Some(item) = item else { return "none" };
+    let app = me.map(|me| format!("\"{}\" --background", me.display()));
+    if Some(item) == app.as_deref() {
+        "app"
+    } else if item.to_ascii_lowercase().contains("kilnd") {
+        "daemon"
+    } else {
+        "other"
+    }
+}
+
+/// Ends the app: its place remembered, its PID file gone. Kiln itself keeps running.
+fn leave(app: &AppHandle) {
+    remember_place(app);
+    if let Some(pid) = app.try_state::<Pid>() {
+        let _ = pid.0.remove();
+    }
     app.exit(0);
 }
+
+/// The PID file uninstall uses to stop the app before the daemon (ADR 0054 §2).
+#[derive(Debug)]
+struct Pid(kiln_sys::background::PidFile);
 
 // ---------- windows ----------
 
@@ -419,10 +463,7 @@ fn build_tray(app: &tauri::App, popup: bool) -> tauri::Result<()> {
             .menu(&Menu::with_items(app, &[&open, &quit])?)
             .on_menu_event(|app, event| match event.id().as_ref() {
                 "open" => open_main(app),
-                "quit" => {
-                    remember_place(app);
-                    app.exit(0);
-                }
+                "quit" => leave(app),
                 _ => {}
             });
     }
@@ -450,6 +491,7 @@ fn main() {
             set_tray,
             fit_popup,
             quit,
+            login_item,
         ])
         .setup(|app| {
             let paths = kiln_daemon::Paths::for_user().ok_or("cannot find Kiln's folders")?;
@@ -461,6 +503,15 @@ fn main() {
             // WebView2's profile inside Kiln's folder, so uninstall removes it (ADR 0054 §2).
             let webview_dir = paths.local.join("app").join("webview");
             let bridge = Arc::new(Bridge::new(paths.socket.clone(), kiln));
+            let pid = kiln_sys::background::PidFile::new(
+                paths.local.join("app").join("kiln-desktop.pid"),
+                std::env::current_exe()?,
+            );
+            if let Some(dir) = pid.path().parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            pid.write(std::process::id())?;
+            app.manage(Pid(pid));
             app.manage(Shell {
                 bridge: Arc::clone(&bridge),
                 settings_path,
@@ -515,6 +566,24 @@ fn main() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_login_item_is_named_for_what_it_starts() {
+        let me = std::path::Path::new(r"C:\Kiln\kiln-desktop.exe");
+        assert_eq!(login_item_kind(None, Some(me)), "none");
+        assert_eq!(
+            login_item_kind(Some(r#""C:\Kiln\kiln-desktop.exe" --background"#), Some(me)),
+            "app"
+        );
+        assert_eq!(
+            login_item_kind(Some(r#""C:\Kiln\kilnd.exe""#), Some(me)),
+            "daemon"
+        );
+        assert_eq!(
+            login_item_kind(Some(r#""C:\Other\thing.exe""#), Some(me)),
+            "other"
+        );
+    }
 
     #[test]
     fn a_site_opens_at_the_url_kilnd_gives_and_nothing_else() {

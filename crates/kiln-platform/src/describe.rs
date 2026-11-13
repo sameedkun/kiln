@@ -53,7 +53,8 @@ pub fn describe(kind: &str, params: &Value) -> String {
         ),
         SYSTEM_TRUST_KIND => "Kiln's root CA trusted machine-wide (system store)".to_owned(),
         AUTOSTART_KIND => format!(
-            "Kiln's daemon starts at login ({})",
+            "{} starts at login ({})",
+            crate::autostart::what_it_starts(params["content"].as_str().unwrap_or_default()),
             params["location"].as_str().unwrap_or("login items")
         ),
         PHP_EXT_KIND => format!(

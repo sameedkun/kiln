@@ -144,6 +144,8 @@ export interface AppSettings {
   close_notice_shown: boolean;
 }
 export const settingsGet = () => invoke<AppSettings>("settings_get");
+/** What Kiln's login item starts (ADR 0054 §6). */
+export const loginItem = () => invoke<"app" | "daemon" | "other" | "none">("login_item");
 export const setStartIn = (startIn: "window" | "tray") => invoke("set_start_in", { startIn });
 
 /** A job's error, or what a failed call said, in words for the page. */

@@ -669,6 +669,26 @@ Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is re
     if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
+    # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
+    $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'
+    $standIn = -not (Test-Path $app)
+    if ($standIn) { Copy-Item (Join-Path (Split-Path $Kiln) 'kilnd.exe') $app }
+    $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    try {
+        $before = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        Kiln app enable --yes | Out-Null
+        $now = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($now -ne "`"$app`" --background") { throw "the Run value is: $now" }
+        Expect "Kiln's app" (Kiln daemon status)
+        Expect "Kiln's app (in the tray) starts at login" (Kiln history)
+        Kiln undo --yes | Out-Null
+        $after = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($after -ne $before) { throw "undo left '$after', not '$before'" }
+    } finally {
+        if ($standIn) { Remove-Item $app -ErrorAction SilentlyContinue }
+    }
+}
 Check 'the services supervisor crashes: the daemon brings every service back' {
     # Kiln's own record of it: the first line of its PID file.
     $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"

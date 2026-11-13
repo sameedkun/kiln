@@ -257,25 +257,46 @@ mod system {
     ///
     /// [ADR 0026]: ../../../docs/adr/0026-kilnd-daemon-and-local-api.md
     pub fn autostart_enable(exe: &std::path::Path, yes: bool) -> Result<bool, String> {
-        use kiln_platform::autostart::{AutostartOp, content_for, platform_item};
+        login_item_enable(
+            &kiln_platform::autostart::content_for(exe),
+            &LoginWords {
+                already: "Kiln's daemon already starts when you log in.",
+                question: "Start Kiln's daemon when you log in? (`kiln daemon disable` turns it off)",
+                done: "Kiln's daemon now starts when you log in.",
+            },
+            yes,
+        )
+    }
+
+    /// What `login_item_enable` says, for the program it starts.
+    pub struct LoginWords {
+        pub already: &'static str,
+        pub question: &'static str,
+        pub done: &'static str,
+    }
+
+    /// Writes `content` into Kiln's login item (the `Kiln` Run value on Windows), as a
+    /// journaled operation with a preview and a confirmation. `kiln daemon enable` and
+    /// `kiln app enable` ([ADR 0054] §6) share the one item. `Ok(true)` if it changed now.
+    ///
+    /// [ADR 0054]: ../../../docs/adr/0054-desktop-app-shell.md
+    pub fn login_item_enable(content: &str, words: &LoginWords, yes: bool) -> Result<bool, String> {
+        use kiln_platform::autostart::{AutostartOp, platform_item};
         let item = platform_item().ok_or("cannot tell where login items go (no home folder)")?;
-        let content = content_for(exe);
-        if item.read().map_err(|e| e.to_string())?.as_deref() == Some(content.as_str()) {
-            say!("Kiln's daemon already starts when you log in.");
+        if item.read().map_err(|e| e.to_string())?.as_deref() == Some(content) {
+            say!("{}", words.already);
             return Ok(false);
         }
         let mut ctx = open()?;
-        let op: Box<dyn Operation> = Box::new(AutostartOp::new(content, item));
+        let op: Box<dyn Operation> = Box::new(AutostartOp::new(content.to_owned(), item));
         print_preview(&op.preview().map_err(|e| e.to_string())?, "(none)");
-        if !yes
-            && !confirm("Start Kiln's daemon when you log in? (`kiln daemon disable` turns it off)")
-        {
+        if !yes && !confirm(words.question) {
             say!("Nothing was changed.");
             return Ok(false);
         }
         ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
-        say!("Kiln's daemon now starts when you log in.");
+        say!("{}", words.done);
         Ok(true)
     }
 
@@ -783,8 +804,8 @@ pub fn ca_info() -> Result<(), String> {
 }
 
 pub use system::{
-    apply_quietly, autostart_disable, autostart_enable, ca_trust, hosts_set, revert_quietly,
-    shims_install, undo,
+    LoginWords, apply_quietly, autostart_disable, autostart_enable, ca_trust, hosts_set,
+    login_item_enable, revert_quietly, shims_install, undo,
 };
 
 /// Where `name` resolves on `path` (a `PATH` value), trying `PATHEXT` like a Windows shell.

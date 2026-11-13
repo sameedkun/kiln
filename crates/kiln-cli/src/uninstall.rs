@@ -344,6 +344,10 @@ fn keep_data(data: &[(PathBuf, u64)]) -> Result<PathBuf, String> {
 
 /// Stops what Kiln runs: the daemon first, so it doesn't restart what is stopped next.
 fn stop_everything() -> Result<(), String> {
+    // The app first: it would start the daemon again (ADR 0054 §2).
+    if let Some(pid) = crate::app::stop_quietly()? {
+        say!("Stopped Kiln's app (PID {pid}).");
+    }
     if crate::daemon::stop_quietly()? {
         say!("Stopped Kiln's daemon.");
     }

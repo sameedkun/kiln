@@ -53,8 +53,25 @@ in a browser drive the Microsoft Edge that Windows already has; no browser is do
 
 ### The desktop app (`apps/desktop`)
 
-The frontend: TypeScript, React, Vite and Tailwind. Tauri joins in P4-03. Its design is
-[ADR 0051](adr/0051-desktop-visual-design.md).
+The frontend (TypeScript, React, Vite, Tailwind) and, in `src-tauri`, the Tauri 2 app around
+it ([ADR 0054](adr/0054-desktop-app-shell.md)). Its design is [ADR 0051](adr/0051-desktop-visual-design.md).
+
+`src-tauri` is its own Cargo project, not a workspace member (Linux CI can't build Tauri, and
+the app is Windows-only for now). It builds into the workspace's `target` folder, so
+`kiln-desktop.exe` sits next to `kiln.exe` and `kilnd.exe`, which it runs. It has its own
+`Cargo.lock` and `deny.toml` (the workspace's policy, plus named MPL-2.0 exceptions).
+
+To build and run the app:
+
+```sh
+cargo build --workspace --bins        # kiln and kilnd, next to the app
+cd apps/desktop && npm run build      # the pages the app embeds
+cd src-tauri && cargo build           # target/debug/kiln-desktop.exe
+```
+
+`cargo build --no-default-features` in `src-tauri` makes an app that loads the dev server
+(`npm run dev`) instead. The app's pages are `index.html` (the main window, and `#tray` for
+the popup); the design gallery is `gallery.html`.
 
 | Path | Role |
 |---|---|
@@ -62,6 +79,8 @@ The frontend: TypeScript, React, Vite and Tailwind. Tauri joins in P4-03. Its de
 | `src/styles/app.css` | Tailwind's names for those values; the one glass recipe (`glass`, `glass-pop`), the backdrop, the fade under the page header |
 | `src/appearance.ts` | The one place that sets the theme and transparency (`setAppearance`) |
 | `src/components/` | Base components: title bar, sidebar, page, notice, rows, buttons, status, tag, switch, text field, menu, dialog, toast, tray popup |
+| `src/app/` | The app's pages: `api.ts` (every call to `kilnd`, jobs, events), the main window, Home, Settings, the tray popup, the preview dialog for changes |
+| `src-tauri/` | The Tauri app: `bridge.rs` (calls and events), `placement.rs` (where the popup goes), `settings.rs` (`%APPDATA%\Kiln\app.json`), `main.rs` (windows, tray, commands) |
 | `src/gallery/` | The design gallery: every screen of the app (`screens/`, clickable; `?page=sites`, `?page=site:shop.test`…), the tray popup and the components, with sample data (`sample.ts`) that drafts the API's shapes |
 | `src/styles/contrast.test.ts` | Contrast measured from the design values: each fill blended over the backdrop, WCAG AA |
 | `e2e/gallery.spec.ts` | axe in Edge in each appearance and high contrast; screenshots under `test-results/` |

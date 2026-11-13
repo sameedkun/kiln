@@ -2140,6 +2140,7 @@ name = "kiln-desktop"
 version = "0.0.0"
 dependencies = [
  "kiln-daemon",
+ "kiln-sys",
  "serde",
  "serde_json",
  "tauri",

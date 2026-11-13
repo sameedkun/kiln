@@ -12,6 +12,7 @@ use kiln_platform::hosts;
 // First: its `say!` and `say_err!` macros are used by every module after it.
 #[macro_use]
 mod out;
+mod app;
 mod apply;
 mod coexist;
 mod daemon;
@@ -204,6 +205,11 @@ enum Command {
         #[command(subcommand)]
         action: ServicesAction,
     },
+    /// Kiln's desktop app (Windows): start it in the tray when you sign in.
+    App {
+        #[command(subcommand)]
+        action: AppAction,
+    },
     /// Kiln's optional background daemon (kilnd): keeps the web server running.
     Daemon {
         #[command(subcommand)]
@@ -379,6 +385,21 @@ enum ServicesAction {
     /// or a reboot). Kiln's daemon runs this; it starts nothing that was stopped.
     #[command(hide = true)]
     Resume,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+enum AppAction {
+    /// Start Kiln's app in the tray when you sign in; it starts the daemon too. Takes over
+    /// Kiln's login item from `kiln daemon enable` (journaled, undoable).
+    Enable {
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Start nothing of Kiln's at sign-in (the app's item and the daemon's).
+    Disable {
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1034,14 +1055,26 @@ fn run(command: Command) -> Result<(), String> {
         Command::Import {
             from: ImportFrom::Herd { path, force },
         } => project::import_herd(path, force),
-        Command::Daemon { action } => match action {
-            DaemonAction::Start => daemon::start(),
-            DaemonAction::Stop => daemon::stop(),
-            DaemonAction::Status => daemon::status(),
-            DaemonAction::Enable { yes } => daemon::enable(yes),
-            DaemonAction::Disable { yes } => daemon::disable(yes),
-            DaemonAction::Call { method, params } => daemon::call(&method, params.as_deref()),
-        },
+        Command::App { action } => run_app(action),
+        Command::Daemon { action } => run_daemon(action),
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
+    }
+}
+
+fn run_app(action: AppAction) -> Result<(), String> {
+    match action {
+        AppAction::Enable { yes } => app::enable(yes),
+        AppAction::Disable { yes } => app::disable(yes),
+    }
+}
+
+fn run_daemon(action: DaemonAction) -> Result<(), String> {
+    match action {
+        DaemonAction::Start => daemon::start(),
+        DaemonAction::Stop => daemon::stop(),
+        DaemonAction::Status => daemon::status(),
+        DaemonAction::Enable { yes } => daemon::enable(yes),
+        DaemonAction::Disable { yes } => daemon::disable(yes),
+        DaemonAction::Call { method, params } => daemon::call(&method, params.as_deref()),
     }
 }
