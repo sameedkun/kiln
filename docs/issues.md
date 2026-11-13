@@ -1354,3 +1354,15 @@ commits and PRs.
   supervisor's restart lines.
 - **Fix later:** the supervisor writes each worker's state (running since, restarts) beside
   `pools.json`, and Kiln reads it instead of guessing.
+
+### I-95: A script edit pasted copies of the Scenario into itself (fixed)
+
+- **Seen:** 2026-11-13, the Scenario for P4-10 stopped before its first check with a
+  PowerShell parse error.
+- **Cause:** an edit made with JavaScript's `String.replace` put `$'` in the replacement
+  text (in the regular expression `debug\s*$'`), which JavaScript reads as "the text after
+  the match", so the script's tail was pasted in three more times.
+- **Fix:** the script was cut back to its own end, and CI's first job now parses every
+  `tests/ci` and `tests/vm` script, so a syntax error shows in a minute rather than after a
+  ten-minute Scenario. Edits with `$` in them go through a function replacement or the Edit
+  tool.

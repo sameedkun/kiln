@@ -41,6 +41,18 @@ jobs:
             fi
           done
           exit $status
+      # The scenario scripts run only for their paths and nightly: a syntax error should
+      # show here, in a minute.
+      - name: the CI scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem tests/ci, tests/vm -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue) {
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+            foreach ($e in $errors) { Write-Output "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
 
   test:
     name: test (${{ matrix.os }})

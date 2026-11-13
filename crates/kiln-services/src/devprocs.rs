@@ -310,9 +310,152 @@ impl ServiceProvider for Vite {
     }
 }
 
+/// Symfony `VarDumper`'s dump server ([ADR 0062]): `dump()` output from the project's
+/// requests, sent to it instead of into the page, and kept in its log for the Logs page and the
+/// site's Dumps tab. The project brings it: `symfony/var-dumper`, which Laravel requires.
+///
+/// [ADR 0062]: ../../../docs/adr/0062-dump-capture.md
+#[derive(Debug)]
+pub struct Dumps;
+
+const DUMPS_PORTS: &[PortRole] = &[PortRole {
+    role: "dumps",
+    usual: 9912,
+    what: "where the project sends dump() output",
+}];
+
+/// Where the dump server's command line is in a project.
+const DUMP_SERVER: &str = "vendor/symfony/var-dumper/Resources/bin/var-dump-server";
+
+fn dumps_port(ports: &BTreeMap<String, u16>) -> u16 {
+    ports
+        .get(DUMPS_PORTS[0].role)
+        .copied()
+        .unwrap_or(DUMPS_PORTS[0].usual)
+}
+
+impl ServiceProvider for Dumps {
+    fn kind(&self) -> &'static str {
+        "dumps"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Dumps"
+    }
+
+    fn license(&self) -> &'static str {
+        "MIT, the project's own symfony/var-dumper"
+    }
+
+    fn ports(&self) -> &'static [PortRole] {
+        DUMPS_PORTS
+    }
+
+    fn releases(&self) -> &'static [Release] {
+        &[]
+    }
+
+    fn executable_name(&self) -> &'static str {
+        "php"
+    }
+
+    fn runs_in_project(&self) -> bool {
+        true
+    }
+
+    fn project_version(&self, project: &Path) -> Result<String, String> {
+        if !project.join(DUMP_SERVER).is_file() {
+            return Err(format!(
+                "{} has no Symfony dump server: run `composer require --dev symfony/var-dumper` there first (Laravel projects have it after `composer install`)",
+                project.display()
+            ));
+        }
+        composer_version(project, "symfony/var-dumper").ok_or_else(|| {
+            format!(
+                "cannot read symfony/var-dumper's version from {}'s composer.lock",
+                project.display()
+            )
+        })
+    }
+
+    fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
+        log_folder(dirs)
+    }
+
+    /// Not used: an instance starts through [`Dumps::project_launch`].
+    fn launch(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Launch {
+        Launch {
+            program: dirs.bin.join("php"),
+            ..Launch::default()
+        }
+    }
+
+    /// `php vendor/symfony/var-dumper/Resources/bin/var-dump-server` on 127.0.0.1, printing
+    /// each dump as text (with where it came from) into its log.
+    fn project_launch(
+        &self,
+        project: &Path,
+        runtime: &Path,
+        ports: &BTreeMap<String, u16>,
+    ) -> Option<Launch> {
+        Some(Launch {
+            program: runtime.to_path_buf(),
+            args: vec![
+                DUMP_SERVER.to_owned(),
+                format!("--host=127.0.0.1:{}", dumps_port(ports)),
+                "--format=cli".to_owned(),
+            ],
+            env: BTreeMap::new(),
+            cwd: Some(project.to_path_buf()),
+            stop_command: None,
+        })
+    }
+
+    /// `dump()` goes to the server instead of the page. `dd()` still ends the request.
+    fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
+        vec![
+            ("VAR_DUMPER_FORMAT", "server".to_owned()),
+            (
+                "VAR_DUMPER_SERVER",
+                format!("127.0.0.1:{}", dumps_port(ports)),
+            ),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_dump_server_runs_from_vendor_on_loopback_and_is_wired_by_env() {
+        let ports = BTreeMap::from([("dumps".to_owned(), 9913)]);
+        let launch = Dumps
+            .project_launch(Path::new("/sites/shop"), Path::new("/k/php/php"), &ports)
+            .unwrap();
+        assert_eq!(
+            launch.args,
+            [
+                "vendor/symfony/var-dumper/Resources/bin/var-dump-server",
+                "--host=127.0.0.1:9913",
+                "--format=cli"
+            ]
+        );
+        assert_eq!(
+            Dumps.env_keys(&ports),
+            [
+                ("VAR_DUMPER_FORMAT", "server".to_owned()),
+                ("VAR_DUMPER_SERVER", "127.0.0.1:9913".to_owned())
+            ]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            Dumps
+                .project_version(dir.path())
+                .unwrap_err()
+                .contains("symfony/var-dumper")
+        );
+    }
 
     #[test]
     fn laravel_processes_run_artisan_in_the_project() {

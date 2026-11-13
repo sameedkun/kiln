@@ -9,7 +9,7 @@ import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { openFolder, type EnvShow, type LogSources, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { call, openFolder, type EnvShow, type LogSources, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
@@ -93,6 +93,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         tabs={[
           { id: "overview", label: "Overview" },
           { id: "logs", label: "Logs" },
+          { id: "dumps", label: "Dumps" },
           { id: "env", label: ".env" },
         ]}
         current={tab}
@@ -102,6 +103,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         <SiteEnv site={site} />
       ) : tab === "logs" ? (
         <SiteLog host={site.host} />
+      ) : tab === "dumps" ? (
+        <SiteDumps site={site} />
       ) : (
       <>
       <Section title="How it runs">
@@ -229,12 +232,13 @@ export const processes: { kind: string; label: string; what: string; laravel: bo
   { kind: "queue", label: "Queue worker", what: "Runs queued jobs (php artisan queue:listen), picking up code changes.", laravel: true },
   { kind: "scheduler", label: "Scheduler", what: "Runs the schedule every minute (php artisan schedule:work).", laravel: true },
   { kind: "vite", label: "Vite", what: "Serves scripts and styles with hot reload, from the project's node_modules.", laravel: false },
+  { kind: "dumps", label: "Dumps", what: "Collects dump() output here instead of in the page (its .env sends it), shown in the Dumps tab.", laravel: true },
 ];
 
 /** The queue worker, scheduler and Vite for this site's project: started here, kept up by Kiln. */
 function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void }) {
   const services = useRead<ServicesList>("services.list");
-  const { run, ask } = useChanges();
+  const { run, ask, confirm } = useChanges();
   if (site.source === "alias") return null;
   const shown = processes.filter((p) => !p.laravel || site.driver === "laravel");
   return (
@@ -244,7 +248,14 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
         const port = instance && Object.values(instance.ports)[0];
         const toggle = instance
           ? () => run(["service", instance.enabled ? "stop" : "start", instance.name], `${instance.enabled ? "Stopped" : "Started"} the ${p.label.toLowerCase()} for ${site.host}.`)
-          : () => run(["service", "add", p.kind, "--project", site.project], `The ${p.label.toLowerCase()} runs for ${site.host} now.`);
+          : async () => {
+              if (!(await run(["service", "add", p.kind, "--project", site.project], `The ${p.label.toLowerCase()} runs for ${site.host} now.`))) return;
+              // A process with .env keys (the dump server) is wired through its preview.
+              if (p.kind !== "dumps") return;
+              const now = await call<ServicesList>("services.list").catch(() => null);
+              const added = now?.instances.find((i) => i.kind === p.kind && i.project === site.project);
+              if (added) confirm(`Send ${site.host}'s dumps to Kiln?`, ["env", "use", added.name], `${site.host}'s dump() output shows in its Dumps tab now.`);
+            };
         return (
           <Row
             key={p.kind}
@@ -288,6 +299,21 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
       })}
     </Section>
   );
+}
+
+/** What the site's dump() calls sent to its dump server (ADR 0062). */
+function SiteDumps({ site }: { site: Site }) {
+  const services = useRead<ServicesList>("services.list");
+  if (!services.data) return null;
+  const dumps = services.data.instances.find((i) => i.kind === "dumps" && i.project === site.project);
+  if (!dumps) {
+    return (
+      <p className="m-0 px-1 text-[13px] text-text-2">
+        Start Dumps under Dev processes on the Overview tab: dump() output from {site.host} then shows here, with the file and line it came from, instead of in the page.
+      </p>
+    );
+  }
+  return <LogPanel source={`service:${dumps.name}`} label={`${site.host}'s dumps`} />;
 }
 
 /** The site's own log: the newest in its storage/logs (ADR 0059 §4). */

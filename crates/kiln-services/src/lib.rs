@@ -395,7 +395,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 12] = [
+    static PROVIDERS: [&dyn ServiceProvider; 13] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -408,6 +408,7 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &devprocs::Queue,
         &devprocs::Scheduler,
         &devprocs::Vite,
+        &devprocs::Dumps,
     ];
     &PROVIDERS
 }
@@ -688,8 +689,9 @@ mod contract {
                     .strip_prefix("--host=")
                     .or_else(|| arg.strip_prefix("--bind_ip="))
                 {
+                    // An address alone, or with its port (the dump server's `--host=`).
                     assert!(
-                        host == "127.0.0.1" || host == "::1",
+                        host == "127.0.0.1" || host == "::1" || host.starts_with("127.0.0.1:"),
                         "{}: {arg}",
                         provider.kind()
                     );
@@ -700,6 +702,8 @@ mod contract {
                     && !host.is_empty()
                     && !host.contains(['/', '\\'])
                 {
+                    // An option's value: `--host=127.0.0.1:9912` names 127.0.0.1.
+                    let host = host.rsplit_once('=').map_or(host, |(_, h)| h);
                     assert!(
                         host == "127.0.0.1" || host == "[::1]" || host == "localhost",
                         "{}: {arg}",
