@@ -222,7 +222,7 @@ request (2026-11-12).
 | P4-03 | The app's shell: Tauri 2 in `apps/desktop`; tray icon with state and menu; close to tray; one instance; starts at login and starts `kilnd` (one journaled login item) | P4-01 | ADR 0050 §2; [ADR 0054](adr/0054-desktop-app-shell.md); **Done** 2026-11-13 (by-hand check: `tests/manual/app-check.md`) |
 | P4-04 | Sites, PHP and Node pages | P4-03 | [ADR 0055](adr/0055-sites-php-node-pages.md); **Done** 2026-11-13 |
 | P4-05 | Services page: the catalog with download progress, instances, ports, logs, wiring a project, dump and restore, the data tools | P4-03 | [ADR 0056](adr/0056-services-page.md); in progress |
-| P4-06 | First-run onboarding: each system change previewed, consent per change | P4-03 | ADR 0004 previews |
+| P4-06 | First-run onboarding: each system change previewed, consent per change | P4-03 | ADR 0004 previews; [ADR 0057](adr/0057-first-run-onboarding.md); in progress |
 | P4-07 | History with undo, doctor and settings pages | P4-03 | |
 | P4-08 | Log viewer: Caddy, PHP errors per site, services, `kilnd`; follow live | P4-03 | |
 | P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047 |

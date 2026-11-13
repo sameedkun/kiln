@@ -288,6 +288,7 @@ impl Daemon {
         "jobs.list",
         "services.logs",
         "env.show",
+        "setup.status",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -836,6 +837,7 @@ impl Handler for Daemon {
                 }
             }
             "doctor.report" => self.read(&["doctor"]),
+            "setup.status" => self.read(&["setup"]),
             "services.logs" => self.service_logs(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),

@@ -33,6 +33,8 @@ pub struct Settings {
     pub start_in: StartIn,
     /// The first close explains that Kiln keeps running in the tray; once.
     pub close_notice_shown: bool,
+    /// "Not now" on first-run onboarding (ADR 0057 §3): it doesn't open on its own again.
+    pub onboarding_dismissed: bool,
     pub window: Option<Place>,
 }
 
@@ -83,6 +85,7 @@ mod tests {
         let settings = Settings {
             start_in: StartIn::Tray,
             close_notice_shown: true,
+            onboarding_dismissed: false,
             window: Some(Place {
                 x: 10,
                 y: 20,

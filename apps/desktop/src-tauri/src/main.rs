@@ -255,6 +255,13 @@ fn set_start_in(start_in: StartIn, shell: State<'_, Shell>) {
     shell.update(|s| s.start_in = start_in);
 }
 
+/// Remembers that onboarding was dismissed, or done (ADR 0057 §3).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+fn set_onboarding_dismissed(dismissed: bool, shell: State<'_, Shell>) {
+    shell.update(|s| s.onboarding_dismissed = dismissed);
+}
+
 /// The tray icon's look and tooltip, from what the pages know: `running`, `attention` or
 /// `stopped`.
 #[tauri::command]
@@ -570,6 +577,7 @@ fn main() {
             hide_tray_popup,
             settings_get,
             set_start_in,
+            set_onboarding_dismissed,
             set_tray,
             fit_popup,
             quit,

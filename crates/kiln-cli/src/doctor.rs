@@ -72,6 +72,101 @@ fn gather() -> Facts {
 }
 
 /// The database as it is: no migration, no journal import (the doctor changes nothing).
+/// `kiln setup` ([ADR 0057] §1): what first-run onboarding asks about, from the same facts
+/// `kiln doctor` gathers. Reads only.
+///
+/// [ADR 0057]: ../../../docs/adr/0057-first-run-onboarding.md
+pub fn setup() -> Result<(), String> {
+    let store = open_read_only()?;
+    let web = web_facts(&store);
+    let php: Vec<String> = store
+        .php_versions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|r| kiln_php::is_installed(&r.dir))
+        .map(|r| r.version)
+        .collect();
+    let default_php = store
+        .setting(crate::pool::DEFAULT_KEY)
+        .map_err(|e| e.to_string())?;
+    let local = kiln_state::default_local_dir();
+    let composer = local
+        .as_ref()
+        .is_some_and(|l| l.join(kiln_runtime::shim::COMPOSER_PHAR).is_file());
+    let node = local
+        .as_ref()
+        .map(|l| kiln_node::installed(&l.join(kiln_runtime::node::NODE_DIR)).len())
+        .unwrap_or_default();
+    let ca = certificates();
+    let mut hosts: Vec<String> = web::resolved(&store)
+        .map(|all| all.sites.iter().map(|s| s.host.to_string()).collect())
+        .unwrap_or_default();
+    hosts.extend(
+        web::proxy_specs(&store)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| p.host.to_string()),
+    );
+    let listed = web::hosts_names();
+    let missing: Vec<&String> = hosts.iter().filter(|h| !listed.contains(h)).collect();
+    let applied: Vec<String> = kiln_ops::Journal::entries(&store)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.state == OpState::Applied)
+        .map(|e| e.kind)
+        .collect();
+    let shims_on_path = applied.iter().any(|k| {
+        k == kiln_platform::user_path::USER_PATH_KIND
+            || k == kiln_platform::shell_profile::SHELL_PROFILE_KIND
+    });
+    let login_item = crate::app::login_item_kind();
+    let ready = web.installed && !php.is_empty();
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "ready": ready,
+            "web": {"installed": web.installed, "running": web.running_pid.is_some()},
+            "php": {"versions": php, "default": default_php},
+            "composer": composer,
+            "node": node,
+            "ca": {"exists": ca.root_present, "trusted": ca.trusted},
+            "hosts": {"sites": hosts.len(), "missing": missing},
+            "shims_on_path": shims_on_path,
+            "login_item": login_item,
+        }));
+        return Ok(());
+    }
+    let mark = |done: bool| if done { "done" } else { "not yet" };
+    say!("Web server:        {}", mark(web.installed));
+    say!(
+        "PHP:               {}",
+        if php.is_empty() {
+            "not yet".to_owned()
+        } else {
+            php.join(", ")
+        }
+    );
+    say!("Composer:          {}", mark(composer));
+    say!(
+        "HTTPS (Kiln's CA): {}",
+        match (ca.root_present, ca.trusted) {
+            (false, _) => "not yet",
+            (true, Some(false)) => "made, not trusted yet",
+            (true, _) => "done",
+        }
+    );
+    say!(
+        "Hosts file:        {}",
+        if missing.is_empty() {
+            "every site is in it".to_owned()
+        } else {
+            format!("{} site(s) missing (`kiln hosts sync`)", missing.len())
+        }
+    );
+    say!("Shims on PATH:     {}", mark(shims_on_path));
+    say!("Starts at sign-in: {login_item}");
+    Ok(())
+}
+
 fn open_read_only() -> Result<StateStore, String> {
     let dir = kiln_state::default_state_dir().ok_or("cannot determine the state directory")?;
     let db = dir.join(kiln_state::DB_FILE);

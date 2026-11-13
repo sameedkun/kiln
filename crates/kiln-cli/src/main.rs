@@ -121,6 +121,9 @@ enum Command {
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
     Doctor,
+    /// What's set up and what isn't yet: the web server, PHP, HTTPS, the hosts file, the shims,
+    /// starting at sign-in. What first-run onboarding asks about (ADR 0057). Changes nothing.
+    Setup,
     /// Show what `php`, `composer` and `node` run in a folder (default: the current one), and
     /// why.
     Which { path: Option<PathBuf> },
@@ -741,6 +744,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Which { .. }
             | Command::History { .. }
             | Command::Doctor
+            | Command::Setup
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -982,6 +986,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
 fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Doctor => unreachable!("handled in main"),
+        Command::Setup => doctor::setup(),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, tld.as_deref(), file),

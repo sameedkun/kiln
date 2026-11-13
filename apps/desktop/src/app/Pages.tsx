@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Button } from "../components/Button";
 import { Page } from "../components/Page";
 import { Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
@@ -26,7 +27,7 @@ export function NotYet({ page }: { page: string }) {
 }
 
 // Settings: the app's own for now; Kiln's settings come with P4-07.
-export function Settings() {
+export function Settings({ setUp }: { setUp: () => void }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [item, setItem] = useState<Awaited<ReturnType<typeof loginItem>> | null>(null);
   const { confirm } = useChanges();
@@ -45,6 +46,11 @@ export function Settings() {
   };
   return (
     <Page title="Settings">
+      <Section title="Set-up">
+        <SettingRow title="Set up Kiln" control={<Button size="sm" onClick={setUp}>Open…</Button>}>
+          The first-run steps: the web server, PHP, HTTPS, your projects, the terminal and starting at sign-in. Steps already done say so.
+        </SettingRow>
+      </Section>
       <Section title="Starting and closing">
         <SettingRow
           title="Start in the tray"

@@ -144,3 +144,37 @@ describe("the Services page's helpers (ADR 0056)", async () => {
     for (const bad of ["--all", "-x", "a b", "../x", "x;drop"]) expect(databaseName(bad), bad).toBeNull();
   });
 });
+
+describe("first-run onboarding (ADR 0057)", async () => {
+  const { steps, nextStep } = await import("./Onboarding");
+  const fresh = {
+    ready: false,
+    web: { installed: false, running: false },
+    php: { versions: [], default: null },
+    composer: false,
+    node: 0,
+    ca: { exists: false, trusted: null },
+    hosts: { sites: 0, missing: [] },
+    shims_on_path: false,
+    login_item: "none" as const,
+  };
+  const at = (id: string) => steps.findIndex((s) => s.id === id);
+
+  it("walks every step on a fresh PC", () => {
+    expect(nextStep(fresh, at("welcome"))).toBe(at("web"));
+    expect(nextStep(fresh, at("web"))).toBe(at("php"));
+  });
+
+  it("skips what's already done", () => {
+    const halfway = { ...fresh, web: { installed: true, running: true }, php: { versions: ["8.4.27"], default: "8.4.27" }, ca: { exists: true, trusted: true } };
+    expect(nextStep(halfway, at("welcome"))).toBe(at("projects"));
+    const finished = { ...halfway, hosts: { sites: 2, missing: [] }, shims_on_path: true, login_item: "app" as const };
+    expect(nextStep(finished, at("welcome"))).toBe(at("done"));
+  });
+
+  it("doesn't count HTTPS done while Windows doesn't trust the CA", () => {
+    const https = steps[at("https")];
+    expect(https.done({ ...fresh, ca: { exists: true, trusted: false } })).toBe(false);
+    expect(https.done({ ...fresh, ca: { exists: true, trusted: true } })).toBe(true);
+  });
+});

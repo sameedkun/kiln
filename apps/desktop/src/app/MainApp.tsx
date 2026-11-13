@@ -15,8 +15,9 @@ import { Dialog } from "../components/Dialog";
 import { Sidebar, type NavItem } from "../components/Sidebar";
 import { Dot } from "../components/Status";
 import { TitleBar } from "../components/TitleBar";
-import { closeNoticeRead, setTray, windowAction, type DaemonState, type ServicesList, type SitesList } from "./api";
+import { closeNoticeRead, setTray, windowAction, type DaemonState, type ServicesList, type SitesList, call, settingsGet, type SetupStatus } from "./api";
 import { Home } from "./Home";
+import { Onboarding } from "./Onboarding";
 import { useDaemon, useRead } from "./hooks";
 import { NotYet, Settings } from "./Pages";
 import { NodePage, PhpPage } from "./RuntimePages";
@@ -24,7 +25,7 @@ import { SitePage } from "./SitePage";
 import { ServicesPage } from "./ServicesPage";
 import { SitesPage } from "./SitesPage";
 
-function Screen({ page, go }: { page: string; go: (page: string) => void }) {
+function Screen({ page, go, setUp }: { page: string; go: (page: string) => void; setUp: () => void }) {
   if (page.startsWith("site:")) return <SitePage host={page.slice(5)} go={go} />;
   switch (page) {
     case "home":
@@ -38,7 +39,7 @@ function Screen({ page, go }: { page: string; go: (page: string) => void }) {
     case "node":
       return <NodePage />;
     case "settings":
-      return <Settings />;
+      return <Settings setUp={setUp} />;
     default:
       return <NotYet page={page} />;
   }
@@ -66,6 +67,8 @@ const daemonWords: Record<Exclude<DaemonState, "running">, string> = {
 export function MainApp() {
   const [page, setPage] = useState("home");
   const [firstClose, setFirstClose] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
+  const [askedSetUp, setAskedSetUp] = useState(false);
   const daemon = useDaemon();
   const sites = useRead<SitesList>("sites.list");
   const services = useRead<ServicesList>("services.list");
@@ -74,6 +77,16 @@ export function MainApp() {
     const { state, tooltip } = trayState(daemon, services.data);
     setTray(state, tooltip);
   }, [daemon, services.data]);
+
+  // First run (ADR 0057 §3): once the daemon answers, onboarding opens if Kiln isn't set up
+  // and the user hasn't said "Not now".
+  useEffect(() => {
+    if (daemon !== "running" || askedSetUp) return;
+    setAskedSetUp(true);
+    Promise.all([call<SetupStatus>("setup.status"), settingsGet()])
+      .then(([status, settings]) => !status.ready && !settings.onboarding_dismissed && setOnboarding(true))
+      .catch(() => {});
+  }, [daemon, askedSetUp]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -93,7 +106,7 @@ export function MainApp() {
   ];
 
   return (
-    <div className="backdrop grid h-screen w-screen grid-rows-[44px_1fr] overflow-hidden">
+    <div className="backdrop relative grid h-screen w-screen grid-rows-[44px_1fr] overflow-hidden">
       <TitleBar onMinimise={() => windowAction("minimise")} onMaximise={() => windowAction("maximise")} onClose={() => windowAction("close")} />
       <div className="grid min-h-0 grid-cols-[220px_1fr] gap-2 px-2 pb-2">
         <Sidebar
@@ -116,9 +129,11 @@ export function MainApp() {
           ) : (
             <span />
           )}
-          <Screen key={page} page={page} go={setPage} />
+          <Screen key={page} page={page} go={setPage} setUp={() => setOnboarding(true)} />
         </div>
       </div>
+
+      {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
 
       <Dialog
         open={firstClose}

@@ -77,6 +77,26 @@ pub fn stop_quietly() -> Result<Option<u32>, String> {
         .map_err(|e| format!("cannot stop Kiln's app: {e}"))
 }
 
+/// What Kiln's login item starts now: `app`, `daemon`, `other` or `none` (ADR 0057).
+#[must_use]
+pub fn login_item_kind() -> &'static str {
+    let item =
+        kiln_platform::autostart::platform_item().and_then(|item| item.read().ok().flatten());
+    let Some(item) = item else { return "none" };
+    let me = std::env::current_exe().ok();
+    let app = me.as_ref().map(|m| content(&m.with_file_name(APP_EXE)));
+    let daemon = me
+        .as_ref()
+        .map(|m| kiln_platform::autostart::content_for(&m.with_file_name(kiln_daemon::EXE_NAME)));
+    if Some(&item) == app.as_ref() {
+        "app"
+    } else if Some(&item) == daemon.as_ref() {
+        "daemon"
+    } else {
+        "other"
+    }
+}
+
 /// What the login item starts, in words for `kiln daemon status`.
 #[must_use]
 pub fn login_item_says(item: Option<&str>, kilnd: Option<&Path>) -> String {

@@ -89,6 +89,19 @@ export interface EnvShow {
   keys: { key: string; value: string; secret: boolean; kiln: boolean }[];
 }
 
+/** What's set up (`kiln setup`, ADR 0057 §1). */
+export interface SetupStatus {
+  ready: boolean;
+  web: { installed: boolean; running: boolean };
+  php: { versions: string[]; default: string | null };
+  composer: boolean;
+  node: number;
+  ca: { exists: boolean; trusted: boolean | null };
+  hosts: { sites: number; missing: string[] };
+  shims_on_path: boolean;
+  login_item: "app" | "daemon" | "other" | "none";
+}
+
 export interface PhpList {
   default: string | null;
   versions: { version: string; dir: string; installed: boolean; system: boolean }[];
@@ -217,10 +230,12 @@ export const fitPopup = (height: number) => invoke("fit_popup", { height });
 export interface AppSettings {
   start_in: "window" | "tray";
   close_notice_shown: boolean;
+  onboarding_dismissed: boolean;
 }
 export const settingsGet = () => invoke<AppSettings>("settings_get");
 /** What Kiln's login item starts (ADR 0054 §6). */
 export const loginItem = () => invoke<"app" | "daemon" | "other" | "none">("login_item");
+export const setOnboardingDismissed = (dismissed: boolean) => invoke("set_onboarding_dismissed", { dismissed });
 export const setStartIn = (startIn: "window" | "tray") => invoke("set_start_in", { startIn });
 
 /** A job's error, or what a failed call said, in words for the page. */

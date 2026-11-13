@@ -650,6 +650,15 @@ Check 'kiln env show: the project''s .env, secrets hidden, Kiln''s keys marked i
     if ($refused -notmatch "isn't the folder of one of Kiln's sites") { throw "a folder outside Kiln's sites was read:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+Check 'kiln setup: what onboarding asks about, as it is on this runner (ADR 0057)' {
+    $setup = (JsonLines @(& $Kiln --json setup))[-1].data
+    if (-not $setup.ready) { throw "not ready: $($setup | ConvertTo-Json -Depth 4)" }
+    if (-not ($setup.web.installed -and $setup.web.running)) { throw "web: $($setup.web | ConvertTo-Json)" }
+    if (-not ($setup.php.versions -match '^8\.')) { throw "php: $($setup.php | ConvertTo-Json)" }
+    if (-not $setup.ca.exists) { throw 'the CA was made earlier in this run' }
+    if ($setup.hosts.sites -lt 1) { throw "sites: $($setup.hosts | ConvertTo-Json)" }
+    Expect '"ready": true' (Kiln daemon call setup.status)
+}
 Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
     $lines = @(& $Kiln --json sites)
     if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }
