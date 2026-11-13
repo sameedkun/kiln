@@ -101,6 +101,7 @@ commits and PRs.
 | [I-89](#i-89) | design | The tray popup's glass over a dark desktop left its quieter text near 3:1 in light mode | 📌 (Kiln's backdrop under the popup) |
 | [I-90](#i-90) | design | An outlined stop square next to "Running" read as an empty checkbox | ✅ |
 | [I-91](#i-91) | CI | GitHub Actions stopped starting jobs: the private repository's free minutes were used up | ✅ (repository made public; the Scenario runs only for the code it tests) |
+| [I-92](#i-92) | services | RustFS answered 503 "waiting for iam" right after a restart, which Kiln had reported as done | ✅ |
 
 ---
 
@@ -1314,3 +1315,17 @@ commits and PRs.
   (Apache-2.0), so standard runners cost nothing. The Scenario now runs only when what it
   tests changes (`crates/`, the lockfiles, `tests/ci/`, `tests/vm/windows/`, its workflow), and
   nightly.
+
+## P4-04: the Sites, PHP and Node pages
+
+### I-92: RustFS wasn't ready when its restart said it was (fixed)
+
+- **Seen:** the Scenario (uninstall --delete-data) on 2026-11-13: "RustFS data survives a
+  restart" read the stored file straight after `kiln service restart rustfs-1` and got
+  "Service not ready: waiting for iam". The other mode passed the same check: a race.
+- **Cause:** a service counted as started once its port listened, and for PostgreSQL once its
+  PID file said ready. RustFS listens before its access control has loaded, and answers 503
+  until then.
+- **Fix:** a provider's `ready` hook now gets the instance's ports as well as its folders.
+  RustFS is ready once `GET /` on its S3 port answers anything but 503. Starting and
+  restarting wait for it, up to the usual limit.

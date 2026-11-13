@@ -26,7 +26,7 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 // Home, from Kiln's own answers: what needs the user first, then sites, services and the
 // latest changes (ADR 0051 §4, ADR 0054 §5).
-export function Home() {
+export function Home({ go }: { go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
   const services = useRead<ServicesList>("services.list");
   const history = useRead<HistoryList>("history.list");
@@ -62,7 +62,9 @@ export function Home() {
         {listed.map((s) => (
           <Row key={s.host} columns={siteCols} actions={<Button variant="quiet" aria-label={`Open ${s.host}`} icon={<Open16Regular />} onClick={() => openSite(s.host)} />}>
             <RowName before={<LockClosed12Regular aria-label={s.secure ? "HTTPS" : undefined} aria-hidden={s.secure ? undefined : true} className={`shrink-0 text-text-3 ${s.secure ? "" : "invisible"}`} />} sub={s.document_root} mono>
-              {s.host}
+              <button type="button" className="hover:underline" onClick={() => go(`site:${s.host}`)}>
+                {s.host}
+              </button>
             </RowName>
             <Detail>
               <Tag>{s.driver}</Tag>

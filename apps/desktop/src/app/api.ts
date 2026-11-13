@@ -19,6 +19,10 @@ export interface Site {
   parked_in: string | null;
   php: { version: string | null; pinned: string | null; from_project: boolean; fell_back: boolean } | null;
   in_hosts: boolean;
+  /** The project's folder (ADR 0055 §1). */
+  project: string;
+  framework_version: string | null;
+  node: { version: string | null; asked_by: string | null; asks_for: string | null; fell_back: boolean };
 }
 export interface Proxy {
   host: string;
@@ -58,6 +62,29 @@ export interface Operation {
 export interface HistoryList {
   operations: Operation[];
   hidden: number;
+}
+
+export interface PhpList {
+  default: string | null;
+  versions: { version: string; dir: string; installed: boolean; system: boolean }[];
+}
+export interface PhpAvailable {
+  releases: { line: string; version: string; archive: string; installed: boolean }[];
+}
+export interface PhpExtensions {
+  php: string;
+  ini: string;
+  static_build: boolean;
+  toggles: { name: string; on: boolean }[];
+  built_in: string[];
+  distribution: string[];
+}
+export interface NodeList {
+  default: string | null;
+  versions: { version: string; lts: string | null; dir: string }[];
+}
+export interface NodeAvailable {
+  releases: { line: number; version: string; lts: string | null; date: string; installed: boolean }[];
 }
 
 /** One line a job printed (ADR 0053 §1). */
@@ -138,6 +165,23 @@ export const showMain = () => invoke("show_main");
 export const hidePopup = () => invoke("hide_tray_popup");
 export const quit = () => invoke("quit");
 export const openSite = (host: string) => invoke("open_site", { host });
+/** A site's folder in Explorer, by its host name (ADR 0055 §2). */
+export const openFolder = (host: string) => invoke("open_folder", { host });
+/** Windows' folder dialog: the folder chosen, or null. */
+export const pickFolder = (title: string) => invoke<string | null>("pick_folder", { title });
+
+/** A site name as Kiln takes it: nothing a command line could read as an option (ADR 0055 §3). */
+export function siteName(text: string): string | null {
+  const name = text.trim().toLowerCase().replace(/\.test$/, "");
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name) ? name : null;
+}
+/** A proxy's target: a port, or a loopback address with a port. */
+export function proxyTarget(text: string): string | null {
+  const t = text.trim();
+  if (/^\d{1,5}$/.test(t)) return Number(t) > 0 && Number(t) < 65536 ? t : null;
+  const m = /^(?:https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/.exec(t);
+  return m && Number(m[2]) > 0 && Number(m[2]) < 65536 ? t : null;
+}
 export const setTray = (state: "running" | "attention" | "stopped", tooltip: string) => invoke("set_tray", { state, tooltip });
 export const fitPopup = (height: number) => invoke("fit_popup", { height });
 

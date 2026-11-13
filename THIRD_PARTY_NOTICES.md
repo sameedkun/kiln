@@ -12,7 +12,7 @@ adapted into, this repository. Rust crate dependencies are tracked by `Cargo.loc
 | Cascadia Mono (via `@fontsource/cascadia-mono`) | https://github.com/microsoft/cascadia-code | SIL OFL 1.1 | The desktop app's font for paths, ports and logs, bundled |
 | Fluent UI System Icons (`@fluentui/react-icons`) | https://github.com/microsoft/fluentui-system-icons | MIT | The desktop app's icons |
 | React, React DOM | https://react.dev | MIT | The desktop app's frontend |
-| Tauri 2 and its plugins (opener, single instance) | https://tauri.app | MIT OR Apache-2.0 | The desktop app's window, tray and WebView2 bridge |
+| Tauri 2 and its plugins (opener, single instance, dialog, and the file-system plugin it uses) | https://tauri.app | MIT OR Apache-2.0 | The desktop app's window, tray and WebView2 bridge |
 | cssparser, cssparser-macros, selectors, dtoa-short (through Tauri) | https://github.com/servo | MPL-2.0 | Reading the app's built pages at build time; used unmodified, source on crates.io |
 | option-ext (through Tauri's `dirs`) | https://github.com/soc/option-ext | MPL-2.0 | Used unmodified, source on crates.io |
 

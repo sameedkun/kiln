@@ -18,23 +18,27 @@ interface Ask {
 }
 
 interface Changes {
-  /** Runs a command that changes something at once; says how it went. */
-  run: (args: string[], done: string) => Promise<boolean>;
+  /** Runs a command that changes something at once; says how it went. `onLine` sees its
+   * lines as they come, such as a download's progress. */
+  run: (args: string[], done: string, onLine?: (event: JobEvent) => void) => Promise<boolean>;
   /** Shows a command's preview, and runs it if the user confirms. */
   confirm: (title: string, args: string[], done: string) => void;
+  /** For a change without a preview of its own (unlink, remove): asks in words first. */
+  ask: (title: string, body: string, action: string, args: string[], done: string) => void;
 }
 
-const Context = createContext<Changes>({ run: async () => false, confirm: () => {} });
+const Context = createContext<Changes>({ run: async () => false, confirm: () => {}, ask: () => {} });
 export const useChanges = () => useContext(Context);
 
 export function ChangeProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const [ask, setAsk] = useState<Ask | null>(null);
+  const [plain, setPlain] = useState<{ title: string; body: string; action: string; args: string[]; done: string; busy: boolean } | null>(null);
 
   const run = useCallback(
-    async (args: string[], done: string) => {
+    async (args: string[], done: string, onLine?: (event: JobEvent) => void) => {
       try {
-        const end = await runJob(args, "apply");
+        const end = await runJob(args, "apply", onLine);
         if (end.ok) {
           toast({ message: done });
           return true;
@@ -79,7 +83,13 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
   const question = ask?.events.find((e) => e.type === "confirm")?.question;
 
   return (
-    <Context.Provider value={{ run, confirm }}>
+    <Context.Provider
+      value={{
+        run,
+        confirm,
+        ask: (title, body, action, args, done) => setPlain({ title, body, action, args, done, busy: false }),
+      }}
+    >
       {children}
       <Dialog
         open={ask !== null}
@@ -123,6 +133,32 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
           </div>
         ))}
         {question && !ask?.error && <p className="m-0 mt-3 text-text">{question}</p>}
+      </Dialog>
+      <Dialog
+        open={plain !== null}
+        onClose={() => !plain?.busy && setPlain(null)}
+        title={plain?.title ?? ""}
+        footer={
+          <>
+            <Button onClick={() => setPlain(null)} disabled={plain?.busy}>
+              Cancel
+            </Button>
+            <Button
+              variant="ink"
+              disabled={plain?.busy}
+              onClick={async () => {
+                if (!plain) return;
+                setPlain({ ...plain, busy: true });
+                await run(plain.args, plain.done);
+                setPlain(null);
+              }}
+            >
+              {plain?.busy ? "Working…" : plain?.action}
+            </Button>
+          </>
+        }
+      >
+        {plain?.body}
       </Dialog>
     </Context.Provider>
   );

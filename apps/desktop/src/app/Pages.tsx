@@ -9,10 +9,7 @@ import { useChanges } from "./Change";
 // Pages whose task hasn't connected them yet (ADR 0054 §5): what they will show, and the
 // command that does it until then. Never sample data.
 const notYet: Record<string, { title: string; task: string; what: string; command: string }> = {
-  sites: { title: "Sites", task: "P4-04", what: "every site, grouped by parked folder, link or proxy, with its PHP, HTTPS and services", command: "kiln sites" },
   services: { title: "Services", task: "P4-05", what: "every service by kind, the catalog to add one, ports, logs and data", command: "kiln service list" },
-  php: { title: "PHP", task: "P4-04", what: "PHP versions, updates and extensions", command: "kiln php list" },
-  node: { title: "Node", task: "P4-04", what: "Node versions and which sites pin them", command: "kiln node list" },
   logs: { title: "Logs", task: "P4-08", what: "every log, followed live", command: "kiln service logs <name>" },
   history: { title: "History", task: "P4-07", what: "everything Kiln changed, with undo", command: "kiln history" },
 };

@@ -245,7 +245,7 @@ pub trait ServiceProvider: Sync {
     /// default.
     ///
     /// [ADR 0040]: ../../../docs/adr/0040-postgresql.md
-    fn ready(&self, _dirs: &InstanceDirs) -> bool {
+    fn ready(&self, _dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> bool {
         true
     }
 

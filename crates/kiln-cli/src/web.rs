@@ -800,6 +800,50 @@ pub fn sites() -> Result<(), String> {
     Ok(())
 }
 
+/// The Node that runs in a project, and why (ADR 0055 §1).
+fn node_json(here: &kiln_runtime::node::DirNode) -> serde_json::Value {
+    serde_json::json!({
+        "version": here.node.as_ref().map(|n| n.version.clone()),
+        "asked_by": here.wanted.as_ref().map(|w| w.file.clone()),
+        "asks_for": here.wanted.as_ref().map(|w| w.text.clone()),
+        "fell_back": here.fell_back,
+    })
+}
+
+/// The framework's version in a project (ADR 0055 §1): its package in `composer.lock`, or
+/// `WordPress`' own version file.
+fn framework_version(driver: kiln_sites::Driver, project: &Path) -> Option<String> {
+    use kiln_sites::Driver;
+    let package = match driver {
+        Driver::Laravel => "laravel/framework",
+        Driver::Symfony => "symfony/framework-bundle",
+        Driver::Drupal => "drupal/core",
+        Driver::Craft => "craftcms/cms",
+        Driver::WordPressBedrock => "roots/wordpress",
+        Driver::WordPress => return wordpress_version(project),
+        Driver::PhpPublic | Driver::PhpWeb | Driver::Php | Driver::Static => return None,
+    };
+    let lock = std::fs::read_to_string(project.join("composer.lock")).ok()?;
+    let lock: serde_json::Value = serde_json::from_str(&lock).ok()?;
+    lock["packages"]
+        .as_array()?
+        .iter()
+        .find(|p| p["name"] == package)?["version"]
+        .as_str()
+        .map(|v| v.trim_start_matches('v').to_owned())
+}
+
+/// `$wp_version = '6.6.2';` in `wp-includes/version.php`.
+fn wordpress_version(project: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(project.join("wp-includes").join("version.php")).ok()?;
+    let line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("$wp_version"))?;
+    let start = line.find(['\'', '"'])? + 1;
+    let rest = &line[start..];
+    Some(rest[..rest.find(['\'', '"'])?].to_owned())
+}
+
 /// `kiln --json sites`' data (ADR 0053 §3): the same values the table is made of.
 fn sites_data(
     store: &StateStore,
@@ -814,6 +858,12 @@ fn sites_data(
     let installed = kiln_runtime::installed(store).map_err(|e| e.to_string())?;
     let versions =
         kiln_runtime::site_versions(store, &all.sites, &installed).map_err(|e| e.to_string())?;
+    let nodes = kiln_state::default_local_dir()
+        .map(|local| kiln_node::installed(&local.join(kiln_runtime::node::NODE_DIR)))
+        .unwrap_or_default();
+    let default_node = store
+        .setting(kiln_runtime::node::DEFAULT_KEY)
+        .map_err(|e| e.to_string())?;
     let sites: Vec<_> = all
         .sites
         .iter()
@@ -847,6 +897,9 @@ fn sites_data(
                 "alias_of": site.alias_of.as_ref().map(HostName::as_str),
                 "php": php,
                 "in_hosts": listed(host),
+                "project": site.project,
+                "framework_version": framework_version(site.driver, &site.project),
+                "node": node_json(&kiln_runtime::node::node_for_dir(&nodes, default_node.as_deref(), &site.project)),
             })
         })
         .collect();
@@ -1135,4 +1188,51 @@ pub fn is_running() -> Result<bool, String> {
         server()?.status().map_err(|e| e.to_string())?,
         Status::Running { .. }
     ))
+}
+
+#[cfg(test)]
+mod framework_tests {
+    use super::*;
+
+    fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text) in files {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn the_frameworks_version_comes_from_composer_lock() {
+        let dir = project(&[(
+            "composer.lock",
+            r#"{"packages":[{"name":"laravel/reverb","version":"v1.6.0"},{"name":"laravel/framework","version":"v12.38.1"}]}"#,
+        )]);
+        assert_eq!(
+            framework_version(kiln_sites::Driver::Laravel, dir.path()).as_deref(),
+            Some("12.38.1")
+        );
+        assert_eq!(
+            framework_version(kiln_sites::Driver::Symfony, dir.path()),
+            None
+        );
+        assert_eq!(
+            framework_version(kiln_sites::Driver::Static, dir.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn wordpress_says_its_version_in_its_own_file() {
+        let dir = project(&[(
+            "wp-includes/version.php",
+            "<?php\n/** The WordPress version string. */\n$wp_version = '6.8.3';\n",
+        )]);
+        assert_eq!(
+            framework_version(kiln_sites::Driver::WordPress, dir.path()).as_deref(),
+            Some("6.8.3")
+        );
+    }
 }

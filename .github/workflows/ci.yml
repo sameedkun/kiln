@@ -126,4 +126,5 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: apps/desktop/src-tauri/Cargo.toml
-          command-arguments: --config apps/desktop/src-tauri/deny.toml
+          # Before `check`: cargo-deny takes --config as a global option.
+          arguments: --all-features --config apps/desktop/src-tauri/deny.toml

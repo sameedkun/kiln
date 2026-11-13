@@ -217,7 +217,7 @@ impl ServiceProvider for Postgres {
     /// The server opens its port while it is still starting up, and refuses sessions until
     /// it has finished; then it writes `ready` as the pid file's status line, which is what
     /// `pg_ctl start -w` waits for.
-    fn ready(&self, dirs: &InstanceDirs) -> bool {
+    fn ready(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> bool {
         fs::read_to_string(pid_file(dirs)).is_ok_and(|text| is_ready(&text))
     }
 

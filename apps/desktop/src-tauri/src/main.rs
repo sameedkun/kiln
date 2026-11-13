@@ -110,6 +110,46 @@ async fn open_site(host: String, app: AppHandle, shell: State<'_, Shell>) -> Res
         .map_err(|e| e.to_string())
 }
 
+/// Opens a site's folder by its host name, the folder `kilnd` gives for it (ADR 0055 §2).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+async fn open_folder(host: String, app: AppHandle, shell: State<'_, Shell>) -> Result<(), String> {
+    let socket = shell.bridge.socket.clone();
+    let sites = tauri::async_runtime::spawn_blocking(move || {
+        bridge::call(&socket, "sites.list", Value::Null)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let folder = site_folder(&sites, &host).ok_or_else(|| format!("no site called {host}"))?;
+    app.opener()
+        .open_path(folder, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The folder `sites.list` gives for `host`.
+fn site_folder(sites: &Value, host: &str) -> Option<String> {
+    sites["sites"]
+        .as_array()?
+        .iter()
+        .find(|site| site["host"] == host)
+        .and_then(|site| site["project"].as_str())
+        .map(str::to_owned)
+}
+
+/// Windows' folder dialog, for linking or parking a folder: the folder chosen, or nothing.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+async fn pick_folder(title: String, app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title(title).blocking_pick_folder()
+    })
+    .await
+    .ok()
+    .flatten()?;
+    chosen.into_path().ok().map(|p| p.display().to_string())
+}
+
 /// The URL `sites.list` gives for `host`, among its sites and proxies.
 fn site_url(sites: &Value, host: &str) -> Option<String> {
     ["sites", "proxies"]
@@ -478,10 +518,13 @@ fn main() {
             open_main(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             api,
             daemon_state,
             open_site,
+            open_folder,
+            pick_folder,
             window_action,
             close_notice_read,
             show_main,
@@ -583,6 +626,20 @@ mod tests {
             login_item_kind(Some(r#""C:\Other\thing.exe""#), Some(me)),
             "other"
         );
+    }
+
+    #[test]
+    fn a_sites_folder_is_the_one_kilnd_gives() {
+        let sites = json!({
+            "sites": [{"host": "shop.test", "project": r"D:\Code\shop"}],
+            "proxies": [{"host": "api.test", "url": "http://api.test/"}],
+        });
+        assert_eq!(
+            site_folder(&sites, "shop.test").as_deref(),
+            Some(r"D:\Code\shop")
+        );
+        assert_eq!(site_folder(&sites, "api.test"), None);
+        assert_eq!(site_folder(&sites, r"C:\Windows"), None);
     }
 
     #[test]

@@ -98,3 +98,32 @@ describe("a service's port", () => {
     expect(mainPort(mailpit)).toBe(1025);
   });
 });
+
+describe("names and targets typed in the app (ADR 0055 §3)", async () => {
+  const { siteName, proxyTarget } = await import("./api");
+
+  it("takes site names that no command line could read as an option", () => {
+    expect(siteName("Shop")).toBe("shop");
+    expect(siteName("my-shop.test")).toBe("my-shop");
+    for (const bad of ["-x", "--json", "a b", "shop/../x", "", "-", "a-"]) expect(siteName(bad), bad).toBeNull();
+  });
+
+  it("takes a proxy's target as a port or a loopback address with one", () => {
+    expect(proxyTarget("5173")).toBe("5173");
+    expect(proxyTarget("127.0.0.1:3000")).toBe("127.0.0.1:3000");
+    expect(proxyTarget("http://localhost:8080")).toBe("http://localhost:8080");
+    for (const bad of ["0", "70000", "example.com:80", "10.0.0.5:80", "--confirmed", "5173; rm"]) expect(proxyTarget(bad), bad).toBeNull();
+  });
+});
+
+describe("a site's framework", async () => {
+  const { framework } = await import("./SitesPage");
+  const site = (driver: string, framework_version: string | null) =>
+    ({ driver, framework_version }) as unknown as Parameters<typeof framework>[0];
+
+  it("is a word, with its version when Kiln read one", () => {
+    expect(framework(site("laravel", "12.38.1"))).toBe("Laravel 12.38");
+    expect(framework(site("wordpress", "6.8.3"))).toBe("WordPress 6.8");
+    expect(framework(site("php-public", null))).toBe("PHP");
+  });
+});

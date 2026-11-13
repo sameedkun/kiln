@@ -10,6 +10,29 @@ use crate::{InstanceDirs, Launch, PortRole, Release, ServiceProvider};
 
 pub struct Rustfs;
 
+/// The status code of `GET /` on 127.0.0.1:`port`, or `None` if nothing answered in time.
+fn http_status(port: u16) -> Option<u16> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(1)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream
+        .write_all(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .ok()?;
+    let mut head = [0u8; 64];
+    let read = stream.read(&mut head).ok()?;
+    status_of(&head[..read])
+}
+
+/// The status code in an HTTP response's first line.
+fn status_of(head: &[u8]) -> Option<u16> {
+    let line = std::str::from_utf8(head).ok()?.lines().next()?;
+    let mut words = line.split_whitespace();
+    words.next().filter(|w| w.starts_with("HTTP/"))?;
+    words.next()?.parse().ok()
+}
+
 const S3: PortRole = PortRole {
     role: "s3",
     usual: 9000,
@@ -66,6 +89,13 @@ impl ServiceProvider for Rustfs {
 
     /// Laravel's `s3` disk, pointed at RustFS with path-style URLs. The bucket stays the
     /// project's own choice (`AWS_BUCKET`).
+    /// Listening isn't serving yet: until its access control has loaded, RustFS answers every
+    /// request with 503 "Service not ready: waiting for iam". Ready once it answers otherwise.
+    fn ready(&self, _dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> bool {
+        let port = ports.get(S3.role).copied().unwrap_or(S3.usual);
+        http_status(port).is_some_and(|status| status != 503)
+    }
+
     fn env_keys(&self, ports: &BTreeMap<String, u16>) -> Vec<(&'static str, String)> {
         let s3 = ports.get(S3.role).copied().unwrap_or(S3.usual);
         vec![
@@ -112,6 +142,21 @@ impl ServiceProvider for Rustfs {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn ready_reads_the_status_line() {
+        assert_eq!(
+            status_of(b"HTTP/1.1 503 Service Unavailable\r\n"),
+            Some(503)
+        );
+        assert_eq!(
+            status_of(b"HTTP/1.1 403 Forbidden\r\nServer: RustFS\r\n"),
+            Some(403)
+        );
+        assert_eq!(status_of(b"HTTP/1.0 200 OK"), Some(200));
+        assert_eq!(status_of(b"garbage"), None);
+        assert_eq!(status_of(b""), None);
+    }
 
     #[test]
     fn both_addresses_are_loopback_and_the_volume_is_relative() {

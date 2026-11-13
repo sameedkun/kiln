@@ -19,6 +19,27 @@ import { closeNoticeRead, setTray, windowAction, type DaemonState, type Services
 import { Home } from "./Home";
 import { useDaemon, useRead } from "./hooks";
 import { NotYet, Settings } from "./Pages";
+import { NodePage, PhpPage } from "./RuntimePages";
+import { SitePage } from "./SitePage";
+import { SitesPage } from "./SitesPage";
+
+function Screen({ page, go }: { page: string; go: (page: string) => void }) {
+  if (page.startsWith("site:")) return <SitePage host={page.slice(5)} go={go} />;
+  switch (page) {
+    case "home":
+      return <Home go={go} />;
+    case "sites":
+      return <SitesPage go={go} />;
+    case "php":
+      return <PhpPage />;
+    case "node":
+      return <NodePage />;
+    case "settings":
+      return <Settings />;
+    default:
+      return <NotYet page={page} />;
+  }
+}
 
 /** The tray icon's look, from what the app knows (ADR 0051 §6). */
 export function trayState(daemon: DaemonState, services?: ServicesList): { state: "running" | "attention" | "stopped"; tooltip: string } {
@@ -75,7 +96,7 @@ export function MainApp() {
         <Sidebar
           items={pages}
           footer={[{ id: "settings", label: "Settings", icon: <Settings20Regular /> }]}
-          current={page}
+          current={page.startsWith("site:") ? "sites" : page}
           onSelect={setPage}
           status={
             <>
@@ -92,7 +113,7 @@ export function MainApp() {
           ) : (
             <span />
           )}
-          {page === "home" ? <Home key="home" /> : page === "settings" ? <Settings key="settings" /> : <NotYet key={page} page={page} />}
+          <Screen key={page} page={page} go={setPage} />
         </div>
       </div>
 

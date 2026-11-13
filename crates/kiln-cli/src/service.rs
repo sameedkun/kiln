@@ -186,11 +186,12 @@ fn apply(store: &StateStore) -> Result<(), String> {
                     record.name.clone(),
                     provider_of(&record.kind).ok()?,
                     dirs_of(&record).ok()?,
+                    record.ports.clone(),
                 ))
             })
             .collect();
         let deadline = std::time::Instant::now() + READY_TIMEOUT;
-        while let Some((name, ..)) = starting.iter().find(|(_, p, d)| !p.ready(d)) {
+        while let Some((name, ..)) = starting.iter().find(|(_, p, d, ports)| !p.ready(d, ports)) {
             if std::time::Instant::now() >= deadline {
                 return Err(format!(
                     "{name} is listening but not ready after {} s. See `kiln service logs {name}`.",
