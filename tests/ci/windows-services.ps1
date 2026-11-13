@@ -666,6 +666,22 @@ Check 'kiln settings: the TLD, the ports and who picked them, PHP workers (ADR 0
     if ($settings.php_workers -lt 1) { throw "workers: $($settings.php_workers)" }
     Expect '"php_workers"' (Kiln daemon call settings.get)
 }
+Check 'kiln logs: every log Kiln knows of, and following one through the daemon (ADR 0059)' {
+    $sources = (JsonLines @(& $Kiln --json logs))[-1].data.sources
+    foreach ($id in 'kiln', 'web', 'php') {
+        if (-not ($sources | Where-Object { $_.id -eq $id })) { throw "no $id log in: $($sources.id -join ', ')" }
+    }
+    if (-not ($sources | Where-Object { $_.id -like 'service:*' })) { throw "no service logs in: $($sources.id -join ', ')" }
+    $web = (JsonLines @(& $Kiln --json logs web --lines 5))[-1].data
+    if ($web.lines.Count -lt 1) { throw "the web server's log is empty: $($web.path)" }
+    $tail = (Kiln daemon call logs.tail '{\"source\":\"kiln\",\"lines\":5}') | ConvertFrom-Json
+    if ($tail.offset -lt 1) { throw "logs.tail of the daemon's own log: $($tail | ConvertTo-Json)" }
+    $since = (Kiln daemon call logs.tail "{\`"source\`":\`"kiln\`",\`"after\`":$($tail.offset)}") | ConvertFrom-Json
+    if ($since.reset) { throw "a follow read started again: $($since | ConvertTo-Json)" }
+    $refused = (& $Kiln daemon call logs.tail '{\"source\":\"C:\\\\Windows\\\\win.ini\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
 Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
     $lines = @(& $Kiln --json sites)
     if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }

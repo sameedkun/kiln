@@ -11,24 +11,6 @@ import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Kil
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
-// Pages whose task hasn't connected them yet (ADR 0054 §5): what they will show, and the
-// command that does it until then. Never sample data.
-const notYet: Record<string, { title: string; task: string; what: string; command: string }> = {
-  logs: { title: "Logs", task: "P4-08", what: "every log, followed live", command: "kiln service logs <name>" },
-};
-
-export function NotYet({ page }: { page: string }) {
-  const p = notYet[page];
-  if (!p) return null;
-  return (
-    <Page title={p.title}>
-      <p className="m-0 max-w-[60ch] text-[13px] text-text-2">
-        This page will show {p.what}. It is connected in {p.task}. Until then, in a terminal: <code className="font-mono text-xs text-text">{p.command}</code>.
-      </p>
-    </Page>
-  );
-}
-
 // Settings: the app's own, then Kiln's (ADR 0058 §5).
 export function Settings({ setUp }: { setUp: () => void }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);

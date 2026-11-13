@@ -21,6 +21,7 @@ mod dump;
 mod env;
 mod ext;
 mod history;
+mod logs;
 mod new;
 mod node;
 mod php;
@@ -121,6 +122,15 @@ enum Command {
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
     Doctor,
+    /// Kiln's logs: without a source, every log Kiln knows of (its own, the web server's,
+    /// PHP's, each service's, each Laravel site's); with one, its last lines (ADR 0059).
+    Logs {
+        /// A log's id, as `kiln logs` lists it (such as `web`, `php`, `service:mysql`).
+        source: Option<String>,
+        /// How many lines.
+        #[arg(long, default_value_t = 200)]
+        lines: usize,
+    },
     /// Kiln's settings: the development TLD, the web server's ports (and whether Kiln picks
     /// them), PHP's worker count (ADR 0058). Changes nothing.
     Settings,
@@ -749,6 +759,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Doctor
             | Command::Setup
             | Command::Settings
+            | Command::Logs { .. }
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -992,6 +1003,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Doctor => unreachable!("handled in main"),
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
+        Command::Logs { source, lines } => logs::logs(source.as_deref(), lines),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, tld.as_deref(), file),

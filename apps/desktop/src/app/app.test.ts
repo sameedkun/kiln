@@ -215,3 +215,43 @@ describe("history, doctor and settings (ADR 0058)", async () => {
     expect(portError("")).toBeDefined();
   });
 });
+
+describe("log lines (ADR 0059)", async () => {
+  const { parseLine, parseLines, levelOf } = await import("./LogsPage");
+
+  it("reads Caddy's JSON", () => {
+    const line = parseLine('{"level":"error","ts":1794570330.03,"logger":"http","msg":"listen failed","address":":80"}');
+    expect(line?.level).toBe("error");
+    expect(line?.text).toBe("http: listen failed  address=:80");
+    expect(line?.time).toMatch(/^\d\d:\d\d:\d\d$/);
+  });
+
+  it("reads Laravel's lines and joins its stack traces", () => {
+    const lines = parseLines(["[2026-11-13 10:00:01] local.ERROR: Boom {\"exception\":\"x\"}", "[stacktrace]", "#0 /app/index.php(1): run()", "#1 {main}", '"}', "[2026-11-13 10:00:02] local.INFO: fine"]);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ time: "10:00:01", level: "error" });
+    expect(lines[0].text.split("\n")).toHaveLength(5);
+    expect(lines[1]).toMatchObject({ level: "info", text: "fine" });
+  });
+
+  it("reads PHP's error log", () => {
+    expect(parseLine("[13-Nov-2026 10:00:00 UTC] PHP Warning:  Undefined variable $x in /a.php on line 3")?.level).toBe("warn");
+    expect(parseLine("[13-Nov-2026 10:00:00 UTC] PHP Fatal error:  Uncaught Error")?.level).toBe("error");
+    expect(parseLine("[13-Nov-2026 10:00:00 UTC] PHP Deprecated:  old")?.level).toBe("info");
+  });
+
+  it("reads Kiln's own logs and timestamped service lines", () => {
+    expect(parseLine("2026-11-13 11:57:55.123456789 +00:00:00 repaired: the web server")?.text).toBe("repaired: the web server");
+    expect(parseLine("1794570330 8.4 :9200 failed (non-zero exit); restarting in 500 ms")?.text).toMatch(/^8\.4 :9200/);
+    expect(parseLine("2026-11-13T10:00:00.123456Z 0 [Warning] [MY-010068] [Server] CA certificate is self signed.")?.level).toBe("warn");
+    expect(parseLine("2026-11-13T10:00:00.123456Z 0 [System] [MY-010931] ready for connections.")?.level).toBe("info");
+    expect(parseLine("1234:M 13 Nov 2026 10:00:00.123 # WARNING overcommit")?.level).toBe("warn");
+  });
+
+  it("shows anything else as it is", () => {
+    expect(parseLine("plain words")).toEqual({ time: "", level: "info", text: "plain words" });
+    expect(parseLine("something ERROR happened")?.level).toBe("error");
+    expect(levelOf("CRITICAL")).toBe("error");
+    expect(levelOf("notice")).toBe("info");
+  });
+});

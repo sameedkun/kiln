@@ -13,6 +13,7 @@ pub mod allow;
 pub mod client;
 pub mod daemon;
 pub mod jobs;
+pub mod logs;
 pub mod proto;
 pub mod server;
 pub mod transport;

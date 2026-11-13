@@ -224,7 +224,7 @@ request (2026-11-12).
 | P4-05 | Services page: the catalog with download progress, instances, ports, logs, wiring a project, dump and restore, the data tools | P4-03 | [ADR 0056](adr/0056-services-page.md); done |
 | P4-06 | First-run onboarding: each system change previewed, consent per change | P4-03 | ADR 0004 previews; [ADR 0057](adr/0057-first-run-onboarding.md); done |
 | P4-07 | History with undo, doctor and settings pages | P4-03 | [ADR 0058](adr/0058-history-doctor-settings.md); built |
-| P4-08 | Log viewer: Caddy, PHP errors per site, services, `kilnd`; follow live | P4-03 | |
+| P4-08 | Log viewer: Caddy, PHP errors per site, services, `kilnd`; follow live | P4-03 | [ADR 0059](adr/0059-log-viewer.md); built |
 | P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047 |
 | P4-10 | Xdebug: per PHP version, triggered per request (cookie or browser extension); a separate debug worker so other requests stay fast | P4-03 | |
 | P4-11 | Dump capture: `dump()`/`dd()` output collected and shown, by an open-source collector chosen in a spike | P4-03 | |

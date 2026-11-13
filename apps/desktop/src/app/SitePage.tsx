@@ -8,8 +8,9 @@ import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { openFolder, type EnvShow, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { openFolder, type EnvShow, type LogSources, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
+import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
 import { framework } from "./SitesPage";
 
@@ -90,6 +91,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       <Tabs
         tabs={[
           { id: "overview", label: "Overview" },
+          { id: "logs", label: "Logs" },
           { id: "env", label: ".env" },
         ]}
         current={tab}
@@ -97,6 +99,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       >
       {tab === "env" ? (
         <SiteEnv site={site} />
+      ) : tab === "logs" ? (
+        <SiteLog host={site.host} />
       ) : (
       <>
       <Section title="How it runs">
@@ -215,6 +219,21 @@ function SiteServices({ site, go }: { site: Site; go: (page: string) => void }) 
       ))}
     </Section>
   );
+}
+
+/** The site's own log: the newest in its storage/logs (ADR 0059 §4). */
+function SiteLog({ host }: { host: string }) {
+  const sources = useRead<LogSources>("logs.sources");
+  const log = sources.data?.sources.find((s) => s.id === `site:${host}`);
+  if (!sources.data) return null;
+  if (!log) {
+    return (
+      <p className="m-0 px-1 text-[13px] text-text-2">
+        {host} has no log yet: Kiln shows the newest file in its storage/logs once the site writes one. Kiln's own logs (the web server, PHP's errors, services) are on the Logs page.
+      </p>
+    );
+  }
+  return <LogPanel source={log.id} label={log.label} />;
 }
 
 /** The site's .env: secrets hidden until shown; Kiln's own keys tagged (ADR 0056 §5). */

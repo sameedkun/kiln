@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-13 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 built (ADR 0058); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-13 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 and P4-08 built (ADRs 0058, 0059); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1483,7 +1483,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-05 | Services page | **done** 2026-11-13 | [ADR 0056](adr/0056-services-page.md); the user's look passed |
 | P4-06 | First-run onboarding | **done** 2026-11-13 | [ADR 0057](adr/0057-first-run-onboarding.md); the user's run passed |
 | P4-07 | History, doctor, settings | built | [ADR 0058](adr/0058-history-doctor-settings.md); checked locally; the user's look comes with the rest of Phase 4 |
-| P4-08 | Log viewer | planned | |
+| P4-08 | Log viewer | built | [ADR 0059](adr/0059-log-viewer.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-09 | Dev processes (queue, scheduler, Vite) | planned | |
 | P4-10 | Xdebug | planned | |
 | P4-11 | Dump capture | planned | |
@@ -1841,6 +1841,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-13 | **The user's run of P4-04 to P4-06**, with Herd running beside Kiln. Explained: Herd holds ports 80 and 443, so Kiln serves on 8080 and 8443; a name without the port reaches Herd ("Site not found"); `mailpit.test` didn't resolve because it wasn't in the hosts file (the onboarding's Projects step or `kiln hosts sync` adds it). Fixed: opening a site whose name isn't in the hosts file now offers `hosts sync` through its preview, everywhere a site opens (the app's `open_site` refuses with a marked error); menus and toasts sit on Kiln's solid surface (glass doesn't blur inside the scrolling page, so the row below showed through a menu); the onboarding's heading is "Set up" and its lists have bullets; a site's page has tabs (Overview, `.env`), Logs and Requests to join with P4-08 and P4-18; switching a site's PHP says "Switching…" while the other version's workers start. Planned: P4-20, PECL extensions (phpredis), after a spike for verified Windows builds. |
 | 2026-11-13 | **Kiln stayed on 8080 after Herd quit** ([I-93](issues.md#i-93)): a port Kiln picked now moves back to 80 and 443 once they're free; a port the user chose never moves. The user says P4-05 and P4-06 look good, and asks to build the rest of Phase 4 and test it together at the end. |
 | 2026-11-13 | **P4-07 built** ([ADR 0058](adr/0058-history-doctor-settings.md)): `kiln settings` (and `settings.get`) reads the TLD, the web server's ports with who picked them, and PHP's workers. The app's History page groups changes by day with Undo through its preview and a Show undone switch; the Doctor page shows `kiln doctor`'s findings by area, problems first, each with its fix; Settings gains Kiln's section: the ports (Let Kiln pick, or two ports, applied by stopping and starting the web server), PHP workers, the TLD (shown). The Scenario checks `kiln settings`. |
+| 2026-11-13 | **P4-08 built** ([ADR 0059](adr/0059-log-viewer.md)): `kiln logs` lists every log Kiln knows of (its daemon, the web server, PHP's errors and workers, each service's, each Laravel site's newest `storage/logs` file) and `kiln logs <id>` shows one's last lines; through the API, `logs.sources`, and `logs.tail`, which the daemon reads itself by byte offset (complete lines only, `reset` when the file rolled) and only for a log `kiln logs` lists. The app's Logs page follows the chosen log about once a second, with level filters, Find, and staying at the newest line unless scrolled up; lines are read into time, level and text for Caddy, Laravel (stack traces joined), PHP, Kiln, Redis and ISO-timestamped logs. A site's page has a Logs tab with its own log. The Scenario follows the daemon's log and checks a path isn't accepted. |
 
 ## How to update this file
 

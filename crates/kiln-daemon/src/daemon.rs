@@ -236,7 +236,18 @@ pub struct Daemon {
     jobs: Arc<Jobs>,
     /// The `kiln` program next to the daemon.
     kiln: PathBuf,
+    /// The logs `kiln logs` listed, and when: a follow reads every second or so, and the
+    /// list changes only when a service or site does ([ADR 0059] §3).
+    ///
+    /// [ADR 0059]: ../../../docs/adr/0059-log-viewer.md
+    log_sources: Mutex<Option<(Instant, LogPaths)>>,
 }
+
+/// Each log's id and path.
+type LogPaths = Vec<(String, PathBuf)>;
+
+/// How long the list of logs is reused by `logs.tail`.
+const LOG_SOURCES_FOR: Duration = Duration::from_secs(10);
 
 impl Daemon {
     #[must_use]
@@ -252,6 +263,7 @@ impl Daemon {
             ca_checked: Mutex::new(None),
             renewals: Mutex::new(Vec::new()),
             jobs: Arc::new(Jobs::default()),
+            log_sources: Mutex::new(None),
             kiln: std::env::current_exe().map_or_else(
                 |_| PathBuf::from(KILN_EXE),
                 |me| me.with_file_name(KILN_EXE),
@@ -290,6 +302,8 @@ impl Daemon {
         "env.show",
         "setup.status",
         "settings.get",
+        "logs.sources",
+        "logs.tail",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -598,6 +612,53 @@ impl Daemon {
         }
     }
 
+    /// `logs.tail` ([ADR 0059] §3): a log's last lines, or what was written since `after`.
+    /// Only a log `kiln logs` lists can be read.
+    ///
+    /// [ADR 0059]: ../../../docs/adr/0059-log-viewer.md
+    fn log_tail(&self, params: &Value) -> Result<Value, RpcError> {
+        let id = params["source"]
+            .as_str()
+            .ok_or_else(|| RpcError::kiln("params.source (a log, from logs.sources) is missing"))?;
+        let after = params["after"].as_u64();
+        let lines = params["lines"]
+            .as_u64()
+            .map_or(200, |n| usize::try_from(n.clamp(1, 5000)).unwrap_or(200));
+        let find = |sources: &[(String, PathBuf)]| {
+            sources
+                .iter()
+                .find(|(s, _)| s == id)
+                .map(|(_, p)| p.clone())
+        };
+        let cached = self
+            .log_sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < LOG_SOURCES_FOR)
+            .and_then(|(_, sources)| find(sources));
+        let path = if let Some(path) = cached {
+            path
+        } else {
+            let sources = log_paths(&self.read(&["logs"])?);
+            let path = find(&sources);
+            *self
+                .log_sources
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), sources));
+            path.ok_or_else(|| RpcError::kiln(format!("no log called {id}")))?
+        };
+        let tail = crate::logs::read(&path, after, lines)
+            .map_err(|e| RpcError::kiln(format!("cannot read {}: {e}", path.display())))?;
+        Ok(json!({
+            "source": id,
+            "path": path,
+            "lines": tail.lines,
+            "offset": tail.offset,
+            "reset": tail.reset,
+        }))
+    }
+
     /// `services.logs` (ADR 0056 §2): an instance's last lines, for an instance Kiln has.
     fn service_logs(&self, params: &Value) -> Result<Value, RpcError> {
         let name = params["name"]
@@ -840,6 +901,16 @@ impl Handler for Daemon {
             "doctor.report" => self.read(&["doctor"]),
             "setup.status" => self.read(&["setup"]),
             "settings.get" => self.read(&["settings"]),
+            "logs.sources" => {
+                let data = self.read(&["logs"])?;
+                *self
+                    .log_sources
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) =
+                    Some((Instant::now(), log_paths(&data)));
+                Ok(data)
+            }
+            "logs.tail" => self.log_tail(params),
             "services.logs" => self.service_logs(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
@@ -855,6 +926,21 @@ impl Handler for Daemon {
             other => Err(RpcError::method_not_found(other)),
         }
     }
+}
+
+/// Each log's id and path, from `kiln logs`'s data.
+fn log_paths(data: &Value) -> LogPaths {
+    data["sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            Some((
+                s["id"].as_str()?.to_owned(),
+                PathBuf::from(s["path"].as_str()?),
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

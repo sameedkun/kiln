@@ -90,6 +90,26 @@ export interface KilnSettings {
   php_workers: number;
 }
 
+export interface LogSource {
+  id: string;
+  group: string;
+  label: string;
+  path: string;
+  exists: boolean;
+  bytes: number | null;
+  modified_ms: number | null;
+}
+export interface LogSources {
+  sources: LogSource[];
+}
+export interface LogTail {
+  source: string;
+  path: string;
+  lines: string[];
+  offset: number;
+  reset: boolean;
+}
+
 export interface ServiceKind {
   kind: string;
   name: string;

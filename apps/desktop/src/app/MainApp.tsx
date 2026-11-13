@@ -21,7 +21,8 @@ import { Home } from "./Home";
 import { Onboarding } from "./Onboarding";
 import { useDaemon, useRead } from "./hooks";
 import { DoctorPage, HistoryPage } from "./HistoryDoctor";
-import { NotYet, Settings } from "./Pages";
+import { LogsPage } from "./LogsPage";
+import { Settings } from "./Pages";
 import { NodePage, PhpPage } from "./RuntimePages";
 import { SitePage } from "./SitePage";
 import { ServicesPage } from "./ServicesPage";
@@ -40,6 +41,8 @@ function Screen({ page, go, setUp }: { page: string; go: (page: string) => void;
       return <PhpPage />;
     case "node":
       return <NodePage />;
+    case "logs":
+      return <LogsPage />;
     case "history":
       return <HistoryPage />;
     case "doctor":
@@ -47,7 +50,7 @@ function Screen({ page, go, setUp }: { page: string; go: (page: string) => void;
     case "settings":
       return <Settings setUp={setUp} />;
     default:
-      return <NotYet page={page} />;
+      return null;
   }
 }
 
