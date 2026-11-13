@@ -55,7 +55,11 @@ pub fn read(path: &Path, after: Option<u64>, lines: usize) -> std::io::Result<Ta
     let mut bytes = vec![0; usize::try_from(end - start).unwrap_or(0)];
     file.read_exact(&mut bytes)?;
     // Only complete lines: the rest is read again next time.
-    let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let mut complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    // A whole chunk without a line end would never move on: take it as one (cut) line.
+    if complete == 0 && after.is_some() && end - start == MOST {
+        complete = bytes.len();
+    }
     let mut skip = 0;
     if cut_first {
         // Started mid-file: the first line is likely cut.
@@ -136,6 +140,19 @@ mod tests {
         assert!(next.reset);
         assert_eq!(next.lines, ["new"]);
         assert_eq!(next.offset, 4);
+    }
+
+    #[test]
+    fn a_line_longer_than_one_read_moves_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("a.log");
+        append(&log, &"x".repeat(usize::try_from(MOST).unwrap() + 10));
+        let first = read(&log, Some(0), 10).unwrap();
+        assert_eq!(first.offset, MOST);
+        assert_eq!(first.lines.len(), 1);
+        append(&log, "\nnext\n");
+        let rest = read(&log, Some(first.offset), 10).unwrap();
+        assert_eq!(rest.lines, ["xxxxxxxxxx", "next"]);
     }
 
     #[test]

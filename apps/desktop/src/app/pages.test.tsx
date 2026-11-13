@@ -1,0 +1,136 @@
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The real pages, rendered against canned daemon answers: what the gallery's mock screens
+// don't cover (ADR 0058, ADR 0059).
+const answers: Record<string, (args: Record<string, unknown>) => unknown> = {};
+const asked: { key: string; args: Record<string, unknown> }[] = [];
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (command: string, args: Record<string, unknown>) => {
+    const key = command === "api" ? (args.method as string) : command;
+    const params = command === "api" ? ((args.params as Record<string, unknown>) ?? {}) : args;
+    asked.push({ key, args: params });
+    const answer = answers[key];
+    if (!answer) throw new Error(`no answer for ${key}`);
+    return answer(params);
+  }),
+}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+
+const { ToastProvider } = await import("../components/Toast");
+const { ChangeProvider } = await import("./Change");
+const { HistoryPage, DoctorPage } = await import("./HistoryDoctor");
+const { LogsPage } = await import("./LogsPage");
+const { Settings } = await import("./Pages");
+
+const shell = (page: ReactNode) =>
+  render(
+    <ToastProvider>
+      <ChangeProvider>{page}</ChangeProvider>
+    </ToastProvider>,
+  );
+
+beforeEach(() => {
+  for (const key of Object.keys(answers)) delete answers[key];
+  asked.length = 0;
+});
+afterEach(cleanup);
+
+describe("History", () => {
+  it("groups changes by day and offers Undo only on what's in effect", async () => {
+    const today = Date.now();
+    answers["history.list"] = ({ all }) => ({
+      hidden: all ? 0 : 1,
+      operations: [
+        { id: 12, at_ms: today, state: "in effect", kind: "link", description: "Link shop.test" },
+        ...(all ? [{ id: 11, at_ms: today, state: "undone", kind: "park", description: "Park C:\\Sites" }] : []),
+      ],
+    });
+    shell(<HistoryPage />);
+    expect(await screen.findByText("Link shop.test")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Today" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("switch", { name: "Show undone" }));
+    expect(await screen.findByText("Park C:\\Sites")).toBeTruthy();
+    expect(screen.getByText("undone")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+  });
+
+  it("says when nothing is in effect", async () => {
+    answers["history.list"] = () => ({ hidden: 2, operations: [] });
+    shell(<HistoryPage />);
+    expect(await screen.findByText(/2 earlier changes were undone/)).toBeTruthy();
+  });
+});
+
+describe("Doctor", () => {
+  it("shows what needs a look, with fixes, and the rest on request", async () => {
+    answers["doctor.report"] = () => ({
+      findings: [
+        { area: "web", status: "ok", message: "Caddy installed" },
+        { area: "dns", status: "warn", message: "in the hosts file but no longer sites: old.test", fix: "kiln hosts sync" },
+      ],
+    });
+    shell(<DoctorPage />);
+    expect(await screen.findByText(/1 thing needs a look/)).toBeTruthy();
+    expect(screen.getByText("kiln hosts sync")).toBeTruthy();
+    expect(screen.queryByText("Caddy installed")).toBeNull();
+    await userEvent.click(screen.getByRole("switch", { name: "Show what's fine" }));
+    expect(screen.getByText("Caddy installed")).toBeTruthy();
+  });
+});
+
+describe("Logs", () => {
+  it("lists the logs by group and follows the first that exists", async () => {
+    answers["logs.sources"] = () => ({
+      sources: [
+        { id: "kiln", group: "Kiln", label: "Kiln's daemon", path: "C:\\k\\kilnd.log", exists: false, bytes: null, modified_ms: null },
+        { id: "web", group: "Kiln", label: "Web server", path: "C:\\k\\caddy.log", exists: true, bytes: 10, modified_ms: 1 },
+        { id: "service:mysql-8.4", group: "Services", label: "mysql-8.4", path: "C:\\k\\mysql.log", exists: true, bytes: 10, modified_ms: 1 },
+      ],
+    });
+    answers["logs.tail"] = ({ source }) => ({
+      source,
+      path: "C:\\k\\caddy.log",
+      lines: ['{"level":"error","ts":1794570330,"msg":"listen failed"}', '{"level":"info","ts":1794570331,"msg":"serving"}'],
+      offset: 100,
+      reset: false,
+    });
+    shell(<LogsPage />);
+    expect(await screen.findByText("listen failed")).toBeTruthy();
+    expect(asked.find((a) => a.key === "logs.tail")?.args).toMatchObject({ source: "web" });
+    expect(screen.getByRole("navigation", { name: "Logs" }).textContent).toContain("none yet");
+    expect(screen.getByRole("log", { name: "Web server log" })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("radio", { name: /^Errors/ }));
+    expect(screen.queryByText("serving")).toBeNull();
+    expect(screen.getByText("listen failed")).toBeTruthy();
+  });
+});
+
+describe("Settings", () => {
+  it("shows Kiln's settings and checks the ports typed", async () => {
+    answers.settings_get = () => ({ start_in: "window", close_notice_shown: true, onboarding_dismissed: false, window: null });
+    answers.login_item = () => "none";
+    answers["settings.get"] = () => ({ tld: "test", http: { port: 8080, auto: true }, https: { port: 8443, auto: true }, php_workers: 4 });
+    answers["setup.status"] = () => ({ ready: true, web: { installed: true, running: true } });
+    shell(<Settings setUp={() => {}} />);
+    expect(await screen.findByText(/HTTP on 8080, HTTPS on 8443\. Kiln picks them/)).toBeTruthy();
+    expect(screen.getByText(".test")).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "PHP workers" }) as HTMLSelectElement).value).toBe("4");
+
+    await userEvent.click(screen.getByRole("button", { name: "Change…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Web server ports" });
+    // The dialog isn't inside the settings list.
+    expect(dialog.closest("ul")).toBeNull();
+    await userEvent.click(screen.getByRole("switch", { name: /Let Kiln pick/ }));
+    const http = screen.getByRole("textbox", { name: "HTTP" });
+    await userEvent.clear(http);
+    await userEvent.type(http, "8443");
+    expect(screen.getByText("Not the same as HTTP")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Restart on these ports" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

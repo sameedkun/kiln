@@ -676,7 +676,7 @@ Check 'kiln logs: every log Kiln knows of, and following one through the daemon 
     if ($web.lines.Count -lt 1) { throw "the web server's log is empty: $($web.path)" }
     $tail = (Kiln daemon call logs.tail '{\"source\":\"kiln\",\"lines\":5}') | ConvertFrom-Json
     if ($tail.offset -lt 1) { throw "logs.tail of the daemon's own log: $($tail | ConvertTo-Json)" }
-    $since = (Kiln daemon call logs.tail "{\`"source\`":\`"kiln\`",\`"after\`":$($tail.offset)}") | ConvertFrom-Json
+    $since = (Kiln daemon call logs.tail ('{\"source\":\"kiln\",\"after\":' + $tail.offset + '}')) | ConvertFrom-Json
     if ($since.reset) { throw "a follow read started again: $($since | ConvertTo-Json)" }
     $refused = (& $Kiln daemon call logs.tail '{\"source\":\"C:\\\\Windows\\\\win.ini\"}' 2>&1 | Out-String)
     if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }

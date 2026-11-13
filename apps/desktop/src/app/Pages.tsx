@@ -104,6 +104,7 @@ function KilnSection() {
     ? `HTTP on ${s.http.port}, HTTPS on ${s.https.port}. ${s.http.auto && s.https.auto ? "Kiln picks them: 80 and 443 when they're free, 8080 and 8443 when another program (such as Herd) has them, and back to 80 and 443 once they're free again." : "You chose them; Kiln keeps them."}`
     : "";
   return (
+    <>
     <Section title="Kiln">
       <SettingRow title="Web server ports" control={s && <Button size="sm" onClick={() => setEditing(true)}>Change…</Button>}>
         {portsWords}
@@ -127,6 +128,7 @@ function KilnSection() {
       <SettingRow title="Development TLD" control={s && <code className="font-mono text-[13px]">.{s.tld}</code>}>
         Sites are named after their folder with this ending.
       </SettingRow>
+    </Section>
       {s && editing && (
         <PortsDialog
           settings={s}
@@ -135,11 +137,13 @@ function KilnSection() {
           apply={async (args) => {
             setEditing(false);
             if (setup.data?.web.running && !(await run(["web", "stop"], "The web server stopped to change its ports."))) return;
-            await run(["web", "start", ...args], "The web server is running on its new ports.");
+            if (await run(["web", "start", ...args], "The web server is running on its new ports.")) return;
+            // Refused (a port is taken): nothing was saved, so it starts again where it was.
+            if (setup.data?.web.running) await run(["web", "start"], "Those ports couldn't be used: the web server is running on its earlier ones.");
           }}
         />
       )}
-    </Section>
+    </>
   );
 }
 
