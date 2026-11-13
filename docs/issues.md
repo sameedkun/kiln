@@ -1342,3 +1342,15 @@ commits and PRs.
   so ("HTTP port 80 is free again; Kiln uses it instead of 8080"). A free port stays as it is
   otherwise, so URLs only change for the better. A port the user chose (`--http-port`) never
   moves.
+
+### I-94: A crash-looping queue worker or scheduler still shows "Running" (open)
+
+- **Seen:** 2026-11-13, in review of P4-09 ([ADR 0060](adr/0060-dev-processes.md)).
+- **Cause:** a process on no port can't be checked by connecting to it, so Kiln counts it
+  running while the supervisor that keeps it up runs. One that exits at once (a broken
+  `artisan`, a missing PHP extension) is restarted with growing waits, and shows "Running"
+  meanwhile. A project process skipped at start (its folder gone, no PHP) shows the same.
+- **For now:** its log (Logs page, or `kiln service logs <name>`) shows the failures and the
+  supervisor's restart lines.
+- **Fix later:** the supervisor writes each worker's state (running since, restarts) beside
+  `pools.json`, and Kiln reads it instead of guessing.

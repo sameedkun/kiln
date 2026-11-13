@@ -43,8 +43,12 @@ worker or Vite could follow the same path. Two things didn't fit yet:
      "run `npm install` there first".
 2. **A process may listen on nothing.** The queue worker and the scheduler have no port:
    the supervisor runs them on port 0, waits for no address before counting them started,
-   and Kiln counts them running while the supervisor that keeps them up runs. Only a
-   process in a project may have no port (the contract tests check this).
+   and Kiln counts them running while the supervisor that keeps them up runs
+   ([I-94](../issues.md#i-94): a crash loop shows as running). The supervisor logs
+   `<name> :0 started` and `<name> :0 stopped` for them, and `kiln service add`, `stop` and
+   `remove` wait for those lines, so a stop has ended the process (and its children) before
+   the command returns. Only a process in a project may have no port (the contract tests
+   check this).
 3. **Stopping ends what a process started.** On Windows each program the supervisor runs
    gets its own kill-on-close job, nested in the supervisor's: stopping it closes the job
    and ends its children too (a queue worker's job processes, Vite's helpers), not only the
@@ -57,8 +61,9 @@ worker or Vite could follow the same path. Two things didn't fit yet:
 5. **Started only when asked.** These run the project's own jobs and scheduled commands, so
    Kiln starts them only from `kiln service add <kind> --project <folder>`, `kiln.toml`'s
    `[services]`, or a button; never on its own. Through the API, `service add` for a kind
-   that runs in a project must name `--project`, and it must be a Kiln site's folder (as for
-   `env.show`); otherwise the command would run in the daemon's own folder.
+   that runs in a project must name `--project`, and a `--project` given to `service add` or
+   `services up` (wherever it is among the arguments) must be a Kiln site's folder (as for
+   `env.show`); otherwise the command would run in the daemon's own folder, or anywhere.
 6. **In the app:** a site's page gets a **Dev processes** section: the queue worker and the
    scheduler for a Laravel site, Vite for any site. Each shows whether it runs, with Start
    or Stop, its log (the Logs page opens on it), and Remove. The Services page groups them

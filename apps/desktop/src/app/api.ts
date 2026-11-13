@@ -144,7 +144,7 @@ export interface SetupStatus {
 
 export interface PhpList {
   default: string | null;
-  versions: { version: string; dir: string; installed: boolean; system: boolean }[];
+  versions: { version: string; dir: string; installed: boolean; system: boolean; xdebug?: boolean; xdebug_available?: boolean }[];
 }
 export interface PhpAvailable {
   releases: { line: string; version: string; archive: string; installed: boolean }[];

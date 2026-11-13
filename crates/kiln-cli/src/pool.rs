@@ -156,6 +156,25 @@ pub fn plan(store: &StateStore, running: Option<&Pools>) -> Result<Option<Pools>
             Some(pool) => pool.clone(),
             None => pool_for(php, workers)?,
         });
+        // Its debug worker, when Xdebug is on for it (ADR 0061 §2).
+        if crate::xdebug::is_on(store, &php.version) {
+            let id = format!("{}{}", php.version, kiln_web::DEBUG_POOL_SUFFIX);
+            let running_debug = running.and_then(|r| r.pools.iter().find(|p| p.id == id));
+            let port = match running_debug.and_then(|p| p.workers.first()) {
+                Some(worker) => worker.port,
+                None => free_ports(1)
+                    .map_err(|e| format!("cannot find a free port: {e}"))?
+                    .into_iter()
+                    .next()
+                    .ok_or("cannot find a free port")?,
+            };
+            if let Some(spec) = crate::xdebug::debug_pool(store, php, port, DEFAULT_MAX_REQUESTS)? {
+                pools.push(match running_debug {
+                    Some(existing) if *existing == spec => existing.clone(),
+                    _ => spec,
+                });
+            }
+        }
     }
     Ok(Some(Pools { pools }))
 }

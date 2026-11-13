@@ -179,7 +179,7 @@ fn open_store() -> Result<StateStore, String> {
 }
 
 /// The default PHP, or the installed build `spec` names.
-fn target(store: &StateStore, spec: Option<&str>) -> Result<PhpRecord, String> {
+pub(crate) fn target(store: &StateStore, spec: Option<&str>) -> Result<PhpRecord, String> {
     let installed = kiln_runtime::installed(store).map_err(|e| e.to_string())?;
     match spec {
         Some(spec) => kiln_runtime::pick(&installed, spec)

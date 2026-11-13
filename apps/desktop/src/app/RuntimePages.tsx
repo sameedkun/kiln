@@ -138,6 +138,18 @@ export function PhpPage() {
                   items={[
                     ...(isDefault ? [] : [{ label: "Make it the default", onSelect: () => run(["php", "default", v.version], `PHP ${v.version} serves sites by default now.`) }]),
                     { label: "Extensions", onSelect: () => setChosen(minor(v.version)) },
+                    ...(v.xdebug_available
+                      ? [
+                          {
+                            label: v.xdebug ? "Turn Xdebug off" : "Turn Xdebug on",
+                            onSelect: () =>
+                              run(
+                                ["php", "xdebug", v.xdebug ? "off" : "on", "--php", v.version],
+                                v.xdebug ? `Xdebug is off for PHP ${minor(v.version)}.` : `Xdebug is on for PHP ${minor(v.version)}: requests with its cookie are debugged.`,
+                              ),
+                          },
+                        ]
+                      : []),
                     {
                       label: "Update to its newest patch",
                       icon: <ArrowSync16Regular />,
@@ -171,6 +183,11 @@ export function PhpPage() {
                     <Tag>default</Tag>
                   </span>
                 )}
+                {v.xdebug && (
+                  <span className="ml-2">
+                    <Tag>Xdebug</Tag>
+                  </span>
+                )}
               </RowName>
               <Detail>{users.length ? `used by ${users.join(", ")}` : "no site uses it"}</Detail>
               <span className="flex justify-end">{v.installed ? <Status state="running" label="Installed" /> : <Status state="attention" label="Missing on disk" />}</span>
@@ -178,6 +195,15 @@ export function PhpPage() {
           );
         })}
       </Section>
+      {versions.some((v) => v.xdebug) && (
+        <Section title="Debugging" meta="Xdebug on demand">
+          <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">
+            A request with the <code className="font-mono text-xs text-text">XDEBUG_SESSION</code> cookie (set by your browser's Xdebug helper) or{" "}
+            <code className="font-mono text-xs text-text">?XDEBUG_SESSION_START=1</code> goes to a debug worker, which connects to your editor on{" "}
+            <code className="font-mono text-xs text-text">127.0.0.1:9003</code>. Every other request stays on the fast workers.
+          </li>
+        </Section>
+      )}
       <ProgressLine progress={progress} />
       {shownFor && <Extensions php={shownFor} lines={[...new Set(versions.map((v) => minor(v.version)))]} onChoose={setChosen} />}
       {installing && (

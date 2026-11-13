@@ -349,6 +349,8 @@ pub fn list() -> Result<(), String> {
                 "dir": r.dir,
                 "installed": kiln_php::is_installed(&r.dir),
                 "system": r.archive == kiln_php::linux::SYSTEM_ARCHIVE,
+                "xdebug": crate::xdebug::is_on(&store, &r.version),
+                "xdebug_available": cfg!(windows) && kiln_php::xdebug::build_for(&r.version, &r.archive).is_some(),
             })).collect::<Vec<_>>(),
         }));
         return Ok(());

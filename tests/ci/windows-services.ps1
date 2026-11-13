@@ -611,13 +611,21 @@ require __DIR__ . '/vendor/autoload.php';
 $app = require __DIR__ . '/bootstrap/app.php';
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 dispatch(function () { file_put_contents(storage_path('kiln-queued.txt'), 'ran'); });
-echo "kiln-dispatched\n";
+echo 'kiln-dispatched on ' . config('queue.default') . "\n";
 '@
     Push-Location $shop
-    try { Expect 'kiln-dispatched' (Php kiln-dispatch.php) } finally { Pop-Location }
+    try { $sent = Php kiln-dispatch.php } finally { Pop-Location }
+    Expect 'kiln-dispatched' $sent
+    # On the sync queue the script would run the job itself: the worker must be the one.
+    if ($sent -match 'kiln-dispatched on sync') { throw "the queue is sync:`n$sent" }
     $deadline = (Get-Date).AddSeconds(60)
     while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
     if (-not (Test-Path $done)) { throw "the job didn't run within 60 s:`n$(Kiln service logs queue-shop)" }
+    Expect 'DONE' (Kiln service logs queue-shop)
+    # The app finds it by the site's folder, exactly as `sites` gives it (ADR 0060 §6).
+    $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' }).project
+    $inst = ((& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.name -eq 'queue-shop' }).project
+    if ($site -ne $inst) { throw "site folder $site, instance folder $inst" }
 }
 Check 'service stop queue-shop: no queue process is left (its own process tree is ended)' {
     Kiln service stop queue-shop | Out-Null
@@ -638,6 +646,1079 @@ Check 'kiln service add vite without node_modules: refused, naming npm install' 
 Check 'the dev processes are removed; the project stays' {
     foreach ($name in 'queue-shop', 'scheduler-shop') { Kiln service remove $name | Out-Null }
     if (-not (Test-Path (Join-Path $shop 'artisan'))) { throw 'the project lost its artisan' }
+}
+
+Say '== Xdebug on demand (ADR 0061)'
+Check 'every pinned Xdebug build matches its SHA-256 on xdebug.org' {
+    $pins = Get-Content (Join-Path $PSScriptRoot '..\..\crates\kiln-php\src\xdebug.rs') -Raw
+    $found = [regex]::Matches($pins, 'file: "(php_xdebug-[^"]+)",\s*sha256: "([0-9a-f]{64})"')
+    if ($found.Count -lt 4) { throw "found $($found.Count) pins" }
+    foreach ($pin in $found) {
+        $file = Join-Path $dir $pin.Groups[1].Value
+        Invoke-WebRequest "https://xdebug.org/files/$($pin.Groups[1].Value)" -OutFile $file -UseBasicParsing
+        $sum = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+        if ($sum -ne $pin.Groups[2].Value) { throw "$($pin.Groups[1].Value): $sum, pinned $($pin.Groups[2].Value)" }
+    }
+}
+Set-Content (Join-Path $shop 'public\kiln-xdebug.php') -Encoding ascii -Value "<?php echo extension_loaded('xdebug') ? 'debug' : 'plain';"
+$xdebugUrl = "$(SiteBase 'shop')kiln-xdebug.php"
+function XdebugPage([string[]] $more = @()) {
+    $uri = [Uri] $xdebugUrl
+    (curl.exe -sS --max-time 30 --resolve "$($uri.Host):$($uri.Port):127.0.0.1" @more $xdebugUrl 2>&1 | Out-String).Trim()
+}
+Check 'kiln php xdebug on: fetched, checked, loaded by a debug worker of its own' {
+    Expect 'is on for PHP' (Kiln php xdebug on)
+    Expect '"xdebug": true' (Kiln --json php list)
+}
+Check 'a request without a trigger stays on the plain workers' {
+    $page = XdebugPage
+    if ($page -ne 'plain') { throw "got: $page" }
+}
+Check 'the XDEBUG_SESSION cookie and ?XDEBUG_SESSION_START reach the debug worker' {
+    $cookie = XdebugPage @('-H', 'Cookie: other=1; XDEBUG_SESSION=kiln')
+    if ($cookie -notmatch 'debug\s*$') { throw "with the cookie: $cookie" }
+    $uri = [Uri] $xdebugUrl
+    $query = (curl.exe -sS --max-time 30 --resolve "$($uri.Host):$($uri.Port):127.0.0.1" "$($xdebugUrl)?XDEBUG_SESSION_START=1" 2>&1 | Out-String).Trim()
+    if ($query -notmatch 'debug\s*$') { throw "with the query: $query" }
+    # A cookie whose value only mentions the name isn't a trigger.
+    $other = XdebugPage @('-H', 'Cookie: note=XDEBUG_SESSION=kiln')
+    if ($other -ne 'plain') { throw "with another cookie: $other" }
+}
+Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet arrives)' {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9003)
+    $listener.Start()
+    try {
+        $out = Join-Path $dir 'xdebug-page.txt'
+        $uri = [Uri] $xdebugUrl
+        $curl = Start-Process curl.exe -NoNewWindow -PassThru -RedirectStandardOutput $out `
+            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', 'Cookie: XDEBUG_SESSION=kiln', $xdebugUrl)
+        $accept = $listener.AcceptTcpClientAsync()
+        if (-not $accept.Wait(20000)) { throw 'Xdebug never connected' }
+        $client = $accept.Result
+        $client.ReceiveTimeout = 10000
+        $buffer = New-Object byte[] 4096
+        $read = $client.GetStream().Read($buffer, 0, $buffer.Length)
+        $init = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+        $client.Close()   # the editor goes away: the request carries on
+        if ($init -notmatch '<init ') { throw "not an init packet: $init" }
+        if (-not $curl.WaitForExit(30000)) { throw 'the request never finished' }
+        if ((Get-Content $out -Raw).Trim() -ne 'debug') { throw "the page said: $(Get-Content $out -Raw)" }
+    } finally { $listener.Stop() }
+}
+Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain workers' {
+    Expect 'is off for PHP' (Kiln php xdebug off)
+    $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')
+    if ($page -ne 'plain') { throw "with the cookie after off: $page" }
+    $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+    if ($debug.Count) { throw "a debug worker is left:`n$($debug.CommandLine -join "`n")" }
+}
+
+Say '== kilnd and services (ADR 0048)'
+Check 'services keep running through kiln web stop' {
+    Kiln web stop | Out-Null
+    if ((MailTotal) -ne 2) { throw "Mailpit isn't answering with the web server stopped" }
+    Kiln web start | Out-Null
+}
+Check 'daemon start; services.status lists the instances through the API' {
+    Kiln daemon start | Out-Null
+    $out = Kiln daemon call services.status
+    foreach ($name in 'mailpit-1', 'mysql-8.4', 'reverb-shop') { Expect "`"$name`"" $out }
+    Expect '"running"' $out
+}
+Check 'service.restart through the API (the CLI does it, under its lock)' {
+    Expect '"ok": true' (Kiln daemon call service.restart '{\"name\":\"mailpit-1\"}')
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the restart" }
+    $refused = (& $Kiln daemon call service.stop '{\"name\":\"--everything\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no service called') { throw "an unknown name went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+
+# API version 2 (ADR 0053): the CLI's --json mode, reads through it, and changes as jobs.
+function JsonLines($lines) { @($lines | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }) }
+function WaitJob($id) {
+    $deadline = (Get-Date).AddSeconds(180)
+    do {
+        Start-Sleep -Milliseconds 500
+        $job = (Kiln daemon call jobs.get ('{\"job\":' + $id + '}')) | ConvertFrom-Json
+    } until (-not $job.running -or (Get-Date) -gt $deadline)
+    if ($job.running) { throw "job $id still running after 180 s" }
+    $job
+}
+Check 'kiln --json service list: shop.test uses mysql-8.4, read from its .env (ADR 0056)' {
+    $last = (JsonLines @(& $Kiln --json service list))[-1]
+    $mysql = $last.data.instances | Where-Object { $_.name -eq 'mysql-8.4' }
+    if (-not ($mysql.used_by -contains 'shop.test')) { throw "mysql-8.4 used by: $($mysql.used_by -join ', ')" }
+    if (-not $mysql.databases) { throw 'mysql-8.4 should hold databases' }
+    $mailpit = $last.data.instances | Where-Object { $_.name -eq 'mailpit-1' }
+    if ($mailpit.web -ne 'mailpit.test') { throw "mailpit-1's page: $($mailpit.web)" }
+}
+Check 'kiln env show: the project''s .env, secrets hidden, Kiln''s keys marked in --json' {
+    $text = Kiln env show --project $shop
+    Expect 'DB_PORT=' $text
+    if ($text -match 'APP_KEY=base64') { throw "APP_KEY not hidden:`n$text" }
+    $keys = (JsonLines @(& $Kiln --json env show --project $shop))[-1].data.keys
+    $port = $keys | Where-Object { $_.key -eq 'DB_PORT' }
+    if (-not $port.kiln) { throw "DB_PORT isn't marked as Kiln's: $($port | ConvertTo-Json)" }
+    # The daemon reads only the folder of one of Kiln's sites, exactly as `sites` gives it.
+    $project = ((JsonLines @(& $Kiln --json sites))[-1].data.sites | Where-Object { $_.host -eq 'shop.test' }).project
+    $param = (ConvertTo-Json @{ project = $project } -Compress).Replace('"', '\"')
+    Expect '"DB_DATABASE"' (Kiln daemon call env.show $param)
+    $refused = (& $Kiln daemon call env.show '{\"project\":\"C:\\\\Windows\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "isn't the folder of one of Kiln's sites") { throw "a folder outside Kiln's sites was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln setup: what onboarding asks about, as it is on this runner (ADR 0057)' {
+    $setup = (JsonLines @(& $Kiln --json setup))[-1].data
+    if (-not $setup.ready) { throw "not ready: $($setup | ConvertTo-Json -Depth 4)" }
+    if (-not ($setup.web.installed -and $setup.web.running)) { throw "web: $($setup.web | ConvertTo-Json)" }
+    if (-not ($setup.php.versions -match '^8\.')) { throw "php: $($setup.php | ConvertTo-Json)" }
+    if (-not $setup.ca.exists) { throw 'the CA was made earlier in this run' }
+    if ($setup.hosts.sites -lt 1) { throw "sites: $($setup.hosts | ConvertTo-Json)" }
+    Expect '"ready": true' (Kiln daemon call setup.status)
+}
+Check 'kiln settings: the TLD, the ports and who picked them, PHP workers (ADR 0058)' {
+    $settings = (JsonLines @(& $Kiln --json settings))[-1].data
+    if ($settings.tld -ne 'test') { throw "tld: $($settings.tld)" }
+    if (-not ($settings.http.port -gt 0 -and $settings.https.port -gt 0)) { throw "ports: $($settings | ConvertTo-Json -Depth 3)" }
+    if ($settings.php_workers -lt 1) { throw "workers: $($settings.php_workers)" }
+    Expect '"php_workers"' (Kiln daemon call settings.get)
+}
+Check 'kiln logs: every log Kiln knows of, and following one through the daemon (ADR 0059)' {
+    $sources = (JsonLines @(& $Kiln --json logs))[-1].data.sources
+    foreach ($id in 'kiln', 'web', 'php') {
+        if (-not ($sources | Where-Object { $_.id -eq $id })) { throw "no $id log in: $($sources.id -join ', ')" }
+    }
+    if (-not ($sources | Where-Object { $_.id -like 'service:*' })) { throw "no service logs in: $($sources.id -join ', ')" }
+    $web = (JsonLines @(& $Kiln --json logs web --lines 5))[-1].data
+    if ($web.lines.Count -lt 1) { throw "the web server's log is empty: $($web.path)" }
+    $tail = (Kiln daemon call logs.tail '{\"source\":\"kiln\",\"lines\":5}') | ConvertFrom-Json
+    if ($tail.offset -lt 1) { throw "logs.tail of the daemon's own log: $($tail | ConvertTo-Json)" }
+    $since = (Kiln daemon call logs.tail ('{\"source\":\"kiln\",\"after\":' + $tail.offset + '}')) | ConvertFrom-Json
+    if ($since.reset) { throw "a follow read started again: $($since | ConvertTo-Json)" }
+    $refused = (& $Kiln daemon call logs.tail '{\"source\":\"C:\\\\Windows\\\\win.ini\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
+    $lines = @(& $Kiln --json sites)
+    if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    $last = $events[-1]
+    if ($last.type -ne 'result' -or -not $last.ok) { throw "last line: $($lines[-1])" }
+    if (-not ($last.data.sites | Where-Object { $_.host -eq 'shop.test' })) { throw "no shop.test in: $($lines[-1])" }
+}
+Check 'kiln --json undo without --confirmed: asks, stops with exit code 3, changes nothing' {
+    $before = Kiln history
+    $lines = @(& $Kiln --json undo)
+    $code = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($code -ne 3) { throw "exit code $code`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    if (-not ($events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event:`n$($lines -join "`n")" }
+    if (-not $events[-1].needs_confirmation) { throw "last line: $($lines[-1])" }
+    if ((Kiln history) -ne $before) { throw 'history changed' }
+}
+Check 'API v2: kiln.hello says 2; sites, services and the catalog are read through kiln --json' {
+    Expect '"api": 2' (Kiln daemon call kiln.hello)
+    Expect '"shop.test"' (Kiln daemon call sites.list)
+    Expect '"mailpit-1"' (Kiln daemon call services.list)
+    Expect '"mailpit"' (Kiln daemon call services.catalog)
+}
+Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
+    $before = Kiln history
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"undo\"],\"mode\":\"preview\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.needs_confirmation) { throw "the preview didn't stop at its confirmation: $($job | ConvertTo-Json -Depth 6)" }
+    if (-not ($job.events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event: $($job | ConvertTo-Json -Depth 6)" }
+    if ((Kiln history) -ne $before) { throw 'a preview changed the history' }
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"service\",\"restart\",\"mailpit-1\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.ok) { throw "the restart job failed: $($job | ConvertTo-Json -Depth 6)" }
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the job" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"uninstall\"],\"mode\":\"apply\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "can't be run through the API") { throw "uninstall wasn't refused:`n$refused" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"php\",\"install\",\"8.4\"],\"mode\":\"preview\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
+    # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
+    $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'
+    $standIn = -not (Test-Path $app)
+    if ($standIn) { Copy-Item (Join-Path (Split-Path $Kiln) 'kilnd.exe') $app }
+    $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    try {
+        $before = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        Kiln app enable --yes | Out-Null
+        $now = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($now -ne "`"$app`" --background") { throw "the Run value is: $now" }
+        Expect "Kiln's app" (Kiln daemon status)
+        Expect "Kiln's app (in the tray) starts at login" (Kiln history)
+        Kiln undo --yes | Out-Null
+        $after = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($after -ne $before) { throw "undo left '$after', not '$before'" }
+    } finally {
+        if ($standIn) { Remove-Item $app -ErrorAction SilentlyContinue }
+    }
+}
+Check 'the services supervisor crashes: the daemon brings every service back' {
+    # Kiln's own record of it: the first line of its PID file.
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    $supervisor = [int]((Get-Content $pidFile -TotalCount 1) -as [int])
+    if (-not $supervisor -or -not (Get-Process -Id $supervisor -ErrorAction SilentlyContinue)) {
+        throw "no services supervisor running (PID file: $(Get-Content $pidFile -Raw -ErrorAction SilentlyContinue))"
+    }
+    Stop-Process -Id $supervisor -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers: the crash took nothing down'
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Seconds 3
+        $back = Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue
+    } until ($back -or (Get-Date) -gt $deadline)
+    # What happened, in the scenario's log whichever way it went.
+    Say "     killed supervisor PID $supervisor; now: $(Get-Content $pidFile -TotalCount 1 -ErrorAction SilentlyContinue)"
+    Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+    Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    if (-not $back) { throw 'not back after 90 s' }
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+    # The restart is counted once `kiln services resume` returns, after the slower databases
+    # are ready too, which is after Mailpit is back.
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+}
+# A reboot, as far as a runner can have one: every process of Kiln's gone, the services'
+# supervisor leaving its PID file behind, then the daemon starting as it does at login.
+Check 'after a reboot (daemon and supervisor gone, daemon started as at login): services come back' {
+    Kiln daemon stop | Out-Null
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    Stop-Process -Id ([int](Get-Content $pidFile -TotalCount 1)) -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers'
+    }
+    Kiln daemon start | Out-Null
+    $deadline = (Get-Date).AddSeconds(150)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+}
+Check 'daemon stop' { Kiln daemon stop | Out-Null }
+
+Say '== Data safety: dump and restore (ADR 0049)'
+$dumps = Join-Path $dir 'dumps'
+New-Item -ItemType Directory -Force $dumps | Out-Null
+Check 'kiln db dump mysql-8.4 shop: the Laravel app''s database as a portable .sql file' {
+    Expect 'Wrote' (Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql")
+    Expect 'CREATE TABLE `migrations`' (Get-Content "$dumps\shop.sql" -Raw)
+}
+Check 'an existing dump is never overwritten' {
+    $out = (& $Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql" 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -or $out -notmatch 'cannot write') { throw "it wrote over the file:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln db restore mysql-8.4 shop.sql shop_copy: a new database with the same rows' {
+    Expect 'Created the database shop_copy' (Kiln db restore mysql-8.4 "$dumps\shop.sql" shop_copy)
+    $original = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
+    $copy = Client 'mysql-8.4' 'shop_copy' 'SELECT COUNT(*) FROM migrations;'
+    if ($copy -ne $original -or $copy -notmatch '[1-9]') { throw "original:`n$original`ncopy:`n$copy" }
+}
+Check 'PostgreSQL: pg_dump kiln_ci, restored as kiln_copy' {
+    Kiln db dump postgres-18 kiln_ci --output "$dumps\kiln_ci.sql" | Out-Null
+    Kiln db restore postgres-18 "$dumps\kiln_ci.sql" kiln_copy | Out-Null
+    Expect 'kept' (Client 'postgres-18' 'kiln_copy' 'SELECT v FROM t;')
+}
+Check 'kiln db dump postgres-18: every database (pg_dumpall)' {
+    Kiln db dump postgres-18 --output "$dumps\postgres-all.sql" | Out-Null
+    Expect 'kiln_copy' (Get-Content "$dumps\postgres-all.sql" -Raw)
+}
+Check 'a service without a dump tool says where its data is and what keeps it' {
+    $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)
+    Expect 'has no dump tool' $out
+    Expect '--keep-data' $out
+    $global:LASTEXITCODE = 0
+}
+
+Check 'servers.json follows the services: instances added after the tools are listed' {
+    $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
+    foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
+        if ($servers.name -notcontains $name) { throw "$name missing from:`n$($servers | ConvertTo-Json -Compress)" }
+    }
+}
+Check 'tool remove adminer: the site and its files go' {
+    Kiln tool remove adminer | Out-Null
+    if (Test-Path "$env:LOCALAPPDATA\Kiln\tools\adminer") { throw 'its folder is still there' }
+    if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
+}
+
+Say '== uninstall'
+Check 'kiln uninstall refuses while services hold data, and changes nothing' {
+    $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    if ($LASTEXITCODE -eq 0) { throw "uninstall went ahead without --delete-data:`n$out" }
+    Expect 'hold data' $out
+    Expect 'kiln uninstall --keep-data' $out
+    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln")) { throw 'Kiln folders were touched' }
+    $global:LASTEXITCODE = 0
+}
+Check '--keep-data and --delete-data can''t be given together' {
+    $out = (& $Kiln uninstall --yes --keep-data --delete-data 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0) { throw "both were taken:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+$script:kept = ''
+# The workflow runs the scenario once per uninstall mode (P3-12): both must leave the machine
+# as it was, apart from the kept data folder.
+if ($Uninstall -eq 'delete-data') {
+    Check 'kiln uninstall --delete-data: the services'' data deleted with Kiln' {
+        $out = Kiln uninstall --yes --delete-data
+        $out -split "`n" | ForEach-Object { Say "     $_" }
+        if ($out -match 'Copied the services') { throw 'it kept data without --keep-data' }
+    }
+} else { Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
+    $out = Kiln uninstall --yes --keep-data
+    $out -split "`n" | ForEach-Object { Say "     $_" }
+    $script:kept = [regex]::Match($out, 'Copied the services'' data to (.+)\.').Groups[1].Value.Trim()
+    if (-not $script:kept -or -not (Test-Path $script:kept)) { throw "no kept folder in:`n$out" }
+    foreach ($instance in 'mysql-8.4', 'postgres-18', 'mailpit-1', 'redis-8.10') {
+        if (-not (Get-ChildItem (Join-Path $script:kept $instance) -Recurse -File -ErrorAction SilentlyContinue)) {
+            throw "$instance's data isn't in $($script:kept)"
+        }
+    }
+    if (-not (Get-ChildItem (Join-Path $script:kept 'mysql-8.4\shop') -ErrorAction SilentlyContinue)) {
+        throw 'the shop database isn''t in the kept MySQL data'
+    }
+} }
+# The kept data is the one thing uninstall leaves; the test removes it before comparing.
+if ($script:kept) { Remove-Item $script:kept -Recurse -Force -ErrorAction SilentlyContinue }
+Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
+    if ((Get-Content $envFile -Raw) -notmatch '(?m)^DB_CONNECTION=mysql') { throw 'the .env was changed' }
+}
+Start-Sleep -Seconds 2
+& (Join-Path $vm 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
+Compare-Snapshot 'after.txt' 'after uninstall'
+if (Test-Path "$env:LOCALAPPDATA\Kiln") {
+    Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Force | Select-Object -First 20 | ForEach-Object { Say "     left: $($_.FullName)" }
+}
+
+Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
+exit $(if ($script:failed) { 1 } else { 0 })
+) { throw "with the cookie: $cookie" }
+    $uri = [Uri] $xdebugUrl
+    $query = (curl.exe -sS --max-time 30 --resolve "$($uri.Host):$($uri.Port):127.0.0.1" "$($xdebugUrl)?XDEBUG_SESSION_START=1" 2>&1 | Out-String).Trim()
+    if ($query -ne 'debug') { throw "with the query: $query" }
+    # A cookie whose value only mentions the name isn't a trigger.
+    $other = XdebugPage @('-H', 'Cookie: note=XDEBUG_SESSION=kiln')
+    if ($other -ne 'plain') { throw "with another cookie: $other" }
+}
+Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet arrives)' {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9003)
+    $listener.Start()
+    try {
+        $out = Join-Path $dir 'xdebug-page.txt'
+        $uri = [Uri] $xdebugUrl
+        $curl = Start-Process curl.exe -NoNewWindow -PassThru -RedirectStandardOutput $out `
+            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', 'Cookie: XDEBUG_SESSION=kiln', $xdebugUrl)
+        $accept = $listener.AcceptTcpClientAsync()
+        if (-not $accept.Wait(20000)) { throw 'Xdebug never connected' }
+        $client = $accept.Result
+        $client.ReceiveTimeout = 10000
+        $buffer = New-Object byte[] 4096
+        $read = $client.GetStream().Read($buffer, 0, $buffer.Length)
+        $init = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+        $client.Close()   # the editor goes away: the request carries on
+        if ($init -notmatch '<init ') { throw "not an init packet: $init" }
+        if (-not $curl.WaitForExit(30000)) { throw 'the request never finished' }
+        if ((Get-Content $out -Raw).Trim() -ne 'debug') { throw "the page said: $(Get-Content $out -Raw)" }
+    } finally { $listener.Stop() }
+}
+Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain workers' {
+    Expect 'is off for PHP' (Kiln php xdebug off)
+    $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')
+    if ($page -ne 'plain') { throw "with the cookie after off: $page" }
+    $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+    if ($debug.Count) { throw "a debug worker is left:`n$($debug.CommandLine -join "`n")" }
+}
+
+Say '== kilnd and services (ADR 0048)'
+Check 'services keep running through kiln web stop' {
+    Kiln web stop | Out-Null
+    if ((MailTotal) -ne 2) { throw "Mailpit isn't answering with the web server stopped" }
+    Kiln web start | Out-Null
+}
+Check 'daemon start; services.status lists the instances through the API' {
+    Kiln daemon start | Out-Null
+    $out = Kiln daemon call services.status
+    foreach ($name in 'mailpit-1', 'mysql-8.4', 'reverb-shop') { Expect "`"$name`"" $out }
+    Expect '"running"' $out
+}
+Check 'service.restart through the API (the CLI does it, under its lock)' {
+    Expect '"ok": true' (Kiln daemon call service.restart '{\"name\":\"mailpit-1\"}')
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the restart" }
+    $refused = (& $Kiln daemon call service.stop '{\"name\":\"--everything\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no service called') { throw "an unknown name went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+
+# API version 2 (ADR 0053): the CLI's --json mode, reads through it, and changes as jobs.
+function JsonLines($lines) { @($lines | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }) }
+function WaitJob($id) {
+    $deadline = (Get-Date).AddSeconds(180)
+    do {
+        Start-Sleep -Milliseconds 500
+        $job = (Kiln daemon call jobs.get ('{\"job\":' + $id + '}')) | ConvertFrom-Json
+    } until (-not $job.running -or (Get-Date) -gt $deadline)
+    if ($job.running) { throw "job $id still running after 180 s" }
+    $job
+}
+Check 'kiln --json service list: shop.test uses mysql-8.4, read from its .env (ADR 0056)' {
+    $last = (JsonLines @(& $Kiln --json service list))[-1]
+    $mysql = $last.data.instances | Where-Object { $_.name -eq 'mysql-8.4' }
+    if (-not ($mysql.used_by -contains 'shop.test')) { throw "mysql-8.4 used by: $($mysql.used_by -join ', ')" }
+    if (-not $mysql.databases) { throw 'mysql-8.4 should hold databases' }
+    $mailpit = $last.data.instances | Where-Object { $_.name -eq 'mailpit-1' }
+    if ($mailpit.web -ne 'mailpit.test') { throw "mailpit-1's page: $($mailpit.web)" }
+}
+Check 'kiln env show: the project''s .env, secrets hidden, Kiln''s keys marked in --json' {
+    $text = Kiln env show --project $shop
+    Expect 'DB_PORT=' $text
+    if ($text -match 'APP_KEY=base64') { throw "APP_KEY not hidden:`n$text" }
+    $keys = (JsonLines @(& $Kiln --json env show --project $shop))[-1].data.keys
+    $port = $keys | Where-Object { $_.key -eq 'DB_PORT' }
+    if (-not $port.kiln) { throw "DB_PORT isn't marked as Kiln's: $($port | ConvertTo-Json)" }
+    # The daemon reads only the folder of one of Kiln's sites, exactly as `sites` gives it.
+    $project = ((JsonLines @(& $Kiln --json sites))[-1].data.sites | Where-Object { $_.host -eq 'shop.test' }).project
+    $param = (ConvertTo-Json @{ project = $project } -Compress).Replace('"', '\"')
+    Expect '"DB_DATABASE"' (Kiln daemon call env.show $param)
+    $refused = (& $Kiln daemon call env.show '{\"project\":\"C:\\\\Windows\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "isn't the folder of one of Kiln's sites") { throw "a folder outside Kiln's sites was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln setup: what onboarding asks about, as it is on this runner (ADR 0057)' {
+    $setup = (JsonLines @(& $Kiln --json setup))[-1].data
+    if (-not $setup.ready) { throw "not ready: $($setup | ConvertTo-Json -Depth 4)" }
+    if (-not ($setup.web.installed -and $setup.web.running)) { throw "web: $($setup.web | ConvertTo-Json)" }
+    if (-not ($setup.php.versions -match '^8\.')) { throw "php: $($setup.php | ConvertTo-Json)" }
+    if (-not $setup.ca.exists) { throw 'the CA was made earlier in this run' }
+    if ($setup.hosts.sites -lt 1) { throw "sites: $($setup.hosts | ConvertTo-Json)" }
+    Expect '"ready": true' (Kiln daemon call setup.status)
+}
+Check 'kiln settings: the TLD, the ports and who picked them, PHP workers (ADR 0058)' {
+    $settings = (JsonLines @(& $Kiln --json settings))[-1].data
+    if ($settings.tld -ne 'test') { throw "tld: $($settings.tld)" }
+    if (-not ($settings.http.port -gt 0 -and $settings.https.port -gt 0)) { throw "ports: $($settings | ConvertTo-Json -Depth 3)" }
+    if ($settings.php_workers -lt 1) { throw "workers: $($settings.php_workers)" }
+    Expect '"php_workers"' (Kiln daemon call settings.get)
+}
+Check 'kiln logs: every log Kiln knows of, and following one through the daemon (ADR 0059)' {
+    $sources = (JsonLines @(& $Kiln --json logs))[-1].data.sources
+    foreach ($id in 'kiln', 'web', 'php') {
+        if (-not ($sources | Where-Object { $_.id -eq $id })) { throw "no $id log in: $($sources.id -join ', ')" }
+    }
+    if (-not ($sources | Where-Object { $_.id -like 'service:*' })) { throw "no service logs in: $($sources.id -join ', ')" }
+    $web = (JsonLines @(& $Kiln --json logs web --lines 5))[-1].data
+    if ($web.lines.Count -lt 1) { throw "the web server's log is empty: $($web.path)" }
+    $tail = (Kiln daemon call logs.tail '{\"source\":\"kiln\",\"lines\":5}') | ConvertFrom-Json
+    if ($tail.offset -lt 1) { throw "logs.tail of the daemon's own log: $($tail | ConvertTo-Json)" }
+    $since = (Kiln daemon call logs.tail ('{\"source\":\"kiln\",\"after\":' + $tail.offset + '}')) | ConvertFrom-Json
+    if ($since.reset) { throw "a follow read started again: $($since | ConvertTo-Json)" }
+    $refused = (& $Kiln daemon call logs.tail '{\"source\":\"C:\\\\Windows\\\\win.ini\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
+    $lines = @(& $Kiln --json sites)
+    if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    $last = $events[-1]
+    if ($last.type -ne 'result' -or -not $last.ok) { throw "last line: $($lines[-1])" }
+    if (-not ($last.data.sites | Where-Object { $_.host -eq 'shop.test' })) { throw "no shop.test in: $($lines[-1])" }
+}
+Check 'kiln --json undo without --confirmed: asks, stops with exit code 3, changes nothing' {
+    $before = Kiln history
+    $lines = @(& $Kiln --json undo)
+    $code = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($code -ne 3) { throw "exit code $code`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    if (-not ($events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event:`n$($lines -join "`n")" }
+    if (-not $events[-1].needs_confirmation) { throw "last line: $($lines[-1])" }
+    if ((Kiln history) -ne $before) { throw 'history changed' }
+}
+Check 'API v2: kiln.hello says 2; sites, services and the catalog are read through kiln --json' {
+    Expect '"api": 2' (Kiln daemon call kiln.hello)
+    Expect '"shop.test"' (Kiln daemon call sites.list)
+    Expect '"mailpit-1"' (Kiln daemon call services.list)
+    Expect '"mailpit"' (Kiln daemon call services.catalog)
+}
+Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
+    $before = Kiln history
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"undo\"],\"mode\":\"preview\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.needs_confirmation) { throw "the preview didn't stop at its confirmation: $($job | ConvertTo-Json -Depth 6)" }
+    if (-not ($job.events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event: $($job | ConvertTo-Json -Depth 6)" }
+    if ((Kiln history) -ne $before) { throw 'a preview changed the history' }
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"service\",\"restart\",\"mailpit-1\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.ok) { throw "the restart job failed: $($job | ConvertTo-Json -Depth 6)" }
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the job" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"uninstall\"],\"mode\":\"apply\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "can't be run through the API") { throw "uninstall wasn't refused:`n$refused" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"php\",\"install\",\"8.4\"],\"mode\":\"preview\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
+    # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
+    $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'
+    $standIn = -not (Test-Path $app)
+    if ($standIn) { Copy-Item (Join-Path (Split-Path $Kiln) 'kilnd.exe') $app }
+    $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    try {
+        $before = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        Kiln app enable --yes | Out-Null
+        $now = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($now -ne "`"$app`" --background") { throw "the Run value is: $now" }
+        Expect "Kiln's app" (Kiln daemon status)
+        Expect "Kiln's app (in the tray) starts at login" (Kiln history)
+        Kiln undo --yes | Out-Null
+        $after = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($after -ne $before) { throw "undo left '$after', not '$before'" }
+    } finally {
+        if ($standIn) { Remove-Item $app -ErrorAction SilentlyContinue }
+    }
+}
+Check 'the services supervisor crashes: the daemon brings every service back' {
+    # Kiln's own record of it: the first line of its PID file.
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    $supervisor = [int]((Get-Content $pidFile -TotalCount 1) -as [int])
+    if (-not $supervisor -or -not (Get-Process -Id $supervisor -ErrorAction SilentlyContinue)) {
+        throw "no services supervisor running (PID file: $(Get-Content $pidFile -Raw -ErrorAction SilentlyContinue))"
+    }
+    Stop-Process -Id $supervisor -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers: the crash took nothing down'
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Seconds 3
+        $back = Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue
+    } until ($back -or (Get-Date) -gt $deadline)
+    # What happened, in the scenario's log whichever way it went.
+    Say "     killed supervisor PID $supervisor; now: $(Get-Content $pidFile -TotalCount 1 -ErrorAction SilentlyContinue)"
+    Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+    Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    if (-not $back) { throw 'not back after 90 s' }
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+    # The restart is counted once `kiln services resume` returns, after the slower databases
+    # are ready too, which is after Mailpit is back.
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+}
+# A reboot, as far as a runner can have one: every process of Kiln's gone, the services'
+# supervisor leaving its PID file behind, then the daemon starting as it does at login.
+Check 'after a reboot (daemon and supervisor gone, daemon started as at login): services come back' {
+    Kiln daemon stop | Out-Null
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    Stop-Process -Id ([int](Get-Content $pidFile -TotalCount 1)) -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers'
+    }
+    Kiln daemon start | Out-Null
+    $deadline = (Get-Date).AddSeconds(150)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+}
+Check 'daemon stop' { Kiln daemon stop | Out-Null }
+
+Say '== Data safety: dump and restore (ADR 0049)'
+$dumps = Join-Path $dir 'dumps'
+New-Item -ItemType Directory -Force $dumps | Out-Null
+Check 'kiln db dump mysql-8.4 shop: the Laravel app''s database as a portable .sql file' {
+    Expect 'Wrote' (Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql")
+    Expect 'CREATE TABLE `migrations`' (Get-Content "$dumps\shop.sql" -Raw)
+}
+Check 'an existing dump is never overwritten' {
+    $out = (& $Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql" 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -or $out -notmatch 'cannot write') { throw "it wrote over the file:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln db restore mysql-8.4 shop.sql shop_copy: a new database with the same rows' {
+    Expect 'Created the database shop_copy' (Kiln db restore mysql-8.4 "$dumps\shop.sql" shop_copy)
+    $original = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
+    $copy = Client 'mysql-8.4' 'shop_copy' 'SELECT COUNT(*) FROM migrations;'
+    if ($copy -ne $original -or $copy -notmatch '[1-9]') { throw "original:`n$original`ncopy:`n$copy" }
+}
+Check 'PostgreSQL: pg_dump kiln_ci, restored as kiln_copy' {
+    Kiln db dump postgres-18 kiln_ci --output "$dumps\kiln_ci.sql" | Out-Null
+    Kiln db restore postgres-18 "$dumps\kiln_ci.sql" kiln_copy | Out-Null
+    Expect 'kept' (Client 'postgres-18' 'kiln_copy' 'SELECT v FROM t;')
+}
+Check 'kiln db dump postgres-18: every database (pg_dumpall)' {
+    Kiln db dump postgres-18 --output "$dumps\postgres-all.sql" | Out-Null
+    Expect 'kiln_copy' (Get-Content "$dumps\postgres-all.sql" -Raw)
+}
+Check 'a service without a dump tool says where its data is and what keeps it' {
+    $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)
+    Expect 'has no dump tool' $out
+    Expect '--keep-data' $out
+    $global:LASTEXITCODE = 0
+}
+
+Check 'servers.json follows the services: instances added after the tools are listed' {
+    $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
+    foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
+        if ($servers.name -notcontains $name) { throw "$name missing from:`n$($servers | ConvertTo-Json -Compress)" }
+    }
+}
+Check 'tool remove adminer: the site and its files go' {
+    Kiln tool remove adminer | Out-Null
+    if (Test-Path "$env:LOCALAPPDATA\Kiln\tools\adminer") { throw 'its folder is still there' }
+    if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
+}
+
+Say '== uninstall'
+Check 'kiln uninstall refuses while services hold data, and changes nothing' {
+    $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    if ($LASTEXITCODE -eq 0) { throw "uninstall went ahead without --delete-data:`n$out" }
+    Expect 'hold data' $out
+    Expect 'kiln uninstall --keep-data' $out
+    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln")) { throw 'Kiln folders were touched' }
+    $global:LASTEXITCODE = 0
+}
+Check '--keep-data and --delete-data can''t be given together' {
+    $out = (& $Kiln uninstall --yes --keep-data --delete-data 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0) { throw "both were taken:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+$script:kept = ''
+# The workflow runs the scenario once per uninstall mode (P3-12): both must leave the machine
+# as it was, apart from the kept data folder.
+if ($Uninstall -eq 'delete-data') {
+    Check 'kiln uninstall --delete-data: the services'' data deleted with Kiln' {
+        $out = Kiln uninstall --yes --delete-data
+        $out -split "`n" | ForEach-Object { Say "     $_" }
+        if ($out -match 'Copied the services') { throw 'it kept data without --keep-data' }
+    }
+} else { Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
+    $out = Kiln uninstall --yes --keep-data
+    $out -split "`n" | ForEach-Object { Say "     $_" }
+    $script:kept = [regex]::Match($out, 'Copied the services'' data to (.+)\.').Groups[1].Value.Trim()
+    if (-not $script:kept -or -not (Test-Path $script:kept)) { throw "no kept folder in:`n$out" }
+    foreach ($instance in 'mysql-8.4', 'postgres-18', 'mailpit-1', 'redis-8.10') {
+        if (-not (Get-ChildItem (Join-Path $script:kept $instance) -Recurse -File -ErrorAction SilentlyContinue)) {
+            throw "$instance's data isn't in $($script:kept)"
+        }
+    }
+    if (-not (Get-ChildItem (Join-Path $script:kept 'mysql-8.4\shop') -ErrorAction SilentlyContinue)) {
+        throw 'the shop database isn''t in the kept MySQL data'
+    }
+} }
+# The kept data is the one thing uninstall leaves; the test removes it before comparing.
+if ($script:kept) { Remove-Item $script:kept -Recurse -Force -ErrorAction SilentlyContinue }
+Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
+    if ((Get-Content $envFile -Raw) -notmatch '(?m)^DB_CONNECTION=mysql') { throw 'the .env was changed' }
+}
+Start-Sleep -Seconds 2
+& (Join-Path $vm 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
+Compare-Snapshot 'after.txt' 'after uninstall'
+if (Test-Path "$env:LOCALAPPDATA\Kiln") {
+    Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Force | Select-Object -First 20 | ForEach-Object { Say "     left: $($_.FullName)" }
+}
+
+Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
+exit $(if ($script:failed) { 1 } else { 0 })
+) { throw "with the query: $query" }
+    # A cookie whose value only mentions the name isn't a trigger.
+    $other = XdebugPage @('-H', 'Cookie: note=XDEBUG_SESSION=kiln')
+    if ($other -ne 'plain') { throw "with another cookie: $other" }
+}
+Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet arrives)' {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9003)
+    $listener.Start()
+    try {
+        $out = Join-Path $dir 'xdebug-page.txt'
+        $uri = [Uri] $xdebugUrl
+        $curl = Start-Process curl.exe -NoNewWindow -PassThru -RedirectStandardOutput $out `
+            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', 'Cookie: XDEBUG_SESSION=kiln', $xdebugUrl)
+        $accept = $listener.AcceptTcpClientAsync()
+        if (-not $accept.Wait(20000)) { throw 'Xdebug never connected' }
+        $client = $accept.Result
+        $client.ReceiveTimeout = 10000
+        $buffer = New-Object byte[] 4096
+        $read = $client.GetStream().Read($buffer, 0, $buffer.Length)
+        $init = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+        $client.Close()   # the editor goes away: the request carries on
+        if ($init -notmatch '<init ') { throw "not an init packet: $init" }
+        if (-not $curl.WaitForExit(30000)) { throw 'the request never finished' }
+        if ((Get-Content $out -Raw).Trim() -ne 'debug') { throw "the page said: $(Get-Content $out -Raw)" }
+    } finally { $listener.Stop() }
+}
+Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain workers' {
+    Expect 'is off for PHP' (Kiln php xdebug off)
+    $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')
+    if ($page -ne 'plain') { throw "with the cookie after off: $page" }
+    $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+    if ($debug.Count) { throw "a debug worker is left:`n$($debug.CommandLine -join "`n")" }
+}
+
+Say '== kilnd and services (ADR 0048)'
+Check 'services keep running through kiln web stop' {
+    Kiln web stop | Out-Null
+    if ((MailTotal) -ne 2) { throw "Mailpit isn't answering with the web server stopped" }
+    Kiln web start | Out-Null
+}
+Check 'daemon start; services.status lists the instances through the API' {
+    Kiln daemon start | Out-Null
+    $out = Kiln daemon call services.status
+    foreach ($name in 'mailpit-1', 'mysql-8.4', 'reverb-shop') { Expect "`"$name`"" $out }
+    Expect '"running"' $out
+}
+Check 'service.restart through the API (the CLI does it, under its lock)' {
+    Expect '"ok": true' (Kiln daemon call service.restart '{\"name\":\"mailpit-1\"}')
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the restart" }
+    $refused = (& $Kiln daemon call service.stop '{\"name\":\"--everything\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no service called') { throw "an unknown name went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+
+# API version 2 (ADR 0053): the CLI's --json mode, reads through it, and changes as jobs.
+function JsonLines($lines) { @($lines | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }) }
+function WaitJob($id) {
+    $deadline = (Get-Date).AddSeconds(180)
+    do {
+        Start-Sleep -Milliseconds 500
+        $job = (Kiln daemon call jobs.get ('{\"job\":' + $id + '}')) | ConvertFrom-Json
+    } until (-not $job.running -or (Get-Date) -gt $deadline)
+    if ($job.running) { throw "job $id still running after 180 s" }
+    $job
+}
+Check 'kiln --json service list: shop.test uses mysql-8.4, read from its .env (ADR 0056)' {
+    $last = (JsonLines @(& $Kiln --json service list))[-1]
+    $mysql = $last.data.instances | Where-Object { $_.name -eq 'mysql-8.4' }
+    if (-not ($mysql.used_by -contains 'shop.test')) { throw "mysql-8.4 used by: $($mysql.used_by -join ', ')" }
+    if (-not $mysql.databases) { throw 'mysql-8.4 should hold databases' }
+    $mailpit = $last.data.instances | Where-Object { $_.name -eq 'mailpit-1' }
+    if ($mailpit.web -ne 'mailpit.test') { throw "mailpit-1's page: $($mailpit.web)" }
+}
+Check 'kiln env show: the project''s .env, secrets hidden, Kiln''s keys marked in --json' {
+    $text = Kiln env show --project $shop
+    Expect 'DB_PORT=' $text
+    if ($text -match 'APP_KEY=base64') { throw "APP_KEY not hidden:`n$text" }
+    $keys = (JsonLines @(& $Kiln --json env show --project $shop))[-1].data.keys
+    $port = $keys | Where-Object { $_.key -eq 'DB_PORT' }
+    if (-not $port.kiln) { throw "DB_PORT isn't marked as Kiln's: $($port | ConvertTo-Json)" }
+    # The daemon reads only the folder of one of Kiln's sites, exactly as `sites` gives it.
+    $project = ((JsonLines @(& $Kiln --json sites))[-1].data.sites | Where-Object { $_.host -eq 'shop.test' }).project
+    $param = (ConvertTo-Json @{ project = $project } -Compress).Replace('"', '\"')
+    Expect '"DB_DATABASE"' (Kiln daemon call env.show $param)
+    $refused = (& $Kiln daemon call env.show '{\"project\":\"C:\\\\Windows\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "isn't the folder of one of Kiln's sites") { throw "a folder outside Kiln's sites was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln setup: what onboarding asks about, as it is on this runner (ADR 0057)' {
+    $setup = (JsonLines @(& $Kiln --json setup))[-1].data
+    if (-not $setup.ready) { throw "not ready: $($setup | ConvertTo-Json -Depth 4)" }
+    if (-not ($setup.web.installed -and $setup.web.running)) { throw "web: $($setup.web | ConvertTo-Json)" }
+    if (-not ($setup.php.versions -match '^8\.')) { throw "php: $($setup.php | ConvertTo-Json)" }
+    if (-not $setup.ca.exists) { throw 'the CA was made earlier in this run' }
+    if ($setup.hosts.sites -lt 1) { throw "sites: $($setup.hosts | ConvertTo-Json)" }
+    Expect '"ready": true' (Kiln daemon call setup.status)
+}
+Check 'kiln settings: the TLD, the ports and who picked them, PHP workers (ADR 0058)' {
+    $settings = (JsonLines @(& $Kiln --json settings))[-1].data
+    if ($settings.tld -ne 'test') { throw "tld: $($settings.tld)" }
+    if (-not ($settings.http.port -gt 0 -and $settings.https.port -gt 0)) { throw "ports: $($settings | ConvertTo-Json -Depth 3)" }
+    if ($settings.php_workers -lt 1) { throw "workers: $($settings.php_workers)" }
+    Expect '"php_workers"' (Kiln daemon call settings.get)
+}
+Check 'kiln logs: every log Kiln knows of, and following one through the daemon (ADR 0059)' {
+    $sources = (JsonLines @(& $Kiln --json logs))[-1].data.sources
+    foreach ($id in 'kiln', 'web', 'php') {
+        if (-not ($sources | Where-Object { $_.id -eq $id })) { throw "no $id log in: $($sources.id -join ', ')" }
+    }
+    if (-not ($sources | Where-Object { $_.id -like 'service:*' })) { throw "no service logs in: $($sources.id -join ', ')" }
+    $web = (JsonLines @(& $Kiln --json logs web --lines 5))[-1].data
+    if ($web.lines.Count -lt 1) { throw "the web server's log is empty: $($web.path)" }
+    $tail = (Kiln daemon call logs.tail '{\"source\":\"kiln\",\"lines\":5}') | ConvertFrom-Json
+    if ($tail.offset -lt 1) { throw "logs.tail of the daemon's own log: $($tail | ConvertTo-Json)" }
+    $since = (Kiln daemon call logs.tail ('{\"source\":\"kiln\",\"after\":' + $tail.offset + '}')) | ConvertFrom-Json
+    if ($since.reset) { throw "a follow read started again: $($since | ConvertTo-Json)" }
+    $refused = (& $Kiln daemon call logs.tail '{\"source\":\"C:\\\\Windows\\\\win.ini\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
+    $lines = @(& $Kiln --json sites)
+    if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    $last = $events[-1]
+    if ($last.type -ne 'result' -or -not $last.ok) { throw "last line: $($lines[-1])" }
+    if (-not ($last.data.sites | Where-Object { $_.host -eq 'shop.test' })) { throw "no shop.test in: $($lines[-1])" }
+}
+Check 'kiln --json undo without --confirmed: asks, stops with exit code 3, changes nothing' {
+    $before = Kiln history
+    $lines = @(& $Kiln --json undo)
+    $code = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($code -ne 3) { throw "exit code $code`n$($lines -join "`n")" }
+    $events = JsonLines $lines
+    if (-not ($events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event:`n$($lines -join "`n")" }
+    if (-not $events[-1].needs_confirmation) { throw "last line: $($lines[-1])" }
+    if ((Kiln history) -ne $before) { throw 'history changed' }
+}
+Check 'API v2: kiln.hello says 2; sites, services and the catalog are read through kiln --json' {
+    Expect '"api": 2' (Kiln daemon call kiln.hello)
+    Expect '"shop.test"' (Kiln daemon call sites.list)
+    Expect '"mailpit-1"' (Kiln daemon call services.list)
+    Expect '"mailpit"' (Kiln daemon call services.catalog)
+}
+Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
+    $before = Kiln history
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"undo\"],\"mode\":\"preview\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.needs_confirmation) { throw "the preview didn't stop at its confirmation: $($job | ConvertTo-Json -Depth 6)" }
+    if (-not ($job.events | Where-Object { $_.type -eq 'confirm' })) { throw "no confirm event: $($job | ConvertTo-Json -Depth 6)" }
+    if ((Kiln history) -ne $before) { throw 'a preview changed the history' }
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"service\",\"restart\",\"mailpit-1\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.ok) { throw "the restart job failed: $($job | ConvertTo-Json -Depth 6)" }
+    if ((MailTotal) -ne 2) { throw "Mailpit has $(MailTotal) message(s) after the job" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"uninstall\"],\"mode\":\"apply\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "can't be run through the API") { throw "uninstall wasn't refused:`n$refused" }
+    $refused = (& $Kiln daemon call jobs.start '{\"args\":[\"php\",\"install\",\"8.4\"],\"mode\":\"preview\"}' 2>&1 | Out-String)
+    if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
+    # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
+    $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'
+    $standIn = -not (Test-Path $app)
+    if ($standIn) { Copy-Item (Join-Path (Split-Path $Kiln) 'kilnd.exe') $app }
+    $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    try {
+        $before = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        Kiln app enable --yes | Out-Null
+        $now = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($now -ne "`"$app`" --background") { throw "the Run value is: $now" }
+        Expect "Kiln's app" (Kiln daemon status)
+        Expect "Kiln's app (in the tray) starts at login" (Kiln history)
+        Kiln undo --yes | Out-Null
+        $after = (Get-ItemProperty $run -Name Kiln -ErrorAction SilentlyContinue).Kiln
+        if ($after -ne $before) { throw "undo left '$after', not '$before'" }
+    } finally {
+        if ($standIn) { Remove-Item $app -ErrorAction SilentlyContinue }
+    }
+}
+Check 'the services supervisor crashes: the daemon brings every service back' {
+    # Kiln's own record of it: the first line of its PID file.
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    $supervisor = [int]((Get-Content $pidFile -TotalCount 1) -as [int])
+    if (-not $supervisor -or -not (Get-Process -Id $supervisor -ErrorAction SilentlyContinue)) {
+        throw "no services supervisor running (PID file: $(Get-Content $pidFile -Raw -ErrorAction SilentlyContinue))"
+    }
+    Stop-Process -Id $supervisor -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers: the crash took nothing down'
+    }
+    $deadline = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Seconds 3
+        $back = Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue
+    } until ($back -or (Get-Date) -gt $deadline)
+    # What happened, in the scenario's log whichever way it went.
+    Say "     killed supervisor PID $supervisor; now: $(Get-Content $pidFile -TotalCount 1 -ErrorAction SilentlyContinue)"
+    Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+    Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    if (-not $back) { throw 'not back after 90 s' }
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+    # The restart is counted once `kiln services resume` returns, after the slower databases
+    # are ready too, which is after Mailpit is back.
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+}
+# A reboot, as far as a runner can have one: every process of Kiln's gone, the services'
+# supervisor leaving its PID file behind, then the daemon starting as it does at login.
+Check 'after a reboot (daemon and supervisor gone, daemon started as at login): services come back' {
+    Kiln daemon stop | Out-Null
+    $pidFile = "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.pid"
+    Stop-Process -Id ([int](Get-Content $pidFile -TotalCount 1)) -Force
+    Start-Sleep -Seconds 2
+    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
+        throw 'Mailpit still answers'
+    }
+    Kiln daemon start | Out-Null
+    $deadline = (Get-Date).AddSeconds(150)
+    do {
+        Start-Sleep -Seconds 3
+        $status = Kiln daemon status
+    } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    Expect 'Services restarted by the daemon: 1' $status
+    Expect 'Services: 12 of 12 running' $status
+    if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }
+}
+Check 'daemon stop' { Kiln daemon stop | Out-Null }
+
+Say '== Data safety: dump and restore (ADR 0049)'
+$dumps = Join-Path $dir 'dumps'
+New-Item -ItemType Directory -Force $dumps | Out-Null
+Check 'kiln db dump mysql-8.4 shop: the Laravel app''s database as a portable .sql file' {
+    Expect 'Wrote' (Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql")
+    Expect 'CREATE TABLE `migrations`' (Get-Content "$dumps\shop.sql" -Raw)
+}
+Check 'an existing dump is never overwritten' {
+    $out = (& $Kiln db dump mysql-8.4 shop --output "$dumps\shop.sql" 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -or $out -notmatch 'cannot write') { throw "it wrote over the file:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'kiln db restore mysql-8.4 shop.sql shop_copy: a new database with the same rows' {
+    Expect 'Created the database shop_copy' (Kiln db restore mysql-8.4 "$dumps\shop.sql" shop_copy)
+    $original = Client 'mysql-8.4' 'shop' 'SELECT COUNT(*) FROM migrations;'
+    $copy = Client 'mysql-8.4' 'shop_copy' 'SELECT COUNT(*) FROM migrations;'
+    if ($copy -ne $original -or $copy -notmatch '[1-9]') { throw "original:`n$original`ncopy:`n$copy" }
+}
+Check 'PostgreSQL: pg_dump kiln_ci, restored as kiln_copy' {
+    Kiln db dump postgres-18 kiln_ci --output "$dumps\kiln_ci.sql" | Out-Null
+    Kiln db restore postgres-18 "$dumps\kiln_ci.sql" kiln_copy | Out-Null
+    Expect 'kept' (Client 'postgres-18' 'kiln_copy' 'SELECT v FROM t;')
+}
+Check 'kiln db dump postgres-18: every database (pg_dumpall)' {
+    Kiln db dump postgres-18 --output "$dumps\postgres-all.sql" | Out-Null
+    Expect 'kiln_copy' (Get-Content "$dumps\postgres-all.sql" -Raw)
+}
+Check 'a service without a dump tool says where its data is and what keeps it' {
+    $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)
+    Expect 'has no dump tool' $out
+    Expect '--keep-data' $out
+    $global:LASTEXITCODE = 0
+}
+
+Check 'servers.json follows the services: instances added after the tools are listed' {
+    $servers = Get-Content "$env:LOCALAPPDATA\Kiln\tools\servers.json" -Raw | ConvertFrom-Json
+    foreach ($name in 'mysql-8.4', 'redis-8.10', 'mongodb-9') {
+        if ($servers.name -notcontains $name) { throw "$name missing from:`n$($servers | ConvertTo-Json -Compress)" }
+    }
+}
+Check 'tool remove adminer: the site and its files go' {
+    Kiln tool remove adminer | Out-Null
+    if (Test-Path "$env:LOCALAPPDATA\Kiln\tools\adminer") { throw 'its folder is still there' }
+    if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
+}
+
+Say '== uninstall'
+Check 'kiln uninstall refuses while services hold data, and changes nothing' {
+    $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    if ($LASTEXITCODE -eq 0) { throw "uninstall went ahead without --delete-data:`n$out" }
+    Expect 'hold data' $out
+    Expect 'kiln uninstall --keep-data' $out
+    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln")) { throw 'Kiln folders were touched' }
+    $global:LASTEXITCODE = 0
+}
+Check '--keep-data and --delete-data can''t be given together' {
+    $out = (& $Kiln uninstall --yes --keep-data --delete-data 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0) { throw "both were taken:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+$script:kept = ''
+# The workflow runs the scenario once per uninstall mode (P3-12): both must leave the machine
+# as it was, apart from the kept data folder.
+if ($Uninstall -eq 'delete-data') {
+    Check 'kiln uninstall --delete-data: the services'' data deleted with Kiln' {
+        $out = Kiln uninstall --yes --delete-data
+        $out -split "`n" | ForEach-Object { Say "     $_" }
+        if ($out -match 'Copied the services') { throw 'it kept data without --keep-data' }
+    }
+} else { Check 'kiln uninstall --keep-data: the services'' data copied to the home folder first' {
+    $out = Kiln uninstall --yes --keep-data
+    $out -split "`n" | ForEach-Object { Say "     $_" }
+    $script:kept = [regex]::Match($out, 'Copied the services'' data to (.+)\.').Groups[1].Value.Trim()
+    if (-not $script:kept -or -not (Test-Path $script:kept)) { throw "no kept folder in:`n$out" }
+    foreach ($instance in 'mysql-8.4', 'postgres-18', 'mailpit-1', 'redis-8.10') {
+        if (-not (Get-ChildItem (Join-Path $script:kept $instance) -Recurse -File -ErrorAction SilentlyContinue)) {
+            throw "$instance's data isn't in $($script:kept)"
+        }
+    }
+    if (-not (Get-ChildItem (Join-Path $script:kept 'mysql-8.4\shop') -ErrorAction SilentlyContinue)) {
+        throw 'the shop database isn''t in the kept MySQL data'
+    }
+} }
+# The kept data is the one thing uninstall leaves; the test removes it before comparing.
+if ($script:kept) { Remove-Item $script:kept -Recurse -Force -ErrorAction SilentlyContinue }
+Check 'uninstall left the project''s .env as it was: still pointed at MySQL' {
+    if ((Get-Content $envFile -Raw) -notmatch '(?m)^DB_CONNECTION=mysql') { throw 'the .env was changed' }
+}
+Start-Sleep -Seconds 2
+& (Join-Path $vm 'snapshot.ps1') | Set-Content (Join-Path $dir 'after.txt') -Encoding utf8
+Compare-Snapshot 'after.txt' 'after uninstall'
+if (Test-Path "$env:LOCALAPPDATA\Kiln") {
+    Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Force | Select-Object -First 20 | ForEach-Object { Say "     left: $($_.FullName)" }
+}
+
+Say $(if ($script:failed) { '== FAILED' } else { '== PASSED' })
+exit $(if ($script:failed) { 1 } else { 0 })
+) { throw "with the cookie: $cookie" }
+    $uri = [Uri] $xdebugUrl
+    $query = (curl.exe -sS --max-time 30 --resolve "$($uri.Host):$($uri.Port):127.0.0.1" "$($xdebugUrl)?XDEBUG_SESSION_START=1" 2>&1 | Out-String).Trim()
+    if ($query -ne 'debug') { throw "with the query: $query" }
+    # A cookie whose value only mentions the name isn't a trigger.
+    $other = XdebugPage @('-H', 'Cookie: note=XDEBUG_SESSION=kiln')
+    if ($other -ne 'plain') { throw "with another cookie: $other" }
+}
+Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet arrives)' {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 9003)
+    $listener.Start()
+    try {
+        $out = Join-Path $dir 'xdebug-page.txt'
+        $uri = [Uri] $xdebugUrl
+        $curl = Start-Process curl.exe -NoNewWindow -PassThru -RedirectStandardOutput $out `
+            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', 'Cookie: XDEBUG_SESSION=kiln', $xdebugUrl)
+        $accept = $listener.AcceptTcpClientAsync()
+        if (-not $accept.Wait(20000)) { throw 'Xdebug never connected' }
+        $client = $accept.Result
+        $client.ReceiveTimeout = 10000
+        $buffer = New-Object byte[] 4096
+        $read = $client.GetStream().Read($buffer, 0, $buffer.Length)
+        $init = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+        $client.Close()   # the editor goes away: the request carries on
+        if ($init -notmatch '<init ') { throw "not an init packet: $init" }
+        if (-not $curl.WaitForExit(30000)) { throw 'the request never finished' }
+        if ((Get-Content $out -Raw).Trim() -ne 'debug') { throw "the page said: $(Get-Content $out -Raw)" }
+    } finally { $listener.Stop() }
+}
+Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain workers' {
+    Expect 'is off for PHP' (Kiln php xdebug off)
+    $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')
+    if ($page -ne 'plain') { throw "with the cookie after off: $page" }
+    $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+    if ($debug.Count) { throw "a debug worker is left:`n$($debug.CommandLine -join "`n")" }
 }
 
 Say '== kilnd and services (ADR 0048)'

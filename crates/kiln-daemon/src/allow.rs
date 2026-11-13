@@ -60,6 +60,8 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["php", "workers"], false),
     (&["php", "ext", "on"], false),
     (&["php", "ext", "off"], false),
+    (&["php", "xdebug", "on"], false),
+    (&["php", "xdebug", "off"], false),
     (&["node", "install"], false),
     (&["node", "remove"], false),
     (&["node", "default"], false),
@@ -121,37 +123,50 @@ pub fn check(args: &[String], mode: Mode) -> Result<(), String> {
     Ok(())
 }
 
-/// For `service add <kind>`: the `--project` folder it names, which the daemon checks is a Kiln
-/// site's ([ADR 0060] §5). A kind that runs in a project must name one: without it, the
-/// command would use the daemon's own working folder.
+/// Options of `service add` and `services up` that take a value as the next argument.
+const VALUED: &[&str] = &["--project", "--version", "--name", "--port"];
+
+/// For `service add <kind>` and `services up`: the `--project` folder named anywhere in the
+/// arguments, which the daemon checks is a Kiln site's ([ADR 0060] §5), since processes run
+/// there. A kind that runs in a project must name one: without it, the command would use the
+/// daemon's own working folder.
 ///
 /// # Errors
 /// A project kind without `--project`, or `--project` without a folder.
 ///
 /// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
 pub fn project_of_service_add(args: &[String]) -> Result<Option<&str>, String> {
-    if args.len() < 3 || args[0] != "service" || args[1] != "add" {
+    let add = args.len() >= 2 && args[0] == "service" && args[1] == "add";
+    let up = args.len() >= 2 && args[0] == "services" && args[1] == "up";
+    if !add && !up {
         return Ok(None);
     }
     let mut project = None;
-    let mut rest = args[3..].iter();
+    let mut kind = None;
+    let mut rest = args[2..].iter();
     while let Some(arg) = rest.next() {
-        if arg == "--project" {
-            project = Some(
-                rest.next()
-                    .map(String::as_str)
-                    .ok_or("--project needs a folder")?,
-            );
-        } else if let Some(value) = arg.strip_prefix("--project=") {
+        if let Some(value) = arg.strip_prefix("--project=") {
             project = Some(value);
+        } else if VALUED.contains(&arg.as_str()) {
+            let value = rest
+                .next()
+                .map(String::as_str)
+                .ok_or_else(|| format!("{arg} needs a value"))?;
+            if arg == "--project" {
+                project = Some(value);
+            }
+        } else if !arg.starts_with('-') && kind.is_none() {
+            kind = Some(arg.as_str());
         }
     }
-    let in_project = kiln_services::provider(&args[2])
-        .is_some_and(kiln_services::ServiceProvider::runs_in_project);
+    let in_project = add
+        && kind
+            .and_then(kiln_services::provider)
+            .is_some_and(kiln_services::ServiceProvider::runs_in_project);
     if in_project && project.is_none() {
         return Err(format!(
             "`kiln service add {}` through the API needs --project <a site's folder>",
-            args[2]
+            kind.unwrap_or_default()
         ));
     }
     Ok(project)
@@ -175,6 +190,21 @@ mod tests {
         assert!(project_of_service_add(&args("service add queue --project")).is_err());
         assert_eq!(project_of_service_add(&args("service add mysql")), Ok(None));
         assert_eq!(project_of_service_add(&args("link shop")), Ok(None));
+        // The folder is found wherever it is, and for `services up` too.
+        assert_eq!(
+            project_of_service_add(&args("service add --project D:/x queue")),
+            Ok(Some("D:/x"))
+        );
+        assert_eq!(
+            project_of_service_add(&args("service add --name q --project=D:/x queue")),
+            Ok(Some("D:/x"))
+        );
+        assert!(project_of_service_add(&args("service add --name q queue")).is_err());
+        assert_eq!(
+            project_of_service_add(&args("services up --yes --project D:/x")),
+            Ok(Some("D:/x"))
+        );
+        assert_eq!(project_of_service_add(&args("services up")), Ok(None));
     }
 
     fn args(text: &str) -> Vec<String> {

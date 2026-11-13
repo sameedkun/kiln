@@ -216,7 +216,21 @@ fn apply(store: &StateStore) -> Result<(), String> {
         supervisor.stop().map_err(|e| e.to_string())?;
     } else {
         check_ports(store)?;
+        let log_from = std::fs::metadata(supervisor.log_path()).map_or(0, |m| m.len());
         supervisor.start(&pools).map_err(|e| e.to_string())?;
+        // A process on no port can't be seen listening: the supervisor's log says when one
+        // started or stopped (ADR 0060 §2).
+        let missing = wait_logged(
+            &supervisor.log_path(),
+            log_from,
+            &portless_changes(&before, &pools),
+        );
+        if !missing.is_empty() {
+            say!(
+                "Note: still waiting on the supervisor for: {}. See `kiln service logs <name>`.",
+                missing.join("; ")
+            );
+        }
         // Listening isn't always accepting work yet (a database still starting up).
         let starting: Vec<_> = pools
             .pools
@@ -284,6 +298,52 @@ fn apply(store: &StateStore) -> Result<(), String> {
         say!("Note: the web tools' server list wasn't updated: {e}");
     }
     Ok(())
+}
+
+/// The supervisor log lines that say each process on no port started (new in `after`) or
+/// stopped (gone from `before`).
+fn portless_changes(before: &Pools, after: &Pools) -> Vec<String> {
+    let portless = |p: &&kiln_supervisor::pools::PoolSpec| {
+        p.program_spec.is_some() && p.workers.iter().all(|w| w.port == 0)
+    };
+    let has = |pools: &Pools, id: &str| pools.pools.iter().any(|p| p.id == id);
+    let started = after
+        .pools
+        .iter()
+        .filter(portless)
+        .filter(|p| !has(before, &p.id))
+        .map(|p| format!("{} :0 started", p.id));
+    let stopped = before
+        .pools
+        .iter()
+        .filter(portless)
+        .filter(|p| !has(after, &p.id))
+        .map(|p| format!("{} :0 stopped", p.id));
+    started.chain(stopped).collect()
+}
+
+/// Waits until each of `lines` is in the log at `path` after byte `from`, for as long as a
+/// graceful stop may take; returns those that never came.
+fn wait_logged(path: &Path, from: u64, lines: &[String]) -> Vec<String> {
+    let deadline = std::time::Instant::now()
+        + kiln_supervisor::handle::PROGRAM_STOP_TIMEOUT
+        + Duration::from_secs(5);
+    loop {
+        let text = std::fs::read(path)
+            .ok()
+            .and_then(|b| b.get(usize::try_from(from).ok()?..).map(<[u8]>::to_vec))
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let missing: Vec<String> = lines
+            .iter()
+            .filter(|l| !text.lines().any(|t| t.ends_with(l.as_str())))
+            .cloned()
+            .collect();
+        if missing.is_empty() || std::time::Instant::now() >= deadline {
+            return missing;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Waits until every port in `ports` is free again and every instance in `stopping` has
@@ -1387,6 +1447,29 @@ fn attach_ui(provider: &dyn ServiceProvider, record: &ServiceRecord) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_less_processes_are_waited_for_by_their_log_lines() {
+        let program = |id: &str, port| {
+            PoolSpec::program(
+                id.into(),
+                "/k/php/php".into(),
+                port,
+                kiln_supervisor::pools::ProgramSpec::default(),
+            )
+        };
+        let before = Pools {
+            pools: vec![program("queue-shop", 0), program("mysql-8.4", 3306)],
+        };
+        let after = Pools {
+            pools: vec![program("scheduler-shop", 0), program("mysql-8.4", 3306)],
+        };
+        assert_eq!(
+            portless_changes(&before, &after),
+            ["scheduler-shop :0 started", "queue-shop :0 stopped"]
+        );
+        assert_eq!(portless_changes(&after, &after).len(), 0);
+    }
 
     #[test]
     fn a_site_uses_an_instance_when_its_env_names_every_port_key() {

@@ -84,7 +84,9 @@ pub fn run<L: Launcher>(
 
 fn log_event(log: &mut impl Write, event: &Event) {
     let line = match event {
-        // Routine; logging every recycle would flood the log.
+        // A program on no port (a queue worker, ADR 0060) is never recycled, and Kiln waits
+        // for this line to know it started; every other start is routine.
+        Event::Started { pool, port: 0 } => format!("{pool} :0 started"),
         Event::Started { .. } => return,
         Event::Exited {
             pool,

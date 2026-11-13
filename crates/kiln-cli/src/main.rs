@@ -33,6 +33,7 @@ mod services_up;
 mod tool;
 mod uninstall;
 mod web;
+mod xdebug;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -504,6 +505,28 @@ enum PhpAction {
         #[command(subcommand)]
         action: ExtAction,
     },
+    /// Xdebug on demand: a debug worker per PHP version that only requests asking for
+    /// Xdebug reach (the `XDEBUG_SESSION` cookie or `?XDEBUG_SESSION_START=1`). Windows only.
+    Xdebug {
+        #[command(subcommand)]
+        action: XdebugAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum XdebugAction {
+    /// Fetch the pinned Xdebug build (checked) and run the debug worker.
+    On {
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Stop the debug worker.
+    Off {
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -908,6 +931,10 @@ fn run_php(action: PhpAction) -> Result<(), String> {
         PhpAction::Rollback { version } => php::rollback(version.as_deref()),
         PhpAction::Default { version } => php::set_default(&version),
         PhpAction::Workers { count } => php::set_workers(count),
+        PhpAction::Xdebug { action } => match action {
+            XdebugAction::On { php } => xdebug::on(php.as_deref()),
+            XdebugAction::Off { php } => xdebug::off(php.as_deref()),
+        },
         PhpAction::Ext { action } => match action {
             ExtAction::List { php } => ext::list(php.as_deref()),
             ExtAction::On { names, php } => ext::toggle(&names, php.as_deref(), true),

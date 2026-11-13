@@ -187,8 +187,14 @@ impl WebConfig {
             .as_ref()
             .and_then(|id| self.php_pools.get(id))
             .filter(|upstreams| !upstreams.is_empty());
+        // Requests asking for Xdebug go to the PHP's debug worker, if it runs (ADR 0061).
+        let debug = site
+            .php_pool
+            .as_ref()
+            .and_then(|id| self.php_pools.get(&format!("{id}{DEBUG_POOL_SUFFIX}")))
+            .filter(|upstreams| !upstreams.is_empty());
         match upstreams {
-            Some(upstreams) => Handler::php(&site.root, upstreams),
+            Some(upstreams) => Handler::php(&site.root, upstreams, debug.map(Vec::as_slice)),
             None => Handler::files(&site.root),
         }
     }
@@ -404,6 +410,15 @@ impl Route {
         }
     }
 
+    /// A step inside a subroute matching any of `matchers`, one handler, not terminal.
+    fn step_any(matchers: Vec<Matcher>, handler: Handler) -> Self {
+        Self {
+            matchers,
+            handle: vec![handler],
+            terminal: false,
+        }
+    }
+
     /// A step inside a subroute: optional matcher, one handler, not terminal.
     fn step(matcher: Option<Matcher>, handler: Handler) -> Self {
         Self {
@@ -439,6 +454,15 @@ struct Matcher {
     file: Option<FileMatcher>,
     #[serde(skip_serializing_if = "Option::is_none")]
     not: Option<Vec<Matcher>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header_regexp: Option<BTreeMap<&'static str, RegexpMatcher>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query: Option<BTreeMap<&'static str, Vec<&'static str>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct RegexpMatcher {
+    pattern: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -550,6 +574,18 @@ struct Upstream {
 pub const PHP_TRY_DURATION: Duration = Duration::from_secs(2);
 pub const PHP_TRY_INTERVAL: Duration = Duration::from_millis(50);
 
+/// A PHP version's debug worker is the pool `<version>+xdebug` ([ADR 0061] §2).
+///
+/// [ADR 0061]: ../../../docs/adr/0061-xdebug.md
+pub const DEBUG_POOL_SUFFIX: &str = "+xdebug";
+
+/// A `Cookie` header carrying an Xdebug trigger: `XDEBUG_SESSION` (browser extensions) or
+/// `XDEBUG_TRIGGER`, by name, not inside another cookie's value.
+const DEBUG_COOKIE_PATTERN: &str = r"(^|;\s*)XDEBUG_(SESSION|TRIGGER)=";
+
+/// Query parameters that ask Xdebug to debug the request.
+const DEBUG_QUERY_KEYS: &[&str] = &["XDEBUG_SESSION_START", "XDEBUG_SESSION", "XDEBUG_TRIGGER"];
+
 impl Handler {
     /// The dev server behind a proxy site. It sees its own `host:port` as `Host`, which dev
     /// servers such as Vite require; `X-Forwarded-Host` keeps the site's name.
@@ -584,90 +620,121 @@ impl Handler {
 
     /// What Caddy's `php_fastcgi` shorthand expands to (checked against `caddy adapt`):
     /// directory redirect, front-controller rewrite, `*.php` to the workers, static files.
-    fn php(root: &Path, upstreams: &[SocketAddr]) -> Result<Self, ConfigError> {
+    /// With `debug` upstreams, a request carrying an Xdebug trigger (the `XDEBUG_SESSION` or
+    /// `XDEBUG_TRIGGER` cookie, or `XDEBUG_SESSION_START`, `XDEBUG_SESSION` or
+    /// `XDEBUG_TRIGGER` in the query) goes to them instead ([ADR 0061] §3).
+    ///
+    /// [ADR 0061]: ../../../docs/adr/0061-xdebug.md
+    fn php(
+        root: &Path,
+        upstreams: &[SocketAddr],
+        debug: Option<&[SocketAddr]>,
+    ) -> Result<Self, ConfigError> {
+        let mut routes = vec![
+            Route::step(None, Self::Vars { root: utf8(root)? }),
+            Route::step(
+                Some(Matcher {
+                    file: Some(FileMatcher {
+                        try_files: vec!["{http.request.uri.path}/index.php"],
+                        split_path: None,
+                        try_policy: None,
+                    }),
+                    not: Some(vec![Matcher {
+                        path: Some(vec!["*/"]),
+                        ..Matcher::default()
+                    }]),
+                    ..Matcher::default()
+                }),
+                Self::StaticResponse {
+                    status_code: 308,
+                    headers: BTreeMap::from([(
+                        "Location",
+                        vec![
+                            "{http.request.orig_uri.path}/{http.request.orig_uri.prefixed_query}"
+                                .to_owned(),
+                        ],
+                    )]),
+                    body: None,
+                },
+            ),
+            Route::step(
+                Some(Matcher {
+                    file: Some(FileMatcher {
+                        try_files: vec![
+                            "{http.request.uri.path}",
+                            "{http.request.uri.path}/index.php",
+                            "index.php",
+                        ],
+                        split_path: Some(vec![".php"]),
+                        try_policy: Some("first_exist_fallback"),
+                    }),
+                    ..Matcher::default()
+                }),
+                Self::Rewrite {
+                    uri: "{http.matchers.file.relative}",
+                },
+            ),
+        ];
+        let php = || Matcher {
+            path: Some(vec!["*.php"]),
+            ..Matcher::default()
+        };
+        if let Some(debug) = debug {
+            // One matcher set per trigger: the sets are alternatives, each also needs *.php.
+            let cookie = Matcher {
+                header_regexp: Some(BTreeMap::from([(
+                    "Cookie",
+                    RegexpMatcher {
+                        pattern: DEBUG_COOKIE_PATTERN,
+                    },
+                )])),
+                ..php()
+            };
+            let queries = DEBUG_QUERY_KEYS.iter().map(|key| Matcher {
+                query: Some(BTreeMap::from([(*key, vec!["*"])])),
+                ..php()
+            });
+            routes.push(Route::step_any(
+                std::iter::once(cookie).chain(queries).collect(),
+                Self::fastcgi(debug),
+            ));
+        }
+        routes.push(Route::step(Some(php()), Self::fastcgi(upstreams)));
+        routes.push(Route::step(
+            None,
+            Self::FileServer {
+                root: None,
+                index_names: vec!["index.html", "index.htm"],
+            },
+        ));
+        Ok(Self::Subroute { routes })
+    }
+
+    /// PHP through `FastCGI` to `upstreams`, as Caddy's `php_fastcgi` does.
+    fn fastcgi(upstreams: &[SocketAddr]) -> Self {
         let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
-        Ok(Self::Subroute {
-            routes: vec![
-                Route::step(None, Self::Vars { root: utf8(root)? }),
-                Route::step(
-                    Some(Matcher {
-                        file: Some(FileMatcher {
-                            try_files: vec!["{http.request.uri.path}/index.php"],
-                            split_path: None,
-                            try_policy: None,
-                        }),
-                        not: Some(vec![Matcher {
-                            path: Some(vec!["*/"]),
-                            ..Matcher::default()
-                        }]),
-                        ..Matcher::default()
-                    }),
-                    Self::StaticResponse {
-                        status_code: 308,
-                        headers: BTreeMap::from([(
-                            "Location",
-                            vec![
-                                "{http.request.orig_uri.path}/{http.request.orig_uri.prefixed_query}"
-                                    .to_owned(),
-                            ],
-                        )]),
-                        body: None,
-                    },
-                ),
-                Route::step(
-                    Some(Matcher {
-                        file: Some(FileMatcher {
-                            try_files: vec![
-                                "{http.request.uri.path}",
-                                "{http.request.uri.path}/index.php",
-                                "index.php",
-                            ],
-                            split_path: Some(vec![".php"]),
-                            try_policy: Some("first_exist_fallback"),
-                        }),
-                        ..Matcher::default()
-                    }),
-                    Self::Rewrite {
-                        uri: "{http.matchers.file.relative}",
-                    },
-                ),
-                Route::step(
-                    Some(Matcher {
-                        path: Some(vec!["*.php"]),
-                        ..Matcher::default()
-                    }),
-                    Self::ReverseProxy {
-                        load_balancing: LoadBalancing {
-                            selection_policy: SelectionPolicy {
-                                policy: "least_conn",
-                            },
-                            try_duration: nanos(PHP_TRY_DURATION),
-                            try_interval: nanos(PHP_TRY_INTERVAL),
-                            retry_match: vec![MethodMatcher {
-                                method: vec!["GET", "HEAD"],
-                            }],
-                        },
-                        transport: FastCgiTransport {
-                            protocol: "fastcgi",
-                            split_path: vec![".php"],
-                        },
-                        upstreams: upstreams
-                            .iter()
-                            .map(|addr| Upstream {
-                                dial: addr.to_string(),
-                            })
-                            .collect(),
-                    },
-                ),
-                Route::step(
-                    None,
-                    Self::FileServer {
-                        root: None,
-                        index_names: vec!["index.html", "index.htm"],
-                    },
-                ),
-            ],
-        })
+        Self::ReverseProxy {
+            load_balancing: LoadBalancing {
+                selection_policy: SelectionPolicy {
+                    policy: "least_conn",
+                },
+                try_duration: nanos(PHP_TRY_DURATION),
+                try_interval: nanos(PHP_TRY_INTERVAL),
+                retry_match: vec![MethodMatcher {
+                    method: vec!["GET", "HEAD"],
+                }],
+            },
+            transport: FastCgiTransport {
+                protocol: "fastcgi",
+                split_path: vec![".php"],
+            },
+            upstreams: upstreams
+                .iter()
+                .map(|addr| Upstream {
+                    dial: addr.to_string(),
+                })
+                .collect(),
+        }
     }
 
     fn redirect(location: String) -> Self {
@@ -958,6 +1025,46 @@ mod tests {
         let handler = &site_route["handle"][0];
         assert_eq!(handler["handler"], "subroute");
         handler["routes"].as_array().unwrap()
+    }
+
+    #[test]
+    fn a_debug_worker_takes_only_requests_that_ask_for_xdebug() {
+        let mut cfg = with_php(vec![site("blog", false)]);
+        let value = json(&cfg);
+        let plain = php_steps(&servers(&value)[HTTP_SERVER]["routes"][0]).clone();
+        assert_eq!(plain.len(), 5, "no debug worker, no debug route");
+
+        cfg.php_pools.insert(
+            format!("8.4.27{DEBUG_POOL_SUFFIX}"),
+            vec!["127.0.0.1:9199".parse().unwrap()],
+        );
+        let value = json(&cfg);
+        let steps = php_steps(&servers(&value)[HTTP_SERVER]["routes"][0]);
+        assert_eq!(steps.len(), 6);
+        // After the front-controller rewrite, before the plain workers.
+        assert_eq!(steps[2]["handle"][0]["handler"], "rewrite");
+        let debug = &steps[3];
+        assert_eq!(
+            debug["handle"][0]["upstreams"],
+            serde_json::json!([{"dial": "127.0.0.1:9199"}])
+        );
+        assert_eq!(
+            steps[4]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:9101"
+        );
+        let sets = debug["match"].as_array().unwrap();
+        assert_eq!(sets.len(), 4, "the cookie, then one set per query key");
+        for set in sets {
+            assert_eq!(set["path"], serde_json::json!(["*.php"]), "{set}");
+        }
+        let pattern = sets[0]["header_regexp"]["Cookie"]["pattern"]
+            .as_str()
+            .unwrap();
+        assert_eq!(pattern, r"(^|;\s*)XDEBUG_(SESSION|TRIGGER)=");
+        assert_eq!(
+            sets[1]["query"],
+            serde_json::json!({"XDEBUG_SESSION_START": ["*"]})
+        );
     }
 
     #[test]

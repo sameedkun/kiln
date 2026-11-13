@@ -375,7 +375,10 @@ pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
         pools: running
             .pools
             .iter()
-            .filter(|p| p.id != version)
+            // Its debug worker too: its php.ini is the PHP's, written again (ADR 0061).
+            .filter(|p| {
+                p.id != version && p.id != format!("{version}{}", kiln_web::DEBUG_POOL_SUFFIX)
+            })
             .cloned()
             .collect(),
     };
