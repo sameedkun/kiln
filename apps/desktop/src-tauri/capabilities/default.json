@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Kiln's two windows: the main window and the tray popup. Everything else goes through the app's own commands (ADR 0054).",
+  "windows": ["main", "tray"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

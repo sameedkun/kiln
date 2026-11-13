@@ -95,6 +95,20 @@ jobs:
       - run: npm run check:offline
       - run: npm audit --audit-level=high
       - run: npm run e2e
+      # The app's Rust side (ADR 0054 §1): its own Cargo project, so the workspace's guards
+      # are repeated here. It embeds the pages built above.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> ../../../target
+      - name: the app's Rust side (fmt, clippy, tests, build)
+        working-directory: apps/desktop/src-tauri
+        # bash stops at the first failing command; PowerShell would carry on.
+        shell: bash
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked
+          cargo test --locked
+          cargo build --locked
       - name: keep the gallery's screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -108,3 +122,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+      # The desktop app has its own lockfile and policy (ADR 0054 §1).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: apps/desktop/src-tauri/Cargo.toml
+          command-arguments: --config apps/desktop/src-tauri/deny.toml

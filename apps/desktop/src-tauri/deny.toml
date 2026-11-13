@@ -1,0 +1,52 @@
+# cargo-deny policy for the desktop app (ADR 0054 §1): the workspace's (../../../deny.toml), plus
+# named exceptions for MPL-2.0 crates Tauri needs. MPL-2.0 is copyleft per file, not per program:
+# the app stays Apache-2.0, and those crates are used unmodified, their source on crates.io.
+# Keep this in step with the workspace's deny.toml.
+[graph]
+# The platforms Kiln ships for. Dependencies of other targets (e.g. wasm32-only crates) are
+# never built into Kiln, so they are not judged here.
+# The app is built for Windows only for now (ADR 0050, 0054): Linux-only dependencies (GTK,
+# D-Bus) are never built, so they are not judged. Add targets here with Phase 4b and Linux.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# The allow-list is policy, not an inventory; don't warn about entries no dependency uses yet.
+unused-allowed-license = "allow"
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+exceptions = [
+    # Servo's CSS parsing, through tauri-utils (it reads the built pages at build time).
+    { allow = ["MPL-2.0"], crate = "cssparser" },
+    { allow = ["MPL-2.0"], crate = "cssparser-macros" },
+    { allow = ["MPL-2.0"], crate = "selectors" },
+    { allow = ["MPL-2.0"], crate = "dtoa-short" },
+    # Through dirs, which Tauri uses for the user's folders.
+    { allow = ["MPL-2.0"], crate = "option-ext" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

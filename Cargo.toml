@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/kiln-core", "crates/kiln-ops", "crates/kiln-platform", "crates/kiln-cli", "crates/kiln-sys", "crates/kiln-state", "crates/kiln-helper", "crates/kiln-pki", "crates/kiln-web", "crates/kiln-fetch", "crates/kiln-php", "crates/kiln-supervisor", "crates/kiln-sites", "crates/kiln-runtime", "crates/kiln-doctor", "crates/kiln-coexist", "crates/kiln-daemon", "crates/kiln-node", "crates/kiln-services"]
-exclude = ["spikes"]
+exclude = ["spikes", "apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.0.0"

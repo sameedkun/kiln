@@ -28,6 +28,7 @@ export function TrayPopup({
   onOpenKiln,
   onStopAll,
   onQuit,
+  fill,
 }: {
   summary: string;
   attention?: { text: string; actionLabel: string; onAction: () => void };
@@ -38,11 +39,13 @@ export function TrayPopup({
   onOpenKiln: () => void;
   onStopAll: () => void;
   onQuit: () => void;
+  /** Fills its own window (the app); without it, a framed popup (the gallery). */
+  fill?: boolean;
 }) {
   const item = "flex h-[34px] w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[13px]";
   const label = "px-2 pb-1 pt-0.5 text-[11.5px] font-medium text-text-3";
   return (
-    <div role="dialog" aria-label="Kiln" className="backdrop pop-frame w-[340px] overflow-hidden rounded-pop text-text">
+    <div role="dialog" aria-label="Kiln" className={`backdrop overflow-hidden text-text ${fill ? "w-full" : "pop-frame w-[340px] rounded-pop"}`}>
       <div className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3.5">
         <Logo size={22} />
         <div>
@@ -59,6 +62,7 @@ export function TrayPopup({
           </Button>
         </div>
       )}
+      {sites.length > 0 && (
       <div className="border-t border-line px-1.5 pb-1 pt-1.5">
         <div className={label}>Sites</div>
         {sites.map((s) => (
@@ -70,6 +74,8 @@ export function TrayPopup({
           </button>
         ))}
       </div>
+      )}
+      {services.length > 0 && (
       <div className="border-t border-line px-1.5 pb-1 pt-1.5">
         <div className={label}>Services</div>
         {services.map((s) => {
@@ -98,6 +104,7 @@ export function TrayPopup({
           );
         })}
       </div>
+      )}
       <div className="flex gap-1.5 border-t border-line px-3 pb-3 pt-2.5">
         <Button variant="ink" className="flex-1 justify-center" onClick={onOpenKiln}>
           Open Kiln

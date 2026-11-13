@@ -45,6 +45,15 @@ impl Client {
         })
     }
 
+    /// How long [`Client::call`] waits for an answer (60 s from [`Client::connect`]). The read
+    /// methods of API version 2 may take up to 2 minutes ([ADR 0053] §4).
+    ///
+    /// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<(), ClientError> {
+        self.reader.get_ref().set_read_timeout(Some(timeout))?;
+        Ok(())
+    }
+
     /// Calls `method` and waits for its answer (notifications arriving meanwhile are skipped).
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, ClientError> {
         let id = self.next_id;

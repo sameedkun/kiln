@@ -1,0 +1,48 @@
+# Kiln's desktop app (ADR 0050, 0054): its own Cargo project, not a workspace member, because
+# Tauri needs system libraries Linux CI doesn't have and the app is Windows-only for now. It
+# builds into the workspace's target folder, next to kiln.exe and kilnd.exe.
+[package]
+name = "kiln-desktop"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+description = "Kiln's desktop app: a tray app over kilnd's API."
+
+# Not part of the root workspace (it is excluded there).
+[workspace]
+
+[dependencies]
+kiln-daemon = { path = "../../../crates/kiln-daemon" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.12.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "=2.7.3"
+tauri-plugin-single-instance = "=2.5.5"
+
+[features]
+# Pages from the built frontend inside the program (what `tauri build` turns on). On by
+# default, so `cargo build` gives a working app; `--no-default-features` loads the dev
+# server (`npm run dev`) instead.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+# The workspace's lints, which a project outside it doesn't inherit.
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

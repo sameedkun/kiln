@@ -1,13 +1,13 @@
 import "@fontsource-variable/inter";
 import "@fontsource/cascadia-mono/400.css";
-import "./styles/app.css";
+import "../styles/app.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { startAppearance, type Appearance } from "./appearance";
-import { ToastProvider } from "./components/Toast";
-import { Gallery } from "./gallery/Gallery";
+import { startAppearance, type Appearance } from "../appearance";
+import { ToastProvider } from "../components/Toast";
+import { Gallery } from "./Gallery";
 
-// Until the app's shell lands (P4-03), the page is the design gallery. `?theme=dark` and
+// The design gallery (gallery.html; the app is index.html). `?theme=dark` and
 // `?solid=1` pick an appearance, for the screenshot and accessibility checks.
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme");

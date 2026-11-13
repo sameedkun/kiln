@@ -12,6 +12,11 @@ export default defineConfig({
     target: "chrome120",
     // Fonts stay files next to the page: nothing is fetched from the network (ADR 0051 §5).
     assetsInlineLimit: 0,
+    // Two pages: the app (index.html, its main window and the tray popup) and the design
+    // gallery (gallery.html), which the browser checks use (ADR 0054 §5).
+    rollupOptions: {
+      input: { app: "index.html", gallery: "gallery.html" },
+    },
   },
   test: {
     environment: "jsdom",

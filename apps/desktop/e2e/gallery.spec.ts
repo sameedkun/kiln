@@ -31,7 +31,7 @@ async function scan(page: Page) {
 
 for (const mode of modes) {
   test(`gallery, ${mode.name}`, async ({ page }, info) => {
-    await page.goto(`/${mode.query}`);
+    await page.goto(`/gallery.html${mode.query}`);
     await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     const { violations, unexplained } = await scan(page);
@@ -54,7 +54,7 @@ const screens = ["home", "sites", "site:shop.test", "services", "php", "node", "
 for (const theme of ["light", "dark"]) {
   for (const screen of screens) {
     test(`screen ${screen}, ${theme}`, async ({ page }, info) => {
-      await page.goto(`/?theme=${theme}&page=${screen}`);
+      await page.goto(`/gallery.html?theme=${theme}&page=${screen}`);
       await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
       const app = page.locator('[data-shown="App"]');
@@ -71,7 +71,7 @@ for (const theme of ["light", "dark"]) {
 }
 
 test("the service catalog opens from Services", async ({ page }, info) => {
-  await page.goto("/?theme=light&page=services");
+  await page.goto("/gallery.html?theme=light&page=services");
   await page.getByRole("button", { name: "Add a service" }).click();
   await expect(page.getByRole("dialog", { name: "Add a service" })).toBeVisible();
   const { violations } = await scan(page);
@@ -80,7 +80,7 @@ test("the service catalog opens from Services", async ({ page }, info) => {
 });
 
 test("scrolled content goes under the page header's glass", async ({ page }) => {
-  await page.goto("/?theme=light");
+  await page.goto("/gallery.html?theme=light");
   const header = page.getByRole("heading", { name: "Home", level: 1 }).locator("..");
   await expect(header).not.toHaveClass(/\bglass\b/);
   await page.locator("main > div[tabindex='-1']").evaluate((el) => el.scrollTo(0, 200));
@@ -88,7 +88,7 @@ test("scrolled content goes under the page header's glass", async ({ page }) => 
 });
 
 test("the dialog, menu and toast pass too, open", async ({ page }) => {
-  await page.goto("/?theme=dark");
+  await page.goto("/gallery.html?theme=dark");
   await page.getByRole("button", { name: "Unlink shop.test…" }).click();
   await expect(page.getByRole("dialog", { name: "Unlink shop.test?" })).toBeVisible();
   let found = await scan(page);
@@ -110,7 +110,7 @@ test("the dialog, menu and toast pass too, open", async ({ page }) => {
 
 test("high contrast: no glass, and the selected page and focus still show", async ({ page }, info) => {
   await page.emulateMedia({ forcedColors: "active" });
-  await page.goto("/?theme=light");
+  await page.goto("/gallery.html?theme=light");
   const nav = page.getByRole("navigation", { name: "Pages" });
   const outline = await nav.getByRole("button", { name: "Home" }).evaluate((el) => getComputedStyle(el).outlineStyle);
   expect(outline).not.toBe("none");
