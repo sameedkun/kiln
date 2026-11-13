@@ -225,7 +225,7 @@ request (2026-11-12).
 | P4-06 | First-run onboarding: each system change previewed, consent per change | P4-03 | ADR 0004 previews; [ADR 0057](adr/0057-first-run-onboarding.md); done |
 | P4-07 | History with undo, doctor and settings pages | P4-03 | [ADR 0058](adr/0058-history-doctor-settings.md); built |
 | P4-08 | Log viewer: Caddy, PHP errors per site, services, `kilnd`; follow live | P4-03 | [ADR 0059](adr/0059-log-viewer.md); built |
-| P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047 |
+| P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047; [ADR 0060](adr/0060-dev-processes.md); built |
 | P4-10 | Xdebug: per PHP version, triggered per request (cookie or browser extension); a separate debug worker so other requests stay fast | P4-03 | |
 | P4-11 | Dump capture: `dump()`/`dd()` output collected and shown, by an open-source collector chosen in a spike | P4-03 | |
 | P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | Its server binds every interface: see below |

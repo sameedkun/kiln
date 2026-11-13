@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod devprocs;
 pub mod install;
 mod mailpit;
 mod meilisearch;
@@ -174,6 +175,17 @@ pub struct Launch {
     pub stop_command: Option<Vec<String>>,
 }
 
+/// What a service that runs in a project runs on ([ADR 0060] §1).
+///
+/// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runtime {
+    /// The PHP Kiln picks for the project's folder.
+    Php,
+    /// The Node Kiln picks for the project's folder.
+    Node,
+}
+
 /// One kind of service ([ADR 0035] §2). Implementations are compiled in and pass the
 /// contract tests below.
 ///
@@ -281,16 +293,40 @@ pub trait ServiceProvider: Sync {
         false
     }
 
-    /// How to run an instance in `project` with the PHP at `php`, for a provider that
+    /// How to run an instance in `project` with `runtime` (the PHP or Node executable its
+    /// [`ServiceProvider::runtime`] names), for a provider that
     /// [`runs_in_project`](ServiceProvider::runs_in_project). None by default.
     fn project_launch(
         &self,
         _project: &Path,
-        _php: &Path,
+        _runtime: &Path,
         _ports: &BTreeMap<String, u16>,
     ) -> Option<Launch> {
         None
     }
+
+    /// What a service that runs in a project runs on: PHP by default.
+    fn runtime(&self) -> Runtime {
+        Runtime::Php
+    }
+
+    /// The version a project has of what this service runs (from its `composer.lock` or
+    /// `node_modules`), or why it can't run there, with the command that sets it up. Kiln
+    /// never runs that command ([ADR 0047], [ADR 0060]).
+    ///
+    /// [ADR 0047]: ../../../docs/adr/0047-reverb.md
+    /// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
+    fn project_version(&self, project: &Path) -> Result<String, String> {
+        Err(format!(
+            "{} doesn't run in a project like {}",
+            self.display_name(),
+            project.display()
+        ))
+    }
+
+    /// Tidies up after an instance in `project` stopped, such as a file it leaves behind
+    /// when it is ended rather than asked to stop. Nothing by default.
+    fn after_stop(&self, _project: &Path, _ports: &BTreeMap<String, u16>) {}
 
     /// Whether instances hold named databases that [`ServiceProvider::create_database`]
     /// makes. False by default.
@@ -359,7 +395,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 9] = [
+    static PROVIDERS: [&dyn ServiceProvider; 12] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -369,6 +405,9 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &rustfs::Rustfs,
         &mongodb::Mongodb,
         &reverb::Reverb,
+        &devprocs::Queue,
+        &devprocs::Scheduler,
+        &devprocs::Vite,
     ];
     &PROVIDERS
 }
@@ -432,7 +471,12 @@ mod contract {
     fn ports_have_unique_roles_and_usual_numbers() {
         for provider in providers() {
             let ports = provider.ports();
-            assert!(!ports.is_empty(), "{}", provider.kind());
+            // Only a process in a project may listen on nothing: a queue worker (ADR 0060).
+            assert!(
+                !ports.is_empty() || provider.runs_in_project(),
+                "{}",
+                provider.kind()
+            );
             let mut roles: Vec<_> = ports.iter().map(|p| p.role).collect();
             roles.sort_unstable();
             roles.dedup();
@@ -606,19 +650,27 @@ mod contract {
         Some((key.trim(), value.trim().trim_matches(['\'', '"'])))
     }
 
+    /// The PHP or Node a project service is given in these tests.
+    fn sample_runtime(provider: &dyn ServiceProvider) -> &'static Path {
+        Path::new(match provider.runtime() {
+            Runtime::Php => "/k/php/php",
+            Runtime::Node => "/k/node/node",
+        })
+    }
+
     #[test]
     fn instances_listen_on_loopback_and_stay_in_their_folders() {
         let services = Path::new("/k/services");
         for provider in providers() {
             let dirs = InstanceDirs::new(services, provider.kind(), "1.0", "x-1");
-            // A service that runs in a project runs the PHP it's given, in the project.
+            // A service that runs in a project runs the PHP or Node it's given, in the project.
             let project = Path::new("/k/project");
-            let php = Path::new("/k/php/php");
+            let runtime = sample_runtime(*provider);
             let (launch, home) = if provider.runs_in_project() {
                 let launch = provider
-                    .project_launch(project, php, &sample_ports(*provider))
+                    .project_launch(project, runtime, &sample_ports(*provider))
                     .expect("a project service has a project launch");
-                assert_eq!(launch.program, php, "{}", provider.kind());
+                assert_eq!(launch.program, runtime, "{}", provider.kind());
                 (launch, project)
             } else {
                 let launch = provider.launch(&dirs, &sample_ports(*provider));

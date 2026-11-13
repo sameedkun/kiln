@@ -121,9 +121,61 @@ pub fn check(args: &[String], mode: Mode) -> Result<(), String> {
     Ok(())
 }
 
+/// For `service add <kind>`: the `--project` folder it names, which the daemon checks is a Kiln
+/// site's ([ADR 0060] §5). A kind that runs in a project must name one: without it, the
+/// command would use the daemon's own working folder.
+///
+/// # Errors
+/// A project kind without `--project`, or `--project` without a folder.
+///
+/// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
+pub fn project_of_service_add(args: &[String]) -> Result<Option<&str>, String> {
+    if args.len() < 3 || args[0] != "service" || args[1] != "add" {
+        return Ok(None);
+    }
+    let mut project = None;
+    let mut rest = args[3..].iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--project" {
+            project = Some(
+                rest.next()
+                    .map(String::as_str)
+                    .ok_or("--project needs a folder")?,
+            );
+        } else if let Some(value) = arg.strip_prefix("--project=") {
+            project = Some(value);
+        }
+    }
+    let in_project = kiln_services::provider(&args[2])
+        .is_some_and(kiln_services::ServiceProvider::runs_in_project);
+    if in_project && project.is_none() {
+        return Err(format!(
+            "`kiln service add {}` through the API needs --project <a site's folder>",
+            args[2]
+        ));
+    }
+    Ok(project)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_process_names_its_folder() {
+        assert_eq!(
+            project_of_service_add(&args("service add queue --project D:/Code/shop")),
+            Ok(Some("D:/Code/shop"))
+        );
+        assert_eq!(
+            project_of_service_add(&args("service add vite --project=D:/Code/shop")),
+            Ok(Some("D:/Code/shop"))
+        );
+        assert!(project_of_service_add(&args("service add queue")).is_err());
+        assert!(project_of_service_add(&args("service add queue --project")).is_err());
+        assert_eq!(project_of_service_add(&args("service add mysql")), Ok(None));
+        assert_eq!(project_of_service_add(&args("link shop")), Ok(None));
+    }
 
     fn args(text: &str) -> Vec<String> {
         text.split_whitespace().map(str::to_owned).collect()

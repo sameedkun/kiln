@@ -84,7 +84,49 @@ fn write_config(
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// How a service that runs in a project starts: in its folder, with the PHP Kiln picks there.
+/// The PHP or Node executable Kiln picks for `project`, as `provider` runs on
+/// ([ADR 0060] §1).
+///
+/// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
+fn runtime_for(
+    store: &StateStore,
+    provider: &dyn ServiceProvider,
+    project: &Path,
+) -> Result<PathBuf, String> {
+    match provider.runtime() {
+        kiln_services::Runtime::Php => kiln_runtime::php_for_dir(store, project)
+            .map_err(|e| e.to_string())?
+            .php
+            .php
+            .map(|php| php.dir.join(kiln_php::PHP_EXE))
+            .ok_or_else(|| {
+                format!(
+                    "Kiln has no PHP for {}: `kiln php install` first",
+                    project.display()
+                )
+            }),
+        kiln_services::Runtime::Node => {
+            let local = kiln_state::default_local_dir()
+                .ok_or("cannot determine Kiln's local data directory")?;
+            let installed = kiln_node::installed(&local.join(kiln_runtime::node::NODE_DIR));
+            let default = store
+                .setting(kiln_runtime::node::DEFAULT_KEY)
+                .map_err(|e| e.to_string())?;
+            kiln_runtime::node::node_for_dir(&installed, default.as_deref(), project)
+                .node
+                .map(|node| node.node_exe())
+                .ok_or_else(|| {
+                    format!(
+                        "Kiln has no Node for {}: `kiln node install` first",
+                        project.display()
+                    )
+                })
+        }
+    }
+}
+
+/// How a service that runs in a project starts: in its folder, with the PHP or Node Kiln picks
+/// there.
 fn project_launch(
     store: &StateStore,
     provider: &dyn ServiceProvider,
@@ -97,13 +139,9 @@ fn project_launch(
     if !project.is_dir() {
         return Err(format!("{} is gone", project.display()));
     }
-    let php = kiln_runtime::php_for_dir(store, project)
-        .map_err(|e| e.to_string())?
-        .php
-        .php
-        .ok_or_else(|| format!("Kiln has no PHP for {}", project.display()))?;
+    let runtime = runtime_for(store, provider, project)?;
     provider
-        .project_launch(project, &php.dir.join(kiln_php::PHP_EXE), &record.ports)
+        .project_launch(project, &runtime, &record.ports)
         .ok_or_else(|| "it has no way to start".to_owned())
 }
 
@@ -131,12 +169,15 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
             write_config(provider, &dirs, &record.ports)?;
             provider.launch(&dirs, &record.ports)
         };
-        let main = provider
-            .ports()
-            .first()
-            .and_then(|p| record.ports.get(p.role))
-            .copied()
-            .ok_or_else(|| format!("{} has no main port recorded", record.name))?;
+        // A process that listens on nothing (a queue worker, ADR 0060) runs on port 0.
+        let main = match provider.ports().first() {
+            None => 0,
+            Some(p) => record
+                .ports
+                .get(p.role)
+                .copied()
+                .ok_or_else(|| format!("{} has no main port recorded", record.name))?,
+        };
         let also_listens = record
             .ports
             .values()
@@ -224,6 +265,19 @@ fn apply(store: &StateStore) -> Result<(), String> {
     if !wait_released(&gone, &stopping) {
         say!("Note: a service is taking long to stop; it may still be finishing.");
     }
+    // What a stopped process in a project leaves behind, such as Vite's `public/hot`.
+    for old in before
+        .pools
+        .iter()
+        .filter(|old| !pools.pools.iter().any(|p| p.id == old.id))
+    {
+        if let Some(record) = store.service(&old.id).ok().flatten()
+            && let Some(project) = &record.project
+            && let Ok(provider) = provider_of(&record.kind)
+        {
+            provider.after_stop(project, &record.ports);
+        }
+    }
     // The web tools list the instances as they now are (ADR 0043). Only a convenience: a
     // failure is reported, never in the way of the services themselves.
     if let Err(e) = crate::tool::write_servers(store) {
@@ -257,10 +311,13 @@ fn is_ours(holder: &kiln_coexist::Holder) -> bool {
     let Ok(bin) = services_dir().map(|s| s.join("bin")) else {
         return false;
     };
-    // A service that runs in a project runs Kiln's PHP (ADR 0047).
-    let php = kiln_state::default_local_dir().map(|local| local.join("php"));
+    // A service that runs in a project runs Kiln's PHP (ADR 0047) or Node (ADR 0060).
+    let runtimes: Vec<PathBuf> = kiln_state::default_local_dir()
+        .iter()
+        .flat_map(|local| [local.join("php"), local.join(kiln_runtime::node::NODE_DIR)])
+        .collect();
     holder.image.as_ref().is_some_and(|image| {
-        std::iter::once(&bin).chain(php.as_ref()).any(|dir| {
+        std::iter::once(&bin).chain(&runtimes).any(|dir| {
             if cfg!(windows) {
                 image
                     .to_string_lossy()
@@ -599,20 +656,10 @@ fn in_project(
     let dir = std::fs::canonicalize(&dir)
         .map(crate::web::strip_verbatim)
         .map_err(|e| format!("cannot use {}: {e}", dir.display()))?;
-    let version = kiln_services::reverb::installed_version(&dir).ok_or_else(|| {
-        format!(
-            "{} has no laravel/reverb installed: run `composer require laravel/reverb -W` there first (-W lets Composer adjust packages it already locked, such as guzzlehttp/psr7 for Laravel 13), then `php artisan reverb:install` for its keys",
-            dir.display()
-        )
-    })?;
-    let found =
-        kiln_runtime::php_for_dir(&crate::web::open_store()?, &dir).map_err(|e| e.to_string())?;
-    if found.php.php.is_none() {
-        return Err(format!(
-            "{} runs on the project's PHP, and Kiln has none for it: `kiln php install` first",
-            provider.display_name()
-        ));
-    }
+    let version = provider.project_version(&dir)?;
+    let store = crate::web::open_store()?;
+    runtime_for(&store, provider, &dir)?;
+    let found = kiln_runtime::php_for_dir(&store, &dir).map_err(|e| e.to_string())?;
     let label: String = found
         .site
         .as_deref()
@@ -627,6 +674,47 @@ fn in_project(
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     Ok((dir, version, label))
+}
+
+/// What `service add` says once an instance runs: its ports, and where it runs or keeps its
+/// data.
+fn say_added(
+    provider: &dyn ServiceProvider,
+    record: &ServiceRecord,
+    project: Option<&Path>,
+    dirs: &InstanceDirs,
+) {
+    let (name, version) = (&record.name, &record.version);
+    let ports = describe_ports(provider, &record.ports);
+    if ports.is_empty() {
+        say!(
+            "{} {version} is running as {name}.",
+            provider.display_name()
+        );
+    } else {
+        say!(
+            "{} {version} is running as {name}: {ports}.",
+            provider.display_name()
+        );
+    }
+    let runtime = match provider.runtime() {
+        kiln_services::Runtime::Php => "PHP",
+        kiln_services::Runtime::Node => "Node",
+    };
+    match project {
+        Some(dir) if ports.is_empty() => say!(
+            "It runs in {} with its {runtime}, and Kiln keeps it running.",
+            dir.display()
+        ),
+        Some(dir) => say!(
+            "It listens on this computer only, and runs in {} with its {runtime}.",
+            dir.display()
+        ),
+        None => say!(
+            "It listens on this computer only. Its data is in {}.",
+            dirs.data.display()
+        ),
+    }
 }
 
 /// `kiln service add <kind> [--version] [--name] [--port role=N] [--project]`. Returns the
@@ -645,7 +733,7 @@ pub fn add(
     } else {
         if project.is_some() {
             return Err(format!(
-                "{kind} doesn't run in a project; --project is for reverb"
+                "{kind} doesn't run in a project; --project is for reverb, queue, scheduler and vite"
             ));
         }
         let release = release_of(provider, version)?;
@@ -716,21 +804,7 @@ pub fn add(
             "{name} was added but didn't start: {e}\nSee `kiln service logs {name}`."
         ));
     }
-    say!(
-        "{} {version} is running as {name}: {}.",
-        provider.display_name(),
-        describe_ports(provider, &record.ports)
-    );
-    match &project {
-        Some(dir) => say!(
-            "It listens on this computer only, and runs in {} with its PHP.",
-            dir.display()
-        ),
-        None => say!(
-            "It listens on this computer only. Its data is in {}.",
-            dirs.data.display()
-        ),
-    }
+    say_added(provider, &record, project.as_deref(), &dirs);
     // Its web UI as a site: a convenience, so a failure is reported, not fatal.
     if let Err(e) = attach_ui(provider, &record) {
         say!("Note: its web UI wasn't served as a site: {e}");
@@ -746,6 +820,11 @@ fn answers(record: &ServiceRecord, listeners: &crate::coexist::Listeners) -> boo
     let Some(provider) = kiln_services::provider(&record.kind) else {
         return false;
     };
+    // A process that listens on nothing (a queue worker, ADR 0060) runs while the
+    // supervisor does, which keeps it up.
+    if provider.ports().is_empty() {
+        return true;
+    }
     provider
         .ports()
         .first()

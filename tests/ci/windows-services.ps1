@@ -596,6 +596,50 @@ Check 'service restart reverb-shop: it comes back' {
     Expect '101 Switching Protocols' (Handshake)
 }
 
+Say '== Dev processes (ADR 0060)'
+function QueueProcesses { @(Get-CimInstance Win32_Process -Filter "Name='php.exe'" | Where-Object { $_.CommandLine -match 'queue:(listen|work)' }) }
+Check 'kiln service add queue --project shop: php artisan queue:listen, kept up by Kiln' {
+    Expect 'running as queue-shop' (Kiln service add queue --project $shop)
+    if ((QueueProcesses).Count -lt 1) { throw 'no queue:listen process' }
+}
+Check 'a job dispatched by Laravel runs on it (the queue is Kiln''s Redis)' {
+    $done = Join-Path $shop 'storage\kiln-queued.txt'
+    Remove-Item $done -ErrorAction SilentlyContinue
+    Set-Content (Join-Path $shop 'kiln-dispatch.php') -Encoding ascii -Value @'
+<?php
+require __DIR__ . '/vendor/autoload.php';
+$app = require __DIR__ . '/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+dispatch(function () { file_put_contents(storage_path('kiln-queued.txt'), 'ran'); });
+echo "kiln-dispatched\n";
+'@
+    Push-Location $shop
+    try { Expect 'kiln-dispatched' (Php kiln-dispatch.php) } finally { Pop-Location }
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    if (-not (Test-Path $done)) { throw "the job didn't run within 60 s:`n$(Kiln service logs queue-shop)" }
+}
+Check 'service stop queue-shop: no queue process is left (its own process tree is ended)' {
+    Kiln service stop queue-shop | Out-Null
+    $left = QueueProcesses
+    if ($left.Count) { throw "still running:`n$($left.CommandLine -join "`n")" }
+}
+Check 'kiln service add scheduler --project shop: php artisan schedule:work' {
+    Expect 'running as scheduler-shop' (Kiln service add scheduler --project $shop)
+    $deadline = (Get-Date).AddSeconds(30)
+    do { Start-Sleep -Milliseconds 500; $log = Kiln service logs scheduler-shop } until ($log -match 'scheduled tasks' -or (Get-Date) -gt $deadline)
+    Expect 'scheduled tasks' $log
+}
+Check 'kiln service add vite without node_modules: refused, naming npm install' {
+    $out = (& $Kiln service add vite --project $shop 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -or $out -notmatch 'npm install') { throw "expected a refusal naming npm install:`n$out" }
+    $global:LASTEXITCODE = 0
+}
+Check 'the dev processes are removed; the project stays' {
+    foreach ($name in 'queue-shop', 'scheduler-shop') { Kiln service remove $name | Out-Null }
+    if (-not (Test-Path (Join-Path $shop 'artisan'))) { throw 'the project lost its artisan' }
+}
+
 Say '== kilnd and services (ADR 0048)'
 Check 'services keep running through kiln web stop' {
     Kiln web stop | Out-Null

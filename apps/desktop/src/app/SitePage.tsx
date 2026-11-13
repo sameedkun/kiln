@@ -5,6 +5,7 @@ import { Notice } from "../components/Notice";
 import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { Select } from "../components/Select";
+import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
@@ -176,6 +177,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
 
       <SiteServices site={site} go={go} />
 
+      <SiteProcesses site={site} go={go} />
+
       {site.source === "link" && (
         <Button
           onClick={() =>
@@ -217,6 +220,72 @@ function SiteServices({ site, go }: { site: Site; go: (page: string) => void }) 
           <span className="text-right text-[12.5px]">{i.running ? "Running" : i.enabled ? "Not running" : "Stopped"}</span>
         </Row>
       ))}
+    </Section>
+  );
+}
+
+/** A project's development processes, by kind (ADR 0060). */
+export const processes: { kind: string; label: string; what: string; laravel: boolean }[] = [
+  { kind: "queue", label: "Queue worker", what: "Runs queued jobs (php artisan queue:listen), picking up code changes.", laravel: true },
+  { kind: "scheduler", label: "Scheduler", what: "Runs the schedule every minute (php artisan schedule:work).", laravel: true },
+  { kind: "vite", label: "Vite", what: "Serves scripts and styles with hot reload, from the project's node_modules.", laravel: false },
+];
+
+/** The queue worker, scheduler and Vite for this site's project: started here, kept up by Kiln. */
+function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void }) {
+  const services = useRead<ServicesList>("services.list");
+  const { run, ask } = useChanges();
+  if (site.source === "alias") return null;
+  const shown = processes.filter((p) => !p.laravel || site.driver === "laravel");
+  return (
+    <Section title="Dev processes" meta="kept running by Kiln">
+      {shown.map((p) => {
+        const instance = services.data?.instances.find((i) => i.kind === p.kind && i.project === site.project);
+        const port = instance && Object.values(instance.ports)[0];
+        const toggle = instance
+          ? () => run(["service", instance.enabled ? "stop" : "start", instance.name], `${instance.enabled ? "Stopped" : "Started"} the ${p.label.toLowerCase()} for ${site.host}.`)
+          : () => run(["service", "add", p.kind, "--project", site.project], `The ${p.label.toLowerCase()} runs for ${site.host} now.`);
+        return (
+          <Row
+            key={p.kind}
+            columns="minmax(130px,1fr) minmax(200px,2.2fr) 190px"
+            actions={
+              instance && (
+                <>
+                  <Button variant="quiet" size="sm" onClick={() => go(`logs:service:${instance.name}`)}>
+                    Log
+                  </Button>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    onClick={() => ask(`Remove ${instance.name}?`, `Kiln stops running the ${p.label.toLowerCase()} for ${site.host}. The project stays as it is.`, "Remove", ["service", "remove", instance.name], `Removed ${instance.name}.`)}
+                  >
+                    Remove
+                  </Button>
+                </>
+              )
+            }
+          >
+            <span className="text-sm font-semibold">{p.label}</span>
+            <span className="text-[12.5px] text-text-2">
+              {p.what}
+              {port ? <span className="figures"> On 127.0.0.1:{port}.</span> : null}
+            </span>
+            <span className="flex items-center justify-end gap-3">
+              {instance ? (
+                <Status state={instance.running ? "running" : instance.enabled ? "attention" : "stopped"} label={instance.enabled && !instance.running ? "Not running" : undefined} />
+              ) : (
+                <span className="text-[12.5px] text-text-3">Off</span>
+              )}
+              {services.data && (
+                <Button size="sm" aria-label={`${instance?.enabled ? "Stop" : "Start"} the ${p.label.toLowerCase()}`} onClick={toggle}>
+                  {instance?.enabled ? "Stop" : "Start"}
+                </Button>
+              )}
+            </span>
+          </Row>
+        );
+      })}
     </Section>
   );
 }

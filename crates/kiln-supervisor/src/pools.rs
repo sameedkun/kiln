@@ -132,7 +132,8 @@ impl Pools {
     }
 
     /// Every address that must accept connections before the pools count as started: the
-    /// workers', plus the other ports programs open.
+    /// workers', plus the other ports programs open. A program on port 0 listens on none
+    /// (a queue worker, [`PoolSpec::program`]).
     #[must_use]
     pub fn ready_addresses(&self) -> Vec<SocketAddr> {
         let also = self
@@ -141,7 +142,11 @@ impl Pools {
             .filter_map(|pool| pool.program_spec.as_ref())
             .flat_map(|spec| &spec.also_listens)
             .map(|&port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
-        self.upstreams().into_iter().chain(also).collect()
+        self.upstreams()
+            .into_iter()
+            .filter(|a| a.port() != 0)
+            .chain(also)
+            .collect()
     }
 }
 
@@ -188,7 +193,10 @@ impl PoolSpec {
     }
 
     /// A program, such as a service instance, listening on `port` (and the ports in
-    /// `spec.also_listens`). It is never recycled.
+    /// `spec.also_listens`); port 0 for one that listens on none, such as a queue worker
+    /// ([ADR 0060]). It is never recycled.
+    ///
+    /// [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
     #[must_use]
     pub fn program(id: String, program: PathBuf, port: u16, spec: ProgramSpec) -> Self {
         Self {
@@ -379,6 +387,19 @@ mod tests {
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 8025))
             ]
         );
+    }
+
+    #[test]
+    fn a_program_on_port_0_has_nothing_to_wait_for() {
+        let pools = Pools {
+            pools: vec![PoolSpec::program(
+                "queue-shop".into(),
+                "/k/php/8.4/php".into(),
+                0,
+                ProgramSpec::default(),
+            )],
+        };
+        assert_eq!(pools.ready_addresses(), []);
     }
 
     #[test]

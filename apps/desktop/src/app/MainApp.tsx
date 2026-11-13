@@ -30,6 +30,8 @@ import { SitesPage } from "./SitesPage";
 
 function Screen({ page, go, setUp }: { page: string; go: (page: string) => void; setUp: () => void }) {
   if (page.startsWith("site:")) return <SitePage host={page.slice(5)} go={go} />;
+  // A log chosen elsewhere, such as a site's queue worker: logs:<source>.
+  if (page.startsWith("logs:")) return <LogsPage first={page.slice(5)} />;
   switch (page) {
     case "home":
       return <Home go={go} />;
@@ -122,7 +124,7 @@ export function MainApp() {
         <Sidebar
           items={pages}
           footer={[{ id: "settings", label: "Settings", icon: <Settings20Regular /> }]}
-          current={page.startsWith("site:") ? "sites" : page}
+          current={page.startsWith("site:") ? "sites" : page.startsWith("logs:") ? "logs" : page}
           onSelect={setPage}
           status={
             <>

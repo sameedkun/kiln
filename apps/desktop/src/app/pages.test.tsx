@@ -24,6 +24,7 @@ const { ChangeProvider } = await import("./Change");
 const { HistoryPage, DoctorPage } = await import("./HistoryDoctor");
 const { LogsPage } = await import("./LogsPage");
 const { Settings } = await import("./Pages");
+const { SitePage } = await import("./SitePage");
 
 const shell = (page: ReactNode) =>
   render(
@@ -132,5 +133,41 @@ describe("Settings", () => {
     await userEvent.type(http, "8443");
     expect(screen.getByText("Not the same as HTTP")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Restart on these ports" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("a site's dev processes (ADR 0060)", () => {
+  it("shows each process, and starts one for the site's project", async () => {
+    const site = {
+      host: "shop.test",
+      url: "https://shop.test",
+      driver: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: true,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: "22.11.0", asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [{ version: "8.4.27", installed: true }], default: "8.4.27" });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({
+      supervisor_running: true,
+      instances: [{ name: "queue-shop", kind: "queue", version: "12.38.1", ports: {}, used_by: [], web: null, databases: false, main_port: null, enabled: true, running: true, project: site.project }],
+    });
+    answers["jobs.start"] = () => ({ job: 1 });
+    answers["jobs.get"] = () => ({ running: false, finished: { job: 1, ok: true, exit: 0, needs_confirmation: false, last: { type: "result" } }, events: [] });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    const section = await screen.findByRole("region", { name: "Dev processes" });
+    expect(section.textContent).toContain("Queue worker");
+    expect(section.textContent).toContain("Scheduler");
+    expect(section.textContent).toContain("Vite");
+    expect(await screen.findByRole("button", { name: "Stop the queue worker" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Start the scheduler" }));
+    await vi.waitFor(() => expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["service", "add", "scheduler", "--project", site.project] }));
   });
 });

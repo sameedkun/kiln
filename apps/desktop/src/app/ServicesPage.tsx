@@ -35,6 +35,7 @@ const categories: { id: string; label: string; kinds: string[] }[] = [
   { id: "mail", label: "Mail", kinds: ["mailpit"] },
   { id: "storage", label: "Storage", kinds: ["rustfs"] },
   { id: "realtime", label: "Realtime", kinds: ["reverb"] },
+  { id: "dev", label: "Dev processes", kinds: ["queue", "scheduler", "vite"] },
 ];
 export const categoryOf = (kind: string) => categories.find((c) => c.kinds.includes(kind))?.id ?? "other";
 
@@ -99,8 +100,8 @@ export function ServicesPage() {
               items={[
                 { label: "Restart", onSelect: () => run(["service", "restart", i.name], `Restarted ${i.name}.`) },
                 { label: "View its log", onSelect: () => setOpen({ kind: "logs", instance: i }) },
-                { label: "Change a port…", onSelect: () => setOpen({ kind: "ports", instance: i }) },
-                ...(i.kind === "reverb" ? [] : [{ label: "Wire a site to it…", onSelect: () => setOpen({ kind: "wire", instance: i }) }]),
+                ...(Object.keys(i.ports).length ? [{ label: "Change a port…", onSelect: () => setOpen({ kind: "ports", instance: i }) }] : []),
+                ...(i.project ? [] : [{ label: "Wire a site to it…", onSelect: () => setOpen({ kind: "wire", instance: i }) }]),
                 ...(i.databases && i.kind !== "mongodb"
                   ? [
                       { label: "Dump a database…", icon: <ArrowDownload16Regular />, groupStart: true, onSelect: () => setOpen({ kind: "dump", instance: i }) },
@@ -118,7 +119,7 @@ export function ServicesPage() {
           {i.name} <span className="figures text-[12.5px] font-normal text-text-2">{i.version}</span>
         </RowName>
         <Detail mono>{mainPort(i) ? `:${mainPort(i)}` : ""}</Detail>
-        <Detail>{i.used_by.length ? `used by ${i.used_by.join(", ")}` : "no site uses it"}</Detail>
+        <Detail>{i.used_by.length ? `used by ${i.used_by.join(", ")}` : i.project ? "for its project" : "no site uses it"}</Detail>
         <span className="flex justify-end">
           <Status state={state} label={state === "attention" ? "Not running" : undefined} />
         </span>
@@ -229,7 +230,8 @@ function AddDialog({ sites, onClose }: { sites?: SitesList; onClose: () => void 
   const [kind, setKind] = useState<ServiceKind | null>(null);
   const [version, setVersion] = useState("");
   const [project, setProject] = useState("");
-  const projects = (sites?.sites ?? []).filter((s) => s.driver === "laravel");
+  // Vite runs in any project; the others in a Laravel one.
+  const projects = (sites?.sites ?? []).filter((s) => s.source !== "alias" && (kind?.kind === "vite" || s.driver === "laravel"));
   const ready = kind !== null && (kind.runs_in_project ? project !== "" : version !== "");
   return (
     <JobDialog
@@ -264,7 +266,7 @@ function AddDialog({ sites, onClose }: { sites?: SitesList; onClose: () => void 
           >
             <div className="text-sm font-medium text-text">{k.name}</div>
             <div className="truncate text-xs text-text-3" title={k.license}>
-              {k.runs_in_project ? "runs in a Laravel project" : k.versions.join(" · ") || "not for this PC yet"}
+              {k.runs_in_project ? (k.kind === "vite" ? "runs in a project, from its node_modules" : "runs in a Laravel project") : k.versions.join(" · ") || "not for this PC yet"}
             </div>
           </button>
         ))}

@@ -552,13 +552,17 @@ impl Daemon {
                 let main = kiln_services::provider(&record.kind)
                     .and_then(|p| p.ports().first())
                     .and_then(|role| record.ports.get(role.role).copied());
-                let answers = main.is_some_and(|port| {
-                    std::net::TcpStream::connect_timeout(
-                        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
-                        Duration::from_millis(300),
-                    )
-                    .is_ok()
-                });
+                // A process that listens on nothing (a queue worker) runs with the supervisor.
+                let portless =
+                    kiln_services::provider(&record.kind).is_some_and(|p| p.ports().is_empty());
+                let answers = (portless && matches!(supervisor, ProcStatus::Running { .. }))
+                    || main.is_some_and(|port| {
+                        std::net::TcpStream::connect_timeout(
+                            &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+                            Duration::from_millis(300),
+                        )
+                        .is_ok()
+                    });
                 json!({
                     "name": record.name,
                     "kind": record.kind,
@@ -710,6 +714,19 @@ impl Daemon {
         let mode =
             Mode::parse(params["mode"].as_str().unwrap_or_default()).map_err(RpcError::kiln)?;
         allow::check(&args, mode).map_err(RpcError::kiln)?;
+        if let Some(project) = allow::project_of_service_add(&args).map_err(RpcError::kiln)? {
+            // A process runs in that folder with the user's rights: only a Kiln site's
+            // (ADR 0060 §5), as for env.show.
+            let sites = self.read(&["sites"])?;
+            let known = sites["sites"]
+                .as_array()
+                .is_some_and(|all| all.iter().any(|site| site["project"] == project));
+            if !known {
+                return Err(RpcError::kiln(format!(
+                    "{project} isn't the folder of one of Kiln's sites"
+                )));
+            }
+        }
         let id = self.jobs.add(
             args.clone(),
             mode,

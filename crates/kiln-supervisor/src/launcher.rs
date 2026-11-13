@@ -106,11 +106,22 @@ impl PhpCgiLauncher {
             let _ = child.wait();
             return Err(e);
         }
+        // Its own job too, nested in the supervisor's, so stopping it ends what it started
+        // (a queue worker's job processes, Vite's helpers) and not only itself ([ADR 0060]
+        // §3). Without one, it still ends with the supervisor.
+        //
+        // [ADR 0060]: ../../../docs/adr/0060-dev-processes.md
+        #[cfg(windows)]
+        let tree = kiln_sys::win::KillOnCloseJob::new()
+            .ok()
+            .filter(|job| job.assign(&child).is_ok());
         Ok(Box::new(ProgramWorker {
             child,
             spec,
             cwd,
             log,
+            #[cfg(windows)]
+            tree,
         }))
     }
 }
@@ -237,6 +248,9 @@ struct ProgramWorker {
     cwd: std::path::PathBuf,
     /// Its output file, shared with its stop command (see [`open_log`]).
     log: File,
+    /// Its process tree: closed after it stops, ending anything it left running.
+    #[cfg(windows)]
+    tree: Option<kiln_sys::win::KillOnCloseJob>,
 }
 
 /// How long a program gets to exit after each way of asking it to.
@@ -252,6 +266,18 @@ impl Worker for ProgramWorker {
     }
 
     fn stop(&mut self) {
+        self.stop_program();
+        #[cfg(windows)]
+        {
+            self.tree = None;
+        }
+    }
+}
+
+impl ProgramWorker {
+    /// Asks the program to stop (its stop command, then SIGTERM where there is one), and
+    /// kills it if it doesn't.
+    fn stop_program(&mut self) {
         if !matches!(self.child.try_wait(), Ok(None)) {
             return;
         }

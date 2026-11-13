@@ -25,14 +25,7 @@ fn port_of(ports: &BTreeMap<String, u16>) -> u16 {
 /// The `laravel/reverb` version a project has installed, from its `composer.lock`.
 #[must_use]
 pub fn installed_version(project: &Path) -> Option<String> {
-    let lock = fs::read_to_string(project.join("composer.lock")).ok()?;
-    let lock: serde_json::Value = serde_json::from_str(&lock).ok()?;
-    lock["packages"]
-        .as_array()?
-        .iter()
-        .find(|p| p["name"] == "laravel/reverb")?["version"]
-        .as_str()
-        .map(|v| v.trim_start_matches('v').to_owned())
+    crate::devprocs::composer_version(project, "laravel/reverb")
 }
 
 impl ServiceProvider for Reverb {
@@ -63,6 +56,15 @@ impl ServiceProvider for Reverb {
 
     fn runs_in_project(&self) -> bool {
         true
+    }
+
+    fn project_version(&self, project: &Path) -> Result<String, String> {
+        installed_version(project).ok_or_else(|| {
+            format!(
+                "{} has no laravel/reverb installed: run `composer require laravel/reverb -W` there first (-W lets Composer adjust packages it already locked, such as guzzlehttp/psr7 for Laravel 13), then `php artisan reverb:install` for its keys",
+                project.display()
+            )
+        })
     }
 
     fn init_data(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Result<(), String> {
