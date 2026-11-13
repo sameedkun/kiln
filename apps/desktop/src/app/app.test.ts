@@ -178,3 +178,40 @@ describe("first-run onboarding (ADR 0057)", async () => {
     expect(https.done({ ...fresh, ca: { exists: true, trusted: true } })).toBe(true);
   });
 });
+
+describe("history, doctor and settings (ADR 0058)", async () => {
+  const { byDay, dayOf, byArea } = await import("./HistoryDoctor");
+  const { portError } = await import("./Pages");
+  const now = new Date(2026, 10, 13, 15, 0);
+  const op = (id: number, at: Date | null) => ({ id, at_ms: at ? at.getTime() : null, state: "in effect", kind: "x", description: `op ${id}` });
+
+  it("names days relative to today", () => {
+    expect(dayOf(new Date(2026, 10, 13, 0, 5).getTime(), now)).toBe("Today");
+    expect(dayOf(new Date(2026, 10, 12, 23, 59).getTime(), now)).toBe("Yesterday");
+    expect(dayOf(null, now)).toBe("Earlier");
+  });
+
+  it("groups operations by day, keeping their order", () => {
+    const groups = byDay([op(3, new Date(2026, 10, 13, 9)), op(2, new Date(2026, 10, 13, 8)), op(1, new Date(2026, 10, 12, 8))], now);
+    expect(groups.map(([day, ops]) => [day, ops.map((o) => o.id)])).toEqual([
+      ["Today", [3, 2]],
+      ["Yesterday", [1]],
+    ]);
+  });
+
+  it("groups findings by area in the doctor's order", () => {
+    const f = (area: string, message: string) => ({ area, status: "ok" as const, message });
+    expect(byArea([f("web", "a"), f("php", "b"), f("web", "c")]).map(([a, g]) => [a, g.length])).toEqual([
+      ["web", 2],
+      ["php", 1],
+    ]);
+  });
+
+  it("checks a typed port", () => {
+    expect(portError("8080")).toBeUndefined();
+    expect(portError("0")).toBeDefined();
+    expect(portError("70000")).toBeDefined();
+    expect(portError("80a")).toBeDefined();
+    expect(portError("")).toBeDefined();
+  });
+});

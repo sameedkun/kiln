@@ -810,6 +810,44 @@ fn node_json(here: &kiln_runtime::node::DirNode) -> serde_json::Value {
     })
 }
 
+/// `kiln settings` ([ADR 0058] §2): what the app's Settings page shows and changes.
+///
+/// [ADR 0058]: ../../../docs/adr/0058-history-doctor-settings.md
+pub fn settings() -> Result<(), String> {
+    use crate::coexist::{HTTP, HTTPS, is_auto, planned_port};
+    let store = open_store()?;
+    let tld = kiln_runtime::tld(&store).map_err(|e| e.to_string())?;
+    let workers = crate::pool::workers(&store)?;
+    let port = |kind| -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({
+            "port": planned_port(&store, kind)?,
+            "auto": is_auto(&store, kind)?,
+        }))
+    };
+    let (http, https) = (port(&HTTP)?, port(&HTTPS)?);
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "tld": tld.as_str(),
+            "http": http,
+            "https": https,
+            "php_workers": workers,
+        }));
+        return Ok(());
+    }
+    let who = |v: &serde_json::Value| {
+        if v["auto"] == true {
+            "picked by Kiln"
+        } else {
+            "your choice"
+        }
+    };
+    say!("Development TLD: .{}", tld.as_str());
+    say!("HTTP port:       {} ({})", http["port"], who(&http));
+    say!("HTTPS port:      {} ({})", https["port"], who(&https));
+    say!("PHP workers:     {workers} per PHP version");
+    Ok(())
+}
+
 /// The framework's version in a project (ADR 0055 §1): its package in `composer.lock`, or
 /// `WordPress`' own version file.
 fn framework_version(driver: kiln_sites::Driver, project: &Path) -> Option<String> {

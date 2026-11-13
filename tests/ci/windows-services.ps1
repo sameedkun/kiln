@@ -659,6 +659,13 @@ Check 'kiln setup: what onboarding asks about, as it is on this runner (ADR 0057
     if ($setup.hosts.sites -lt 1) { throw "sites: $($setup.hosts | ConvertTo-Json)" }
     Expect '"ready": true' (Kiln daemon call setup.status)
 }
+Check 'kiln settings: the TLD, the ports and who picked them, PHP workers (ADR 0058)' {
+    $settings = (JsonLines @(& $Kiln --json settings))[-1].data
+    if ($settings.tld -ne 'test') { throw "tld: $($settings.tld)" }
+    if (-not ($settings.http.port -gt 0 -and $settings.https.port -gt 0)) { throw "ports: $($settings | ConvertTo-Json -Depth 3)" }
+    if ($settings.php_workers -lt 1) { throw "workers: $($settings.php_workers)" }
+    Expect '"php_workers"' (Kiln daemon call settings.get)
+}
 Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
     $lines = @(& $Kiln --json sites)
     if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }

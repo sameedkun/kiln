@@ -4,6 +4,7 @@ import {
   Database20Regular,
   Globe20Regular,
   History20Regular,
+  Stethoscope20Regular,
   Home20Regular,
   Settings20Regular,
   TextBulletListLtr20Regular,
@@ -19,6 +20,7 @@ import { closeNoticeRead, setTray, windowAction, type DaemonState, type Services
 import { Home } from "./Home";
 import { Onboarding } from "./Onboarding";
 import { useDaemon, useRead } from "./hooks";
+import { DoctorPage, HistoryPage } from "./HistoryDoctor";
 import { NotYet, Settings } from "./Pages";
 import { NodePage, PhpPage } from "./RuntimePages";
 import { SitePage } from "./SitePage";
@@ -38,6 +40,10 @@ function Screen({ page, go, setUp }: { page: string; go: (page: string) => void;
       return <PhpPage />;
     case "node":
       return <NodePage />;
+    case "history":
+      return <HistoryPage />;
+    case "doctor":
+      return <DoctorPage />;
     case "settings":
       return <Settings setUp={setUp} />;
     default:
@@ -103,6 +109,7 @@ export function MainApp() {
     { id: "node", label: "Node", icon: <Cube20Regular /> },
     { id: "logs", label: "Logs", icon: <TextBulletListLtr20Regular />, groupStart: true },
     { id: "history", label: "History", icon: <History20Regular /> },
+    { id: "doctor", label: "Doctor", icon: <Stethoscope20Regular /> },
   ];
 
   return (

@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-12 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 and P4-04 done (ADRs 0054, 0055), P4-05 and P4-06 in progress (ADRs 0056, 0057)) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-13 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 built (ADR 0058); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1480,9 +1480,9 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-02 | The visual design | **done** 2026-11-12 | [ADR 0051](adr/0051-desktop-visual-design.md); [the approved mockup](design/desktop-mockup.html); `apps/desktop`: design values, base components, the design gallery; contrast, axe and high-contrast checks on CI |
 | P4-03 | The app's shell: tray, close to tray, starts at login | **done** 2026-11-13 | [ADR 0054](adr/0054-desktop-app-shell.md); the user's by-hand check passed (starting after sign-in and transparency off still to see, in P4-14); CI blocked ([I-91](issues.md#i-91)), checked locally |
 | P4-04 | Sites, PHP and Node pages | **done** 2026-11-13 | [ADR 0055](adr/0055-sites-php-node-pages.md); the user linked a project and tried the pages; three issues fixed |
-| P4-05 | Services page | in progress | [ADR 0056](adr/0056-services-page.md); built and checked locally; waiting for the user's look |
-| P4-06 | First-run onboarding | in progress | [ADR 0057](adr/0057-first-run-onboarding.md); built and checked locally; waiting for the user's run on a PC without Kiln |
-| P4-07 | History, doctor, settings | planned | |
+| P4-05 | Services page | **done** 2026-11-13 | [ADR 0056](adr/0056-services-page.md); the user's look passed |
+| P4-06 | First-run onboarding | **done** 2026-11-13 | [ADR 0057](adr/0057-first-run-onboarding.md); the user's run passed |
+| P4-07 | History, doctor, settings | built | [ADR 0058](adr/0058-history-doctor-settings.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-08 | Log viewer | planned | |
 | P4-09 | Dev processes (queue, scheduler, Vite) | planned | |
 | P4-10 | Xdebug | planned | |
@@ -1839,6 +1839,8 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-13 | P4-05's CI and Scenario passed (both uninstall modes), with the new checks: shop.test uses mysql-8.4, Mailpit's page, `env show` hides APP_KEY and marks DB_PORT as Kiln's, the daemon refuses another folder. |
 | 2026-11-13 | **P4-06 built** ([ADR 0057](adr/0057-first-run-onboarding.md)): `kiln setup` (and `setup.status`) reports what's set up from the doctor's facts (web server, PHP and Composer, Node, Kiln's CA and its trust, sites missing from the hosts file, shims on PATH, the login item, `ready`). The app's onboarding walks eight steps below the title bar, skipping what's done: install and start the web server; pick and install PHP (and Composer) with a progress bar; make and trust Kiln's CA through the preview; park or link projects, then the hosts file through its preview; the shims on PATH and starting at sign-in, each through its preview; a summary. It opens on its own when Kiln isn't ready unless dismissed ("Not now", kept in `app.json`), and from Settings ("Set up Kiln"). The Scenario checks `kiln setup` on the runner. Waiting for the user's run. |
 | 2026-11-13 | **The user's run of P4-04 to P4-06**, with Herd running beside Kiln. Explained: Herd holds ports 80 and 443, so Kiln serves on 8080 and 8443; a name without the port reaches Herd ("Site not found"); `mailpit.test` didn't resolve because it wasn't in the hosts file (the onboarding's Projects step or `kiln hosts sync` adds it). Fixed: opening a site whose name isn't in the hosts file now offers `hosts sync` through its preview, everywhere a site opens (the app's `open_site` refuses with a marked error); menus and toasts sit on Kiln's solid surface (glass doesn't blur inside the scrolling page, so the row below showed through a menu); the onboarding's heading is "Set up" and its lists have bullets; a site's page has tabs (Overview, `.env`), Logs and Requests to join with P4-08 and P4-18; switching a site's PHP says "Switching…" while the other version's workers start. Planned: P4-20, PECL extensions (phpredis), after a spike for verified Windows builds. |
+| 2026-11-13 | **Kiln stayed on 8080 after Herd quit** ([I-93](issues.md#i-93)): a port Kiln picked now moves back to 80 and 443 once they're free; a port the user chose never moves. The user says P4-05 and P4-06 look good, and asks to build the rest of Phase 4 and test it together at the end. |
+| 2026-11-13 | **P4-07 built** ([ADR 0058](adr/0058-history-doctor-settings.md)): `kiln settings` (and `settings.get`) reads the TLD, the web server's ports with who picked them, and PHP's workers. The app's History page groups changes by day with Undo through its preview and a Show undone switch; the Doctor page shows `kiln doctor`'s findings by area, problems first, each with its fix; Settings gains Kiln's section: the ports (Let Kiln pick, or two ports, applied by stopping and starting the web server), PHP workers, the TLD (shown). The Scenario checks `kiln settings`. |
 
 ## How to update this file
 

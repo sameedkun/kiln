@@ -121,6 +121,9 @@ enum Command {
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
     Doctor,
+    /// Kiln's settings: the development TLD, the web server's ports (and whether Kiln picks
+    /// them), PHP's worker count (ADR 0058). Changes nothing.
+    Settings,
     /// What's set up and what isn't yet: the web server, PHP, HTTPS, the hosts file, the shims,
     /// starting at sign-in. What first-run onboarding asks about (ADR 0057). Changes nothing.
     Setup,
@@ -745,6 +748,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::History { .. }
             | Command::Doctor
             | Command::Setup
+            | Command::Settings
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -987,6 +991,7 @@ fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Doctor => unreachable!("handled in main"),
         Command::Setup => doctor::setup(),
+        Command::Settings => web::settings(),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
         } => plan_hosts(&names, tld.as_deref(), file),

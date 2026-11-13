@@ -70,6 +70,26 @@ export interface HistoryList {
   hidden: number;
 }
 
+export interface Finding {
+  area: string;
+  status: "ok" | "info" | "warn" | "fail";
+  message: string;
+  fix?: string;
+}
+export interface DoctorReport {
+  findings: Finding[];
+}
+export interface PortSetting {
+  port: number;
+  auto: boolean;
+}
+export interface KilnSettings {
+  tld: string;
+  http: PortSetting;
+  https: PortSetting;
+  php_workers: number;
+}
+
 export interface ServiceKind {
   kind: string;
   name: string;
