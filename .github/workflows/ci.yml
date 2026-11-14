@@ -121,6 +121,21 @@ jobs:
           cargo clippy --all-targets --locked
           cargo test --locked
           cargo build --locked
+      # The built app end to end (P4-13): kiln and kilnd beside it, as an install has them;
+      # the app starts kilnd, and the test drives its WebView2 through the debugging port.
+      - name: kiln and kilnd beside the app
+        working-directory: .
+        run: cargo build -p kiln-cli -p kiln-daemon --locked
+      - name: the built app, end to end
+        shell: pwsh
+        run: |
+          $env:KILN_APP_EXE = (Resolve-Path ../../target/debug/kiln-desktop.exe).Path
+          npm run e2e:app
+      - name: stop the daemon the app started
+        if: always()
+        working-directory: .
+        shell: pwsh
+        run: if (Test-Path target/debug/kiln.exe) { ./target/debug/kiln.exe daemon stop }
       - name: keep the gallery's screenshots
         if: always()
         uses: actions/upload-artifact@v7

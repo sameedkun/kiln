@@ -1488,7 +1488,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-10 | Xdebug | built | [ADR 0061](adr/0061-xdebug.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-11 | Dump capture | built | [ADR 0062](adr/0062-dump-capture.md); checked locally; the Scenario is the spike's evidence |
 | P4-12 | WhoDB | waiting | spike first: its server binds every interface |
-| P4-13 | Tests on CI | planned | |
+| P4-13 | Tests on CI | built | frontend unit and render tests, the gallery in Edge with axe, API checks against a real `kilnd` in the Scenario, and the built app end to end (WebView2 through its debugging port, with a real `kilnd`) |
 | P4-14 | Phase 4 exit run | planned | |
 | P4-15 | The screens | **done** 2026-11-12 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); every page in the gallery, checked with axe in light and dark |
 | P4-16 | Footprint | built | [ADR 0063](adr/0063-footprint.md); checked locally |
@@ -1854,6 +1854,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4-19 built** ([ADR 0066](adr/0066-mcp-server.md)): `kiln mcp` is an MCP server on standard input and output (`initialize`, `ping`, `tools/list`, `tools/call`). Its tools read through `kiln --json`: sites, services, logs, request timing, history, the doctor. With `kiln mcp allow-changes on` (off by default) it also offers starting, stopping and restarting services and undoing an operation, each the same command the user would run, with its arguments checked so none becomes an option. It doesn't hold Kiln's change lock while it serves. Settings has an AI assistants section with the command to add and the switch. The Scenario drives a session: reads, a refused restart, then an allowed one. |
 | 2026-11-14 | **I-96 seen once**: in one of the two Scenario jobs for P4-18, Mailpit still answered after its supervisor was killed, and the services then didn't come back; the other job and every other run passed. The crash and reboot checks now print which process held the port and both logs, for the next time. |
 | 2026-11-14 | **P4-20 built** ([ADR 0067](adr/0067-pecl-extensions.md)): phpredis 6.3.0's Windows builds for PHP 8.2 to 8.5 come from downloads.php.net, which publishes no checksums, so a new manual workflow ("Pin downloads") computed their SHA-256 on a fresh runner, and the Scenario checks them again. `kiln php ext add redis` downloads and checks the build, puts `php_redis.dll` in that PHP's `ext` folder and turns it on (journaled, undoable); `php update` carries it over. The PHP page offers "Add phpredis". |
+| 2026-11-14 | **P4-13 built**: the CI desktop job builds `kiln` and `kilnd` beside the built app and runs it end to end: Playwright attaches to the app's WebView2 through its debugging port, waits for "Kiln is running" (the app started `kilnd` through `kiln`), sees the first-run onboarding and leaves it, then opens Sites, Settings (its `.test` and the assistants switch, read through `kilnd`) and Doctor. With the frontend's unit and render tests, the gallery's accessibility checks in Edge, and the Scenario's API checks against a real `kilnd`, every layer runs on CI. `kiln mcp` now skips a byte-order mark, which Windows PowerShell puts before piped text. |
 
 ## How to update this file
 

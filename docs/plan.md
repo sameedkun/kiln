@@ -229,7 +229,7 @@ request (2026-11-12).
 | P4-10 | Xdebug: per PHP version, triggered per request (cookie or browser extension); a separate debug worker so other requests stay fast | P4-03 | [ADR 0061](adr/0061-xdebug.md); built |
 | P4-11 | Dump capture: `dump()`/`dd()` output collected and shown, by an open-source collector chosen in a spike | P4-03 | [ADR 0062](adr/0062-dump-capture.md): Symfony's dump server; built |
 | P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | Its server binds every interface: see below |
-| P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task |
+| P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task; built (the app end to end through WebView2's debugging port rather than WebDriver) |
 | P4-14 | The Phase 4 exit run: CI plus a by-hand check on a developer machine | all | |
 | P4-15 | The screens: every page drawn in the design gallery from the base components, with sample data that drafts the API's shapes | P4-02 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); **Done** 2026-11-12 |
 | P4-16 | Kiln's footprint: memory and CPU per Kiln process, disk use by folder, clearing the download cache | P4-03 | ADR 0052; [ADR 0063](adr/0063-footprint.md); built |
