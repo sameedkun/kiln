@@ -1,0 +1,38 @@
+name: Search engines
+
+# OpenSearch and Elasticsearch on a clean Windows runner (ADR 0077): their 1.7 GB of downloads
+# would slow every services Scenario, so they run here, when their code changes, nightly and
+# on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/kiln-services/src/search.rs"
+      - "tests/ci/windows-search.ps1"
+      - ".github/workflows/search.yml"
+  schedule:
+    - cron: "11 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: search-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: search engines (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --bins --locked
+      - name: search engines
+        shell: powershell
+        run: tests\ci\windows-search.ps1 -Kiln "$pwd\target\debug\kiln.exe"

@@ -20,6 +20,7 @@ mod postgres;
 mod redis;
 pub mod reverb;
 mod rustfs;
+pub mod search;
 pub mod stripe;
 pub mod tools;
 pub mod tunnel;
@@ -433,7 +434,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 16] = [
+    static PROVIDERS: [&dyn ServiceProvider; 18] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -441,6 +442,8 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &pgadmin::Pgadmin,
         &redis::Redis,
         &meilisearch::Meilisearch,
+        &search::Opensearch,
+        &search::Elasticsearch,
         &rustfs::Rustfs,
         &mongodb::Mongodb,
         &reverb::Reverb,

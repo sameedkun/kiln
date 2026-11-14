@@ -31,7 +31,7 @@ import { Meter } from "../components/Meter";
 const categories: { id: string; label: string; kinds: string[] }[] = [
   { id: "databases", label: "Databases", kinds: ["mysql", "mariadb", "postgres", "mongodb"] },
   { id: "cache", label: "Cache", kinds: ["redis"] },
-  { id: "search", label: "Search", kinds: ["meilisearch"] },
+  { id: "search", label: "Search", kinds: ["meilisearch", "opensearch", "elasticsearch"] },
   { id: "mail", label: "Mail", kinds: ["mailpit"] },
   { id: "storage", label: "Storage", kinds: ["rustfs"] },
   { id: "tools", label: "Data tools", kinds: ["pgadmin"] },
