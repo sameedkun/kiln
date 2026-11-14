@@ -640,14 +640,16 @@ echo 'kiln-dispatched on ' . config('queue.default') . "\n";
     if ($site -ne $inst) { throw "site folder $site, instance folder $inst" }
 }
 Check 'a second queue worker for the same site (ADR 0069): its own process, removed on its own' {
+    # Listeners only (a job runs in a queue:work child), counted as an array even when one.
+    function Listeners { @(Get-CimInstance Win32_Process -Filter "Name='php.exe'" | Where-Object { $_.CommandLine -match 'queue:listen' }) }
     Expect 'running as queue-shop-2' (Kiln service add queue --project $shop --name queue-shop-2)
-    $deadline = (Get-Date).AddSeconds(10)
-    while ((QueueProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-    if ((QueueProcesses).Count -lt 2) { throw "$((QueueProcesses).Count) queue:listen process(es)" }
+    $deadline = (Get-Date).AddSeconds(15)
+    do { $now = @(Listeners); if ($now.Length -ge 2) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $deadline)
+    if ($now.Length -ne 2) { throw "$($now.Length) listener(s):`n$($now.CommandLine -join "`n")" }
     Kiln service remove queue-shop-2 | Out-Null
-    $deadline = (Get-Date).AddSeconds(10)
-    while ((QueueProcesses).Count -gt 1 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-    if ((QueueProcesses).Count -ne 1) { throw "$((QueueProcesses).Count) queue:listen process(es) after removing the second" }
+    $deadline = (Get-Date).AddSeconds(15)
+    do { $now = @(Listeners); if ($now.Length -le 1) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $deadline)
+    if ($now.Length -ne 1) { throw "$($now.Length) listener(s) after removing the second:`n$($now.CommandLine -join "`n")`n$(Kiln service list)" }
 }
 Check 'service stop queue-shop: no queue process is left (its own process tree is ended)' {
     Kiln service stop queue-shop | Out-Null
