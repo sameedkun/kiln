@@ -49,6 +49,43 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Git's refusal of a folder another Windows account owns ("dubious ownership"), said plainly
+/// with what fixes it (P4D-06).
+fn ownership(error: String, project: &Path) -> String {
+    if error.contains("dubious ownership") {
+        format!(
+            "dubious ownership: Git won't work in {} because another Windows account owns the folder (a guard since 2022). `kiln git trust` adds it to your Git's safe.directory list, as Git suggests.",
+            project.display()
+        )
+    } else {
+        error
+    }
+}
+
+/// `kiln git trust <site>`: the site's folder added to the user's own Git config as a
+/// `safe.directory`, which is what Git itself suggests for a folder another account owns.
+/// It changes `~/.gitconfig`, so the app asks first. Nothing is added twice.
+pub fn trust(name: &str) -> Result<(), String> {
+    let (host, project) = site(name)?;
+    let path = project.to_string_lossy().replace('\\', "/");
+    let home = std::env::temp_dir();
+    let listed = git(
+        &home,
+        &["config", "--global", "--get-all", "safe.directory"],
+    )
+    .unwrap_or_default();
+    if listed.lines().any(|l| l.trim().eq_ignore_ascii_case(&path)) {
+        say!("{path} is already a safe directory in your Git config.");
+        return Ok(());
+    }
+    git(
+        &home,
+        &["config", "--global", "--add", "safe.directory", &path],
+    )?;
+    say!("Your Git now trusts {path} ({host}): Kiln's Git section works there.");
+    Ok(())
+}
+
 /// A branch name Kiln passes to Git: not an option, and one Git itself accepts.
 fn check_branch(dir: &Path, branch: &str) -> Result<(), String> {
     if branch.is_empty() || branch.starts_with('-') || branch.chars().any(char::is_whitespace) {
@@ -120,7 +157,8 @@ fn worktrees(dir: &Path) -> Result<Vec<(PathBuf, Option<String>)>, String> {
 /// and its worktrees with the sites that serve them.
 pub fn branches(name: &str) -> Result<(), String> {
     let (host, project) = site(name)?;
-    let current = git(&project, &["branch", "--show-current"])?
+    let current = git(&project, &["branch", "--show-current"])
+        .map_err(|e| ownership(e, &project))?
         .trim()
         .to_owned();
     let all: Vec<String> = git(

@@ -361,6 +361,12 @@ enum GitAction {
         /// The branch.
         branch: String,
     },
+    /// Trust the site's folder in your Git config (`safe.directory`), for a folder another
+    /// Windows account owns, as Git itself suggests.
+    Trust {
+        /// The site, e.g. shop.
+        site: String,
+    },
     /// Worktrees of the site's repository, served as sites of their own.
     Worktree {
         #[command(subcommand)]
@@ -1370,6 +1376,7 @@ fn run_git(action: GitAction) -> Result<(), String> {
     match action {
         GitAction::Branches { site } => git::branches(&site),
         GitAction::Switch { site, branch } => git::switch(&site, &branch),
+        GitAction::Trust { site } => git::trust(&site),
         GitAction::Worktree {
             action: WorktreeAction::Add { site, branch, new },
         } => git::worktree_add(&site, &branch, new),

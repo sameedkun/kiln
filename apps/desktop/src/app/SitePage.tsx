@@ -473,9 +473,35 @@ function SiteGit({ site, go }: { site: Site; go: (page: string) => void }) {
   const [branch, setBranch] = useState("");
   const [adding, setAdding] = useState(false);
   if (git.error) {
+    // Git refuses a folder another Windows account owns: say why, and offer what Git suggests.
+    const owned = /dubious ownership/i.test(git.error);
     return (
       <Section title="Git">
-        <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">{/not a git repository/i.test(git.error) ? "Not a Git repository." : git.error}</li>
+        <li className="flex flex-wrap items-center gap-3 border-b border-line px-1 py-4 text-[13px] text-text-2">
+          <span className="min-w-0 flex-1">
+            {/not a git repository/i.test(git.error)
+              ? "Not a Git repository."
+              : owned
+                ? `Git won't work in ${site.project}: another Windows account owns the folder, and Git refuses such folders unless you trust them (a guard since 2022).`
+                : git.error}
+          </span>
+          {owned && (
+            <Button
+              size="sm"
+              onClick={() =>
+                ask(
+                  "Trust this folder in Git?",
+                  `Kiln adds ${site.project} to the safe.directory list in your own Git config (~/.gitconfig), as Git itself suggests. Only do this for a folder that's yours.`,
+                  "Trust it",
+                  ["git", "trust", site.host],
+                  "Git trusts the folder now.",
+                )
+              }
+            >
+              Trust this folder…
+            </Button>
+          )}
+        </li>
       </Section>
     );
   }

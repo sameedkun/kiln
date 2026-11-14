@@ -52,6 +52,7 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["group"], false),
     (&["share"], false),
     (&["git", "switch"], false),
+    (&["git", "trust"], false),
     (&["git", "worktree", "add"], false),
     (&["git", "worktree", "remove"], false),
     (&["unproxy"], false),
