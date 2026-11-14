@@ -118,6 +118,11 @@ export interface Footprint {
   cache_bytes: number;
 }
 
+export interface Updates {
+  php: { version: string; newest: string; update: boolean }[];
+  kiln: { version: string; checking: boolean; latest: string | null; update: boolean; error: string | null; page: string };
+}
+
 export interface ServiceKind {
   kind: string;
   name: string;
@@ -253,6 +258,7 @@ export const quit = () => invoke("quit");
 export const openSite = (host: string) => invoke("open_site", { host });
 /** A site's folder in Explorer, by its host name (ADR 0055 §2). */
 export const openFolder = (host: string) => invoke("open_folder", { host });
+export const openReleases = () => invoke("open_releases");
 /** Windows' open dialog for a .sql file (ADR 0056 §3). */
 export const pickSql = (title: string) => invoke<string | null>("pick_sql", { title });
 /** Windows' save dialog, for where a dump goes. */

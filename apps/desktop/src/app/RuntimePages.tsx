@@ -10,7 +10,7 @@ import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
-import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList } from "./api";
+import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList, type Updates } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -110,6 +110,9 @@ function InstallDialog({ what, load, args, onClose }: { what: string; load: () =
 // PHP (ADR 0055): the versions Kiln keeps, which sites use each, and their extensions.
 export function PhpPage() {
   const php = useRead<PhpList>("php.list");
+  // Patch releases from windows.php.net (ADR 0064); none shown when it can't be reached.
+  const updates = useRead<Updates>("updates.check");
+  const newest = (version: string) => updates.data?.php.find((u) => u.version === version && u.update)?.newest;
   const sites = useRead<SitesList>("sites.list");
   const { run, ask } = useChanges();
   const { progress, onLine, clear } = useProgress();
@@ -181,6 +184,11 @@ export function PhpPage() {
                 {isDefault && (
                   <span className="ml-2">
                     <Tag>default</Tag>
+                  </span>
+                )}
+                {newest(v.version) && (
+                  <span className="ml-2">
+                    <Tag>{newest(v.version)} available</Tag>
                   </span>
                 )}
                 {v.xdebug && (

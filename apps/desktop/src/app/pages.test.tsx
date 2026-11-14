@@ -118,6 +118,10 @@ describe("Settings", () => {
     answers.login_item = () => "none";
     answers["settings.get"] = () => ({ tld: "test", http: { port: 8080, auto: true }, https: { port: 8443, auto: true }, php_workers: 4 });
     answers["setup.status"] = () => ({ ready: true, web: { installed: true, running: true } });
+    answers["updates.check"] = () => ({
+      php: [],
+      kiln: { version: "0.1.0", checking: true, latest: "v0.2.0", update: true, error: null, page: "https://github.com/sameedkun/kiln/releases" },
+    });
     answers["footprint.get"] = () => ({
       processes: [{ label: "PHP 8.4.27 workers", count: 4, memory_bytes: 90_000_000, cpu_percent: 0.4 }],
       memory_bytes: 90_000_000,
@@ -131,6 +135,8 @@ describe("Settings", () => {
     expect(await screen.findByText("PHP 8.4.27 workers")).toBeTruthy();
     expect(screen.getByText("100.0 MB")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Clear the download cache" })).toBeTruthy();
+    expect(screen.getByText(/Kiln v0.2.0 is out; this is 0.1.0/)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Check GitHub for a new Kiln" })).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "PHP workers" }) as HTMLSelectElement).value).toBe("4");
 
     await userEvent.click(screen.getByRole("button", { name: "Change…" }));

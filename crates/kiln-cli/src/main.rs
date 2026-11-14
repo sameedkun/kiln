@@ -33,6 +33,7 @@ mod service;
 mod services_up;
 mod tool;
 mod uninstall;
+mod updates;
 mod web;
 mod xdebug;
 
@@ -124,6 +125,12 @@ enum Command {
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
     Doctor,
+    /// What can be updated: PHP patch releases for Kiln's PHP, and a new Kiln on GitHub if
+    /// checking for it is on (off by default; ADR 0064).
+    Updates {
+        #[command(subcommand)]
+        action: Option<UpdatesAction>,
+    },
     /// What Kiln uses on this PC: memory and CPU per kind of Kiln process, disk use per folder
     /// (ADR 0063). Changes nothing.
     Footprint,
@@ -436,6 +443,15 @@ enum AppAction {
     Disable {
         #[arg(long, short)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum UpdatesAction {
+    /// Let Kiln ask GitHub for its newest release (`on`), or not (`off`, the default).
+    CheckKiln {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
     },
 }
 
@@ -800,6 +816,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Settings
             | Command::Logs { .. }
             | Command::Footprint
+            | Command::Updates { action: None }
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -1048,6 +1065,10 @@ fn run(command: Command) -> Result<(), String> {
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
         Command::Footprint => footprint::footprint(),
+        Command::Updates { action: None } => updates::updates(),
+        Command::Updates {
+            action: Some(UpdatesAction::CheckKiln { state }),
+        } => updates::set_check_kiln(state == "on"),
         Command::Cache {
             action: CacheAction::Clear,
         } => footprint::clear_cache(),

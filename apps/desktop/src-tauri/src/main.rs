@@ -130,6 +130,18 @@ async fn open_folder(host: String, app: AppHandle, shell: State<'_, Shell>) -> R
         .map_err(|e| e.to_string())
 }
 
+/// Kiln's releases page, for "a new Kiln is out" (ADR 0064): a fixed address, never one the
+/// page gives.
+const RELEASES_PAGE: &str = "https://github.com/sameedkun/kiln/releases";
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+fn open_releases(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(RELEASES_PAGE, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// The folder `sites.list` gives for `host`.
 fn site_folder(sites: &Value, host: &str) -> Option<String> {
     sites["sites"]
@@ -585,6 +597,7 @@ fn main() {
             daemon_state,
             open_site,
             open_folder,
+            open_releases,
             pick_folder,
             pick_sql,
             pick_save,

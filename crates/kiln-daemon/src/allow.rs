@@ -81,6 +81,7 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["db", "restore"], false),
     (&["undo"], true),
     (&["cache", "clear"], false),
+    (&["updates", "check-kiln"], false),
     (&["web", "install"], false),
     (&["web", "start"], false),
     (&["web", "stop"], false),

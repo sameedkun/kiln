@@ -7,7 +7,7 @@ import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
-import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type KilnSettings, type SetupStatus } from "./api";
+import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type KilnSettings, type SetupStatus, type Updates, openReleases } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -80,6 +80,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
         </SettingRow>
       </Section>
       <KilnSection />
+      <UpdatesSection />
       <FootprintSection />
     </Page>
   );
@@ -249,5 +250,48 @@ function FootprintSection() {
         ))}
       </Section>
     </>
+  );
+}
+
+// Updates (ADR 0064): PHP's patches are on the PHP page; here, whether Kiln may ask GitHub for a
+// newer Kiln, off until the user turns it on.
+function UpdatesSection() {
+  const updates = useRead<Updates>("updates.check");
+  const { run } = useChanges();
+  const k = updates.data?.kiln;
+  const status = !k
+    ? ""
+    : !k.checking
+      ? `This is Kiln ${k.version}.`
+      : k.error
+        ? `This is Kiln ${k.version}. GitHub couldn't be reached: ${k.error}`
+        : k.update
+          ? `Kiln ${k.latest} is out; this is ${k.version}.`
+          : `Kiln ${k.version} is the newest.`;
+  return (
+    <Section title="Updates">
+      <SettingRow
+        title="Check GitHub for a new Kiln"
+        control={
+          k && (
+            <>
+              {k.update && (
+                <Button size="sm" onClick={() => openReleases()}>
+                  See Kiln {k.latest}
+                </Button>
+              )}
+              <Switch
+                hideLabel
+                label="Check GitHub for a new Kiln"
+                checked={k.checking}
+                onChange={(on) => run(["updates", "check-kiln", on ? "on" : "off"], on ? "Kiln checks GitHub for new releases now." : "Kiln doesn't check GitHub any more.")}
+              />
+            </>
+          )
+        }
+      >
+        Kiln asks GitHub for its newest release, sending nothing about you or this PC. {status}
+      </SettingRow>
+    </Section>
   );
 }

@@ -833,6 +833,17 @@ Check 'kiln footprint: Kiln''s processes with their memory, and its folders on d
     if ($data.cache_bytes -le 0) { throw 'the download cache is empty' }
     Expect '"memory_bytes"' (Kiln daemon call footprint.get)
 }
+Check 'kiln updates: PHP patches from windows.php.net; GitHub only once turned on (ADR 0064)' {
+    $last = { param($out) ($out -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data }
+    $data = & $last (Kiln --json updates)
+    if (-not $data.php -or -not $data.php[0].newest) { throw "no PHP in: $($data | ConvertTo-Json -Depth 4)" }
+    if ($data.kiln.checking) { throw 'checking GitHub is on by default' }
+    Kiln updates check-kiln on | Out-Null
+    $data = & $last (Kiln --json updates)
+    if (-not $data.kiln.checking) { throw "check-kiln on didn't take: $($data.kiln | ConvertTo-Json)" }
+    Kiln updates check-kiln off | Out-Null
+    Expect '"checking": false' (Kiln daemon call updates.check)
+}
 Check 'kiln cache clear: the download cache is emptied; what is installed keeps working' {
     $out = (Kiln --json cache clear) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
     if ($out.data.freed_bytes -le 0) { throw "nothing freed: $($out | ConvertTo-Json)" }

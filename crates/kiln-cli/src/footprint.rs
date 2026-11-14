@@ -9,10 +9,12 @@ use std::time::Duration;
 use serde_json::json;
 
 /// How long CPU use is measured over.
+#[cfg_attr(not(windows), allow(dead_code))] // processes are read on Windows only
 const SAMPLE: Duration = Duration::from_millis(500);
 
 /// What a Kiln process is, from where its program is.
 #[must_use]
+#[cfg_attr(not(windows), allow(dead_code))] // processes are read on Windows only
 pub fn label_of(image: &Path, local: &Path, kiln_dir: &Path) -> Option<String> {
     let lower = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
     let (image_l, local_l, kiln_l) = (lower(image), lower(local), lower(kiln_dir));

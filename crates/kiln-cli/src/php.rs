@@ -62,7 +62,7 @@ pub fn progress_printer(label: &str) -> impl FnMut(u64, Option<u64>) + '_ {
     }
 }
 
-fn releases(fetcher: &Fetcher) -> Result<Vec<PhpRelease>, String> {
+pub(crate) fn releases(fetcher: &Fetcher) -> Result<Vec<PhpRelease>, String> {
     let json = fetcher
         .get_text(INDEX_URL, INDEX_LIMIT)
         .map_err(|e| e.to_string())?;

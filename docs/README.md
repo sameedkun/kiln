@@ -79,6 +79,7 @@ working name). Start here.
 | [0061](adr/0061-xdebug.md) | Xdebug on demand: pinned Xdebug 3.5.3 NTS x64 builds for PHP 8.2–8.5, fetched into Kiln's own folder and proven to load; a debug worker per PHP (`<version>+xdebug`, the PHP's own `php.ini` plus `mode=debug`, `start_with_request=trigger`, client 127.0.0.1:9003); Caddy routes only requests with an Xdebug cookie or query trigger to it; on and off by PHP minor; Windows only for now | accepted (Phase 4) |
 | [0062](adr/0062-dump-capture.md) | Dump capture: Symfony VarDumper's dump server, run in the project as the `dumps` dev process (port 9912 or the next free, `--format=cli`), wired by `VAR_DUMPER_FORMAT=server` and `VAR_DUMPER_SERVER` through the `.env` preview; its log is the collection, on the Logs page and a site's Dumps tab | accepted (Phase 4) |
 | [0063](adr/0063-footprint.md) | Kiln's footprint: `kiln footprint` (a read, `footprint.get`) groups Kiln's processes (found by where their program is) with memory and CPU, and sizes its folders; `kiln cache clear` empties the download cache, the only thing it offers to remove; both in Settings | accepted (Phase 4) |
+| [0064](adr/0064-updates.md) | Updates: `kiln updates` (a read, `updates.check`) compares installed PHP with windows.php.net's newest patches, and Kiln with its newest GitHub release only when `kiln updates check-kiln on` (off by default); no self-update, the releases page opens | accepted (Phase 4) |
 
 ## Conventions
 
