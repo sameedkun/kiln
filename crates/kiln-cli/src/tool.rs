@@ -84,6 +84,7 @@ pub fn add(name: &str) -> Result<(), String> {
         );
     } else {
         let archive = crate::service::download(&tool.release)?;
+        crate::out::step(&format!("Unpacking {}", tool.display));
         kiln_services::install_into_folder(&tool.release, &archive, &parent)
             .map_err(|e| e.to_string())?;
         say!(
@@ -101,6 +102,7 @@ pub fn add(name: &str) -> Result<(), String> {
     }
     write_servers(&store)?;
     drop(store);
+    crate::out::step("Serving it as a site");
     crate::web::link(Some(tool.site.to_owned()), Some(root), false)
 }
 

@@ -87,6 +87,14 @@ pub fn preview(preview: &kiln_ops::Preview) {
     }));
 }
 
+/// The step a long change has reached after a download (unpacking, setting up, starting), so
+/// the app can say it's still working. Only in JSON mode: the terminal shows the outcome.
+pub fn step(text: &str) {
+    if json() {
+        event(&json!({"type": "step", "text": text}));
+    }
+}
+
 pub fn progress(label: &str, done: u64, total: Option<u64>) {
     event(&json!({"type": "progress", "label": label, "done": done, "total": total}));
 }

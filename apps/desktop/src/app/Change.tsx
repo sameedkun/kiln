@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import { Button } from "../components/Button";
 import { Dialog } from "../components/Dialog";
-import { useToast } from "../components/Toast";
+import { useDismissToast, useToast } from "../components/Toast";
 import { message, openSite, runJob, type JobEvent } from "./api";
 
 // Making a change from the app (ADR 0053 §4): commands that ask before changing anything
@@ -29,29 +29,83 @@ interface Changes {
   ask: (title: string, body: string, action: string, args: string[], done: string) => void;
 }
 
+/** Whether a command adds names that the hosts file needs (a site, a parked folder, a tool). */
+export function addsNames(args: string[]): boolean {
+  return ["link", "park", "proxy"].includes(args[0]) || (args[0] === "tool" && args[1] === "add") || (args[0] === "service" && args[1] === "add");
+}
+
+/** A download's progress in a few words: "Downloading mysql.zip · 34 of 120 MB". */
+export function progressText(e: JobEvent): string {
+  const mb = (n: number) => (n / 1_048_576).toFixed(0);
+  const label = e.label ?? "Downloading";
+  const done = e.done ?? 0;
+  return e.total ? `${label} · ${mb(done)} of ${mb(e.total)} MB` : `${label} · ${mb(done)} MB`;
+}
+
 const Context = createContext<Changes>({ run: async () => false, confirm: () => {}, open: () => {}, ask: () => {} });
 export const useChanges = () => useContext(Context);
 
 export function ChangeProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
+  const dismiss = useDismissToast();
+  // Changes running now, by their arguments: a second click on the same one waits for it.
+  const running = useRef(new Set<string>());
   const [ask, setAsk] = useState<Ask | null>(null);
   const [plain, setPlain] = useState<{ title: string; body: string; action: string; args: string[]; done: string; busy: boolean } | null>(null);
 
+  // After a change that adds site names: the hosts file, if it lacks any of them. Writing it
+  // needs Windows' administrator prompt, so it's offered, not done; nothing shows when every
+  // name is already there.
+  const offerHosts = useCallback(() => {
+    const args = ["hosts", "sync"];
+    const events: JobEvent[] = [];
+    runJob(args, "preview", (e) => events.push(e))
+      .then((end) => {
+        if (end.needs_confirmation) {
+          setAsk({ title: "Add the new names to the hosts file?", args, done: "Browsers find the new sites now.", events, phase: "ready" });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const run = useCallback(
     async (args: string[], done: string, onLine?: (event: JobEvent) => void) => {
+      const key = args.join("\u0000");
+      if (running.current.has(key)) {
+        toast({ message: "Already on it: that change is still running." });
+        return false;
+      }
+      running.current.add(key);
+      // A change that takes a moment says so, and what it's doing, until it ends.
+      let working: number | null = null;
+      let latest = "Working…";
+      const say = (text: string) => {
+        latest = text;
+        if (working !== null) toast({ message: text, sticky: true, replaces: working });
+      };
+      const timer = setTimeout(() => (working = toast({ message: latest, sticky: true })), 400);
       try {
-        const end = await runJob(args, "apply", onLine);
+        const end = await runJob(args, "apply", (e) => {
+          if (e.type === "progress") say(progressText(e));
+          else if (e.type === "step" && e.text) say(`${e.text}…`);
+          onLine?.(e);
+        });
         if (end.ok) {
           toast({ message: done });
+          if (addsNames(args)) offerHosts();
           return true;
         }
         toast({ message: end.last.message ?? `kiln ${args.join(" ")} failed` });
       } catch (e) {
         toast({ message: message(e) });
+      } finally {
+        clearTimeout(timer);
+        if (working !== null) dismiss(working);
+        running.current.delete(key);
       }
       return false;
     },
-    [toast],
+    [toast, dismiss, offerHosts],
   );
 
   const confirm = useCallback((title: string, args: string[], done: string) => {

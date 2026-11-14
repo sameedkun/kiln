@@ -196,7 +196,7 @@ export interface NodeAvailable {
 
 /** One line a job printed (ADR 0053 §1). */
 export interface JobEvent {
-  type: "note" | "warning" | "progress" | "preview" | "confirm";
+  type: "note" | "warning" | "progress" | "step" | "preview" | "confirm";
   text?: string;
   label?: string;
   done?: number;

@@ -120,7 +120,12 @@ pub fn stop_quietly() -> Result<bool, String> {
 
 pub fn stop() -> Result<(), String> {
     if stop_quietly()? {
-        say!("Kiln's daemon stopped. The web server keeps running; `kiln web stop` stops it.");
+        // Only mention the web server when there's one to keep running.
+        if crate::web::is_running().unwrap_or(false) {
+            say!("Kiln's daemon stopped. The web server keeps running; `kiln web stop` stops it.");
+        } else {
+            say!("Kiln's daemon stopped.");
+        }
     } else {
         say!("Kiln's daemon isn't running.");
     }

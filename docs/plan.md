@@ -208,8 +208,7 @@ request (2026-11-12).
   memory, CPU and disk use with a way to clear downloads; updates for PHP and, if the user
   turns it on, for Kiln; each site's request timing from Caddy's log; and an MCP server
   that AI assistants can use once the user turns it on.
-- **Data viewers:** WhoDB opens every Kiln database, Redis and MongoDB, already connected.
-  phpMyAdmin and Adminer stay.
+- **Data viewers:** phpMyAdmin and Adminer (WhoDB dropped, P4-12).
 - **Verification:** the app's end-to-end tests run on CI's Windows runner, and uninstall
   removes the app's login item and leaves the machine as it was.
 
@@ -228,7 +227,7 @@ request (2026-11-12).
 | P4-09 | Dev processes per project: queue worker, scheduler, Vite, as project processes like Reverb | P4-03 | ADR 0047; [ADR 0060](adr/0060-dev-processes.md); built |
 | P4-10 | Xdebug: per PHP version, triggered per request (cookie or browser extension); a separate debug worker so other requests stay fast | P4-03 | [ADR 0061](adr/0061-xdebug.md); built |
 | P4-11 | Dump capture: `dump()`/`dd()` output collected and shown, by an open-source collector chosen in a spike | P4-03 | [ADR 0062](adr/0062-dump-capture.md): Symfony's dump server; built |
-| P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | Its server binds every interface: see below |
+| P4-12 | WhoDB: spike, then "Browse data" with Kiln's instances already connected; phpMyAdmin and Adminer stay | P4-05 | **Dropped** 2026-11-14 by the user: a desktop app whose server binds every interface, more than Kiln wants to carry. Adminer covers PostgreSQL; pgAdmin comes on request (P4C-07) |
 | P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task; built (the app end to end through WebView2's debugging port rather than WebDriver) |
 | P4-14 | The Phase 4 exit run: CI plus a by-hand check on a developer machine | all | |
 | P4-15 | The screens: every page drawn in the design gallery from the base components, with sample data that drafts the API's shapes | P4-02 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); **Done** 2026-11-12 |
@@ -255,6 +254,32 @@ loopback setting and offers that setting upstream.
 (the API, shaped by the screens), P4-03, the pages (P4-04 to P4-07), the developer tools,
 WhoDB and the additions (P4-08 to P4-12, P4-16 to P4-19), with P4-13 growing alongside, and
 P4-14 last.
+
+## Phase 4c: a richer app (Windows)
+
+Asked for by the user on 2026-11-14 after their run of Phase 4: Kiln should be as complete
+on Windows as Lerd is on Linux. Lerd (lerd.sh) gives ideas only, from its public pages and
+the user's screenshots; no code, text or icons are taken (principle 5). Each task gets its
+own ADR. The order is the table's: what the user hit first, then the pages they use most,
+then new features.
+
+| ID | Task | Notes |
+|---|---|---|
+| P4C-01 | Fixes from the user's run: `daemon stop` only says the web server keeps running when it does; tools (Adminer, phpMyAdmin) show they are working and can't be started twice; installs say each step after the download (checking, unpacking, setting up); "used by" lists two sites and a count; a site's log defaults to `laravel*.log` and lists the others; artisan's output parses in the log viewer; adding a site offers the hosts file at once | |
+| P4C-02 | A page per service: what it is, its databases (create, drop, size, the sites that use each), logs, `.env` values, config, ports, tools; per kind (Mailpit: its inbox link and logs) | Lerd's service pages as the idea |
+| P4C-03 | A site's dev processes in its own page: each process's log in a tab beside the app's logs; several queue workers per site | |
+| P4C-04 | Frameworks on the sites list: Laravel, Symfony, WordPress, Drupal, Statamic, Craft, plain PHP, static HTML, with icons | |
+| P4C-05 | A site's overview with everything about it: requests over time, response codes, timing, its services, processes, PHP, Git branch | |
+| P4C-06 | New site from the app: a Laravel app with or without a starter kit (React, Vue, Livewire), Symfony, WordPress, an empty folder | through Composer and the Laravel installer Kiln already ships |
+| P4C-07 | pgAdmin on request ("Add pgAdmin?" on PostgreSQL's page), with Kiln's instances already connected; never by default | EDB's zip already holds pgAdmin 4, which Kiln skips today (ADR 0040) |
+| P4C-08 | phpredis with every new PHP by default, as Herd does; amends ADR 0067 | |
+| P4C-09 | Stripe: `stripe listen` as a site's process, forwarding to the site; the user logs in to Stripe themselves; the webhook secret stays out of logs and History | |
+| P4C-10 | Site groups: sites that belong together (an app, its admin, its blog), shown together, optionally sharing a database | |
+| P4C-11 | Git: switch a site's branch; worktrees as sites of their own; never on a tree with uncommitted changes | from Phase 5 |
+| P4C-12 | Sharing: a site on the LAN (opt-in per site, principle 3) and through a tunnel (Cloudflare Tunnel, ngrok, Expose) | from Phase 5 and 6 |
+| P4C-13 | Elasticsearch (or OpenSearch) as a service, from the vendor's own zip | the user's request; license and the bundled Java's size checked first |
+| P4C-14 | Names without the hosts file: a spike on wildcard `.test` through a resolver Kiln runs, so adding a site needs no administrator prompt | from Phase 6; a system change with its own ADR and consent |
+| P4C-15 | Database snapshots and a Tinker console per site | from Phase 5 |
 
 ## Phase 3–5 scope (summary)
 

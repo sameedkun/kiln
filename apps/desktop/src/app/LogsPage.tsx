@@ -76,6 +76,12 @@ export function parseLine(raw: string): LogLine | null {
   // Redis: 1234:M 13 Nov 2026 10:00:00.123 * message
   m = /^\d+:[A-Z] (\d\d? \w{3} \d{4}) (\d\d:\d\d:\d\d)\.\d+ ([.\-*#]) (.*)$/.exec(line);
   if (m) return { time: m[2], level: m[3] === "#" ? "warn" : m[3] === "." || m[3] === "-" ? "debug" : "info", text: m[4] };
+  // Artisan's own lines (queue:listen, schedule:work): "  INFO  Processing jobs…".
+  m = /^\s+(INFO|WARN|WARNING|ERROR|DONE|FAIL)\s{2,}(.*)$/.exec(line);
+  if (m) return { time: "", level: m[1] === "FAIL" ? "error" : m[1] === "DONE" ? "info" : levelOf(m[1]), text: m[2] };
+  // A job or task line: "  2026-11-14 10:00:00 App\Jobs\Send …… 12ms DONE".
+  m = /^\s+(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\s+(.*?)\s*$/.exec(line);
+  if (m) return { time: m[2], level: /\bFAIL$/.test(m[3]) ? "error" : "info", text: m[3].replace(/\s*\.{3,}\s*/, " · ") };
   // A continuation: indented, a stack frame, or Laravel's [stacktrace] block.
   if (/^(\s|#\d+ |\[stacktrace\]|\{main\}|Stack trace:|"\})/.test(line) || line === "") return null;
   return { time: "", level: guess(line), text: line };
@@ -196,7 +202,7 @@ export function LogPanel({ source, label, tall = false }: { source: string; labe
 export function LogsPage({ first }: { first?: string }) {
   const sources = useRead<LogSources>("logs.sources");
   const [source, setSource] = useState<string | null>(first ?? null);
-  const all = sources.data?.sources ?? [];
+  const all = (sources.data?.sources ?? []).filter((s) => s.group !== "Site files");
   const current = all.find((s) => s.id === source) ?? all.find((s) => s.exists) ?? all[0];
   const groups = [...new Set(all.map((s) => s.group))];
   return (

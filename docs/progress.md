@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) waits for the user's decision; the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 built; the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1487,7 +1487,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-09 | Dev processes (queue, scheduler, Vite) | built | [ADR 0060](adr/0060-dev-processes.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-10 | Xdebug | built | [ADR 0061](adr/0061-xdebug.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-11 | Dump capture | built | [ADR 0062](adr/0062-dump-capture.md); checked locally; the Scenario is the spike's evidence |
-| P4-12 | WhoDB | waiting | spike first: its server binds every interface |
+| P4-12 | WhoDB | **dropped** 2026-11-14 | the user's decision: a desktop app whose server binds every interface; Adminer and phpMyAdmin stay, pgAdmin on request (P4C-07) |
 | P4-13 | Tests on CI | built | frontend unit and render tests, the gallery in Edge with axe, API checks against a real `kilnd` in the Scenario, and the built app end to end (WebView2 through its debugging port, with a real `kilnd`) |
 | P4-14 | Phase 4 exit run | planned | |
 | P4-15 | The screens | **done** 2026-11-12 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); every page in the gallery, checked with axe in light and dark |
@@ -1496,6 +1496,29 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-18 | Request timing | built | [ADR 0065](adr/0065-request-timing.md); checked locally and against a real Caddy |
 | P4-19 | MCP server | built | [ADR 0066](adr/0066-mcp-server.md); checked locally with a piped session |
 | P4-20 | PECL extensions (phpredis first) | built | [ADR 0067](adr/0067-pecl-extensions.md); pins computed on a runner, checked by the Scenario |
+
+## Phase 4c: a richer app, Windows (in progress)
+
+Plan: [plan.md, Phase 4c](plan.md#phase-4c-a-richer-app-windows). Asked for by the user on
+2026-11-14.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| P4C-01 | Fixes from the user's run | built | below, in the log |
+| P4C-02 | A page per service | planned | |
+| P4C-03 | A site's dev processes and their logs in its page; several queue workers | planned | |
+| P4C-04 | Frameworks on the sites list | planned | |
+| P4C-05 | A site's overview | planned | |
+| P4C-06 | New site from the app | planned | |
+| P4C-07 | pgAdmin on request | planned | |
+| P4C-08 | phpredis with every new PHP | planned | |
+| P4C-09 | Stripe listener | planned | |
+| P4C-10 | Site groups | planned | |
+| P4C-11 | Git branches and worktrees | planned | |
+| P4C-12 | LAN and tunnel sharing | planned | |
+| P4C-13 | Elasticsearch or OpenSearch | planned | |
+| P4C-14 | Names without the hosts file (spike) | planned | |
+| P4C-15 | Database snapshots, Tinker | planned | |
 
 ## Phase 3: services, Windows first (done)
 
@@ -1855,6 +1878,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **I-96 seen once**: in one of the two Scenario jobs for P4-18, Mailpit still answered after its supervisor was killed, and the services then didn't come back; the other job and every other run passed. The crash and reboot checks now print which process held the port and both logs, for the next time. |
 | 2026-11-14 | **P4-20 built** ([ADR 0067](adr/0067-pecl-extensions.md)): phpredis 6.3.0's Windows builds for PHP 8.2 to 8.5 come from downloads.php.net, which publishes no checksums, so a new manual workflow ("Pin downloads") computed their SHA-256 on a fresh runner, and the Scenario checks them again. `kiln php ext add redis` downloads and checks the build, puts `php_redis.dll` in that PHP's `ext` folder and turns it on (journaled, undoable); `php update` carries it over. The PHP page offers "Add phpredis". |
 | 2026-11-14 | **P4-13 built**: the CI desktop job builds `kiln` and `kilnd` beside the built app and runs it end to end: Playwright attaches to the app's WebView2 through its debugging port, waits for "Kiln is running" (the app started `kilnd` through `kiln`), sees the first-run onboarding and leaves it, then opens Sites, Settings (its `.test` and the assistants switch, read through `kilnd`) and Doctor. With the frontend's unit and render tests, the gallery's accessibility checks in Edge, and the Scenario's API checks against a real `kilnd`, every layer runs on CI. `kiln mcp` now skips a byte-order mark, which Windows PowerShell puts before piped text. |
+| 2026-11-14 | **The user's look at Phase 4, and Phase 4c.** WhoDB (P4-12) dropped at the user's request; pgAdmin comes on request instead (P4C-07). The user asked for Kiln to be as complete on Windows as Lerd is on Linux: fifteen tasks planned as Phase 4c. **P4C-01 built**, from what the user hit: `kiln daemon stop` said the web server keeps running when it wasn't; installs now send `step` lines after the download (unpacking, checking it runs, setting up its data folder, starting), and the app shows a change that takes a moment in a toast that stays and follows those steps and the download; a second click on a change that is still running (adding Adminer, say) no longer starts it again; "used by" lists two sites and how many more; a site's log opens on its newest `laravel*.log` rather than the newest of any name (`browser.log`), and its page lists the other files in `storage/logs` to switch to; artisan's own lines (`  INFO  Processing jobs…`, a job's `…… 12ms DONE`) read properly in the log viewer; adding a site, a parked folder, a proxy, a tool or a service with a web page offers the hosts file at once when a name is missing from it (writing it still needs Windows' administrator prompt, so it's offered, not done). |
 
 ## How to update this file
 

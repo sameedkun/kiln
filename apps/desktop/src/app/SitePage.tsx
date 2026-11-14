@@ -369,7 +369,11 @@ function SiteDumps({ site }: { site: Site }) {
 /** The site's own log: the newest in its storage/logs (ADR 0059 §4). */
 function SiteLog({ host }: { host: string }) {
   const sources = useRead<LogSources>("logs.sources");
-  const log = sources.data?.sources.find((s) => s.id === `site:${host}`);
+  const main = `site:${host}`;
+  // The site's other files in storage/logs: "site:<host>/<file>", newest first.
+  const files = (sources.data?.sources ?? []).filter((s) => s.id === main || s.id.startsWith(`${main}/`));
+  const [chosen, setChosen] = useState(main);
+  const log = files.find((s) => s.id === chosen) ?? files[0];
   if (!sources.data) return null;
   if (!log) {
     return (
@@ -378,7 +382,21 @@ function SiteLog({ host }: { host: string }) {
       </p>
     );
   }
-  return <LogPanel source={log.id} label={log.label} />;
+  return (
+    <div>
+      {files.length > 1 && (
+        <div className="mb-3 max-w-[320px]">
+          <Select
+            label="File in storage/logs"
+            value={log.id}
+            onChange={(e) => setChosen(e.target.value)}
+            options={files.map((f) => ({ value: f.id, label: f.id === main ? `${f.path.split(/[\\/]/).pop()} (main)` : f.label }))}
+          />
+        </div>
+      )}
+      <LogPanel key={log.id} source={log.id} label={log.label} />
+    </div>
+  );
 }
 
 /** The site's .env: secrets hidden until shown; Kiln's own keys tagged (ADR 0056 §5). */

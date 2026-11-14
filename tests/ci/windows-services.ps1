@@ -62,7 +62,10 @@ Check 'service stop closes its ports; start brings it back with its mail' {
 
 Say '== Ports next to other programs (ADR 0037)'
 Check 'a second instance moves off the first one''s ports and says whose they are' {
-    $out = Kiln service add mailpit --name mail-two
+    # With --json, as the app runs it: the steps after the download show (P4C-01).
+    $out = Kiln --json service add mailpit --name mail-two
+    Expect '{"text":"Setting up its data folder","type":"step"}' $out
+    Expect '{"text":"Starting mail-two","type":"step"}' $out
     Expect "used by Kiln's mailpit-1" $out
     Expect 'mailpit.test is already taken' $out
     Kiln service remove mail-two --delete-data | Out-Null

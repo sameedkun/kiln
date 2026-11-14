@@ -12,7 +12,7 @@ import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
 import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList, type Updates } from "./api";
 import { useChanges } from "./Change";
-import { useRead } from "./hooks";
+import { fewNames, useRead } from "./hooks";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
 const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`;
@@ -197,7 +197,7 @@ export function PhpPage() {
                   </span>
                 )}
               </RowName>
-              <Detail>{users.length ? `used by ${users.join(", ")}` : "no site uses it"}</Detail>
+              <Detail title={users.join(", ")}>{users.length ? `used by ${fewNames(users)}` : "no site uses it"}</Detail>
               <span className="flex justify-end">{v.installed ? <Status state="running" label="Installed" /> : <Status state="attention" label="Missing on disk" />}</span>
             </Row>
           );

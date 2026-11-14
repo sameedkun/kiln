@@ -47,3 +47,9 @@ export function useDaemon(): DaemonState {
   }, []);
   return state;
 }
+
+/** Two names and how many more: "api.test, shop.test and 3 more". */
+export function fewNames(names: string[], shown = 2): string {
+  if (names.length <= shown + 1) return names.join(", ");
+  return `${names.slice(0, shown).join(", ")} and ${names.length - shown} more`;
+}

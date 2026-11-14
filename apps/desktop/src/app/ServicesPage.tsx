@@ -23,7 +23,7 @@ import { TextField } from "../components/TextField";
 import { pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
-import { useRead } from "./hooks";
+import { fewNames, useRead } from "./hooks";
 import { useProgress } from "./RuntimePages";
 import { Meter } from "../components/Meter";
 
@@ -119,7 +119,7 @@ export function ServicesPage() {
           {i.name} <span className="figures text-[12.5px] font-normal text-text-2">{i.version}</span>
         </RowName>
         <Detail mono>{mainPort(i) ? `:${mainPort(i)}` : ""}</Detail>
-        <Detail>{i.used_by.length ? `used by ${i.used_by.join(", ")}` : i.project ? "for its project" : "no site uses it"}</Detail>
+        <Detail title={i.used_by.join(", ")}>{i.used_by.length ? `used by ${fewNames(i.used_by)}` : i.project ? "for its project" : "no site uses it"}</Detail>
         <span className="flex justify-end">
           <Status state={state} label={state === "attention" ? "Not running" : undefined} />
         </span>

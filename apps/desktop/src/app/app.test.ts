@@ -255,3 +255,33 @@ describe("log lines (ADR 0059)", async () => {
     expect(levelOf("notice")).toBe("info");
   });
 });
+
+describe("fixes from the user's run (P4C-01)", async () => {
+  const { parseLine } = await import("./LogsPage");
+  const { fewNames } = await import("./hooks");
+  const { addsNames, progressText } = await import("./Change");
+
+  it("reads artisan's queue and schedule lines", () => {
+    expect(parseLine("   INFO  Processing jobs from the [default] queue.")).toEqual({ time: "", level: "info", text: "Processing jobs from the [default] queue." });
+    expect(parseLine("  2026-11-14 10:00:00 App\\Jobs\\Send ........ 12ms FAIL")).toMatchObject({ time: "10:00:00", level: "error" });
+    expect(parseLine("  2026-11-14 10:00:00 App\\Jobs\\Send ........ RUNNING")?.text).toBe("App\\Jobs\\Send · RUNNING");
+  });
+
+  it("lists two names and a count", () => {
+    expect(fewNames(["a.test"])).toBe("a.test");
+    expect(fewNames(["a.test", "b.test", "c.test"])).toBe("a.test, b.test, c.test");
+    expect(fewNames(["a.test", "b.test", "c.test", "d.test", "e.test"])).toBe("a.test, b.test and 3 more");
+  });
+
+  it("knows which changes add names for the hosts file", () => {
+    expect(addsNames(["link", "shop", "--path", "D:\\shop"])).toBe(true);
+    expect(addsNames(["park", "D:\\Laravel"])).toBe(true);
+    expect(addsNames(["tool", "add", "adminer"])).toBe(true);
+    expect(addsNames(["tool", "remove", "adminer"])).toBe(false);
+    expect(addsNames(["service", "stop", "mysql-9.7"])).toBe(false);
+  });
+
+  it("says a download's progress in a few words", () => {
+    expect(progressText({ type: "progress", label: "Downloading mysql.zip", done: 34 * 1_048_576, total: 120 * 1_048_576 })).toBe("Downloading mysql.zip · 34 of 120 MB");
+  });
+});

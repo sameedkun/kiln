@@ -16,13 +16,14 @@ pub struct Source {
     pub path: PathBuf,
 }
 
-/// The newest `*.log` in a Laravel project's `storage/logs` (daily logs roll to a new file each
-/// day), or `None` when it has none.
+/// Every `*.log` in a project's `storage/logs`, newest first.
 #[must_use]
-pub fn newest_log(project: &Path) -> Option<PathBuf> {
+pub fn project_logs(project: &Path) -> Vec<PathBuf> {
     let dir = project.join("storage").join("logs");
-    std::fs::read_dir(dir)
-        .ok()?
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut logs: Vec<_> = entries
         .filter_map(Result::ok)
         .filter(|e| {
             e.path()
@@ -30,8 +31,25 @@ pub fn newest_log(project: &Path) -> Option<PathBuf> {
                 .is_some_and(|x| x.eq_ignore_ascii_case("log"))
                 && e.file_type().is_ok_and(|t| t.is_file())
         })
-        .max_by_key(|e| (e.metadata().and_then(|m| m.modified()).ok(), e.file_name()))
-        .map(|e| e.path())
+        .map(|e| (e.metadata().and_then(|m| m.modified()).ok(), e.path()))
+        .collect();
+    logs.sort_by(|a, b| b.cmp(a));
+    logs.into_iter().map(|(_, path)| path).collect()
+}
+
+/// The log a site's page opens on: the newest `laravel*.log` (daily logs roll to a new file
+/// each day), else the newest log of any name (a `browser.log` is rarely the one wanted).
+#[must_use]
+pub fn newest_log(project: &Path) -> Option<PathBuf> {
+    let logs = project_logs(project);
+    let laravel = logs.iter().find(|p| {
+        p.file_name().is_some_and(|f| {
+            f.to_string_lossy()
+                .to_ascii_lowercase()
+                .starts_with("laravel")
+        })
+    });
+    laravel.or(logs.first()).cloned()
 }
 
 /// Every log Kiln knows of, Kiln's own first, then the services', then the sites'.
@@ -88,11 +106,30 @@ pub fn sources() -> Result<Vec<Source>, String> {
 
     let sites = crate::web::resolved(&store)?;
     for site in sites.sites.iter().filter(|s| s.alias_of.is_none()) {
-        if let Some(path) = newest_log(&site.project) {
+        let host = site.host.as_str();
+        let Some(main) = newest_log(&site.project) else {
+            continue;
+        };
+        // The others, for the site's page to switch to; the Logs page lists only the main one.
+        let others: Vec<PathBuf> = project_logs(&site.project)
+            .into_iter()
+            .filter(|p| *p != main)
+            .collect();
+        all.push(Source {
+            id: format!("site:{host}"),
+            group: "Sites",
+            label: host.to_owned(),
+            path: main,
+        });
+        for path in others {
+            let file = path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
             all.push(Source {
-                id: format!("site:{}", site.host.as_str()),
-                group: "Sites",
-                label: site.host.as_str().to_owned(),
+                id: format!("site:{host}/{file}"),
+                group: "Site files",
+                label: file,
                 path,
             });
         }
@@ -205,6 +242,29 @@ mod tests {
             newest_log(dir.path()),
             Some(logs.join("laravel-2026-11-13.log"))
         );
+    }
+
+    #[test]
+    fn a_laravel_log_wins_over_a_newer_browser_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("storage").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("laravel.log"), "app").unwrap();
+        let older = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(logs.join("laravel.log"))
+            .unwrap()
+            .set_modified(older)
+            .unwrap();
+        std::fs::write(logs.join("browser.log"), "js").unwrap();
+        assert_eq!(newest_log(dir.path()), Some(logs.join("laravel.log")));
+        assert_eq!(
+            project_logs(dir.path()),
+            [logs.join("browser.log"), logs.join("laravel.log")]
+        );
+        std::fs::remove_file(logs.join("laravel.log")).unwrap();
+        assert_eq!(newest_log(dir.path()), Some(logs.join("browser.log")));
     }
 
     #[test]

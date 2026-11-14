@@ -660,6 +660,11 @@ fn install_binaries(
         );
     } else {
         let archive = download(release)?;
+        crate::out::step(&format!(
+            "Unpacking {} {}",
+            provider.display_name(),
+            release.version
+        ));
         kiln_services::install(provider, release, &archive, bin).map_err(|e| e.to_string())?;
         say!(
             "Verified {} (SHA-256 matches the pinned release) and installed {} {}.",
@@ -676,6 +681,7 @@ fn install_binaries(
             continue;
         }
         let archive = download(companion)?;
+        crate::out::step(&format!("Unpacking {}", companion.archive));
         kiln_services::install_into_folder(companion, &archive, bin).map_err(|e| e.to_string())?;
         say!(
             "Verified {} (SHA-256 matches the pinned release) and installed it with {}.",
@@ -841,7 +847,9 @@ pub fn add(
         let release = release_of(provider, Some(&version))?;
         install_binaries(provider, release, &dirs.bin)?;
         // Runs on this system? (A missing VC++ runtime or Linux library, ADR 0038 §6.)
+        crate::out::step("Checking it runs on this PC");
         provider.check(&dirs.bin)?;
+        crate::out::step("Setting up its data folder");
     }
 
     write_config(provider, &dirs, &chosen)?;
@@ -859,6 +867,7 @@ pub fn add(
         project: project.clone(),
     };
     store.put_service(&record).map_err(|e| e.to_string())?;
+    crate::out::step(&format!("Starting {name}"));
     if let Err(e) = apply(&store) {
         return Err(format!(
             "{name} was added but didn't start: {e}\nSee `kiln service logs {name}`."

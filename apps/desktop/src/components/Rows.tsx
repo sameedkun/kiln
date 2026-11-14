@@ -49,6 +49,6 @@ export function RowName({ children, sub, before, mono }: { children: ReactNode; 
 }
 
 /** A quiet detail cell. */
-export function Detail({ children, mono }: { children: ReactNode; mono?: boolean }) {
-  return <span className={`figures text-[12.5px] text-text-2 ${mono ? "font-mono text-xs" : ""}`}>{children}</span>;
+export function Detail({ children, mono, title }: { children: ReactNode; mono?: boolean; title?: string }) {
+  return <span title={title} className={`figures text-[12.5px] text-text-2 ${mono ? "font-mono text-xs" : ""}`}>{children}</span>;
 }
