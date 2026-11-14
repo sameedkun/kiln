@@ -468,6 +468,15 @@ function ShopPage {
     if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
 }
 Check 'the app serves pages on MySQL 8.4' { ShopPage }
+Check 'kiln group shop "Acme Corp" (ADR 0074): in the sites list with its group, then out of it' {
+    Expect 'shop.test is in the group Acme Corp' (Kiln group shop 'Acme Corp')
+    $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })
+    if ($site.group -ne 'Acme Corp') { throw "group: $($site.group)" }
+    Expect 'shop.test is in no group now' (Kiln group shop)
+    $refused = (& $Kiln group nosuchsite Acme 2>&1 | Out-String)
+    $global:LASTEXITCODE = 0
+    Expect "doesn't serve nosuchsite.test" $refused
+}
 Check 'kiln new hello --template empty (ADR 0070): a folder with a first page, served at once' {
     $out = Kiln new hello --template empty --path $projects
     Expect 'first page in public/index.php' $out

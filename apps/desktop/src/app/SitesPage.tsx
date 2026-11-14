@@ -48,10 +48,14 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
   const { run, ask, open } = useChanges();
   const [filter, setFilter] = useState("");
+  const [grouping, setGrouping] = useState<Site | null>(null);
   const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "proxy" } | { kind: "new" }>(null);
 
   const match = (text: string) => text.toLowerCase().includes(filter.trim().toLowerCase());
-  const shown = (sites.data?.sites ?? []).filter((s) => match(s.host) || match(framework(s)));
+  const matching = (sites.data?.sites ?? []).filter((s) => match(s.host) || match(framework(s)) || (s.group ? match(s.group) : false));
+  // Sites in a group are shown in its section, above the parked and linked ones (ADR 0074).
+  const groupNames = [...new Set(matching.flatMap((s) => (s.group ? [s.group] : [])))].sort((a, b) => a.localeCompare(b));
+  const shown = matching.filter((s) => !s.group);
   const proxies = (sites.data?.proxies ?? []).filter((p) => match(p.host));
   const total = (sites.data?.sites.length ?? 0) + (sites.data?.proxies.length ?? 0);
 
@@ -77,6 +81,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
             trigger={(props) => <Button variant="quiet" aria-label={`More for ${s.host}`} icon={<MoreHorizontal16Regular />} {...props} />}
             items={[
               { label: "Details", onSelect: () => go(`site:${s.host}`) },
+              { label: s.group ? `Group: ${s.group}…` : "Put in a group…", onSelect: () => setGrouping(s) },
               {
                 label: s.secure ? "Serve over plain HTTP" : "Serve over HTTPS",
                 onSelect: () => run([s.secure ? "unsecure" : "secure", s.host], `${s.host} is served over ${s.secure ? "HTTP" : "HTTPS"} now.`),
@@ -181,6 +186,14 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
       {sites.data && total === 0 && (
         <p className="m-0 max-w-[60ch] text-[13px] text-text-2">No sites yet. Link a project's folder, park a folder of projects, or proxy a name to a dev server: "Add a site" above.</p>
       )}
+      {groupNames.map((g) => {
+        const inside = matching.filter((s) => s.group === g);
+        return (
+          <Section key={`group:${g}`} title={g} meta={`${inside.length} · a group`}>
+            {inside.map(siteRow)}
+          </Section>
+        );
+      })}
       {parked.map((folder) => {
         const inside = shown.filter((s) => s.parked_in === folder);
         return (
@@ -218,6 +231,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
       {adding?.kind === "link" && <LinkDialog folder={adding.folder} onClose={() => setAdding(null)} />}
       {adding?.kind === "proxy" && <ProxyDialog onClose={() => setAdding(null)} />}
       {adding?.kind === "new" && <NewSiteDialog folders={parked} onClose={() => setAdding(null)} />}
+      {grouping && <GroupDialog site={grouping} groups={[...new Set((sites.data?.sites ?? []).flatMap((s) => (s.group ? [s.group] : [])))]} onClose={() => setGrouping(null)} />}
     </Page>
   );
 }
@@ -305,6 +319,55 @@ function ProxyDialog({ onClose }: { onClose: () => void }) {
       <div className="mt-4">
         <Switch checked={secure} onChange={setSecure} label="HTTPS" description="With Kiln's own certificate" />
       </div>
+    </Dialog>
+  );
+}
+
+/** A group's name as `kiln group` takes it: 1 to 40 letters, digits, spaces, - _ or . */
+export const groupName = (text: string) => {
+  const t = text.trim();
+  return /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u.test(t) && !t.endsWith(" ") ? t : null;
+};
+
+/** Puts a site in a group, a new one or one already used, or takes it out (ADR 0074). */
+function GroupDialog({ site, groups, onClose }: { site: Site; groups: string[]; onClose: () => void }) {
+  const { run } = useChanges();
+  const [name, setName] = useState(site.group ?? "");
+  const [busy, setBusy] = useState(false);
+  const valid = groupName(name);
+  const go = async (args: string[], done: string) => {
+    setBusy(true);
+    await run(args, done);
+    onClose();
+  };
+  return (
+    <Dialog
+      open
+      onClose={() => !busy && onClose()}
+      title={`Group for ${site.host}`}
+      footer={
+        <>
+          {site.group && (
+            <Button onClick={() => go(["group", site.host], `${site.host} is in no group now.`)} disabled={busy}>
+              Take it out
+            </Button>
+          )}
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="ink" disabled={!valid || busy} onClick={() => go(["group", site.host, valid!], `${site.host} is in ${valid} now.`)}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
+    >
+      <p className="mt-0">Sites in a group show together on this page, such as an app, its admin and its blog. Nothing in the projects changes.</p>
+      <TextField label="Group" list="kiln-groups" placeholder="Acme" value={name} onChange={(e) => setName(e.target.value)} error={name && !valid ? "Up to 40 letters, digits, spaces, - _ or ." : undefined} />
+      <datalist id="kiln-groups">
+        {groups.map((g) => (
+          <option key={g} value={g} />
+        ))}
+      </datalist>
     </Dialog>
   );
 }

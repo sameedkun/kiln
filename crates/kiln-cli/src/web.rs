@@ -947,6 +947,7 @@ fn sites_data(
     let default_node = store
         .setting(kiln_runtime::node::DEFAULT_KEY)
         .map_err(|e| e.to_string())?;
+    let groups = crate::groups::groups(store);
     let sites: Vec<_> = all
         .sites
         .iter()
@@ -983,6 +984,7 @@ fn sites_data(
                 "project": site.project,
                 "framework": framework_of(site.driver, &site.project).0,
                 "git_branch": git_branch(&site.project),
+                "group": groups.get(host),
                 "framework_version": framework_version(site.driver, &site.project),
                 "node": node_json(&kiln_runtime::node::node_for_dir(&nodes, default_node.as_deref(), &site.project)),
             })

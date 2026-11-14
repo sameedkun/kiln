@@ -25,6 +25,8 @@ export interface Site {
   framework?: string;
   /** The Git branch checked out in its folder, or the commit when detached (P4C-05). */
   git_branch?: string | null;
+  /** The group it's shown in (ADR 0074). */
+  group?: string | null;
   framework_version: string | null;
   node: { version: string | null; asked_by: string | null; asks_for: string | null; fell_back: boolean };
 }

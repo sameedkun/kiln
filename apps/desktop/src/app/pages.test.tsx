@@ -26,6 +26,7 @@ const { LogsPage } = await import("./LogsPage");
 const { Settings } = await import("./Pages");
 const { SitePage } = await import("./SitePage");
 const { ServicePage, size } = await import("./ServicePage");
+const { SitesPage, groupName } = await import("./SitesPage");
 
 const shell = (page: ReactNode) =>
   render(
@@ -321,5 +322,47 @@ describe("a site at a glance (P4C-05)", () => {
     expect(glance.textContent).toContain("5 × 2xx · 1 × 4xx · 1 × 5xx");
     expect(glance.textContent).toContain("Uses mysql-8.4 (mysql).");
     expect(screen.getByText("3 h ago: 2 requests, 1 failed")).toBeTruthy();
+  });
+});
+
+describe("site groups (ADR 0074)", () => {
+  it("shows a group's sites in a section of its own, above the rest", async () => {
+    const site = (host: string, group: string | null) => ({
+      host,
+      url: `http://${host}`,
+      driver: "laravel",
+      framework: "laravel",
+      document_root: `D:/Code/${host}/public`,
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: `D:/Code/${host}`,
+      framework_version: "12.38.1",
+      group,
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    });
+    answers["sites.list"] = () => ({
+      parked: [],
+      sites: [site("admin.orbit.test", "Orbit Labs"), site("blog.orbit.test", "Orbit Labs"), site("shop.test", null)],
+      proxies: [],
+      skipped: [],
+      warnings: [],
+    });
+    shell(<SitesPage go={() => {}} />);
+    const group = await screen.findByRole("region", { name: "Orbit Labs" });
+    expect(group.textContent).toContain("admin.orbit.test");
+    expect(group.textContent).toContain("blog.orbit.test");
+    expect(group.textContent).not.toContain("shop.test");
+    expect(screen.getByRole("region", { name: "Linked" }).textContent).toContain("shop.test");
+  });
+
+  it("takes plain names only", () => {
+    expect(groupName(" Acme Corp ")).toBe("Acme Corp");
+    expect(groupName("orbit-labs_2.0")).toBe("orbit-labs_2.0");
+    expect(groupName("")).toBeNull();
+    expect(groupName("a/b")).toBeNull();
+    expect(groupName("x".repeat(41))).toBeNull();
   });
 });

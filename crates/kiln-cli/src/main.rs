@@ -21,6 +21,7 @@ mod dump;
 mod env;
 mod ext;
 mod footprint;
+mod groups;
 mod history;
 mod logs;
 mod mcp;
@@ -139,6 +140,14 @@ enum Command {
     Mcp {
         #[command(subcommand)]
         action: Option<McpAction>,
+    },
+    /// Put a site in a group (sites that belong together, shown together), or with no group
+    /// given, take it out of its group (ADR 0074).
+    Group {
+        /// The site, e.g. shop or shop.test.
+        site: String,
+        /// The group's name, e.g. "Acme".
+        group: Option<String>,
     },
     /// How fast each site answers, from the web server's access log: requests, failures,
     /// median, slowest 5%, the slowest requests (ADR 0065). Changes nothing.
@@ -1139,11 +1148,9 @@ fn run(command: Command) -> Result<(), String> {
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
         Command::Footprint => footprint::footprint(),
-        Command::Mcp { action: None } => mcp::serve(),
-        Command::Mcp {
-            action: Some(McpAction::AllowChanges { state }),
-        } => mcp::set_allow_changes(state == "on"),
+        Command::Mcp { action } => run_mcp(action),
         Command::Requests { site } => requests::requests(site.as_deref()),
+        Command::Group { site, group } => groups::set(&site, group.as_deref()),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {
             action: Some(UpdatesAction::CheckKiln { state }),
@@ -1243,6 +1250,13 @@ fn run_node(action: NodeAction) -> Result<(), String> {
         NodeAction::List => node::list(),
         NodeAction::Remove { version } => node::remove(&version),
         NodeAction::Default { version } => node::set_default(&version),
+    }
+}
+
+fn run_mcp(action: Option<McpAction>) -> Result<(), String> {
+    match action {
+        None => mcp::serve(),
+        Some(McpAction::AllowChanges { state }) => mcp::set_allow_changes(state == "on"),
     }
 }
 

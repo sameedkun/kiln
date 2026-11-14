@@ -49,6 +49,7 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["isolate"], false),
     (&["unisolate"], false),
     (&["proxy"], false),
+    (&["group"], false),
     (&["unproxy"], false),
     (&["new"], false),
     (&["import", "herd"], false),
