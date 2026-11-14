@@ -1394,3 +1394,11 @@ commits and PRs.
 - **Fix:** each migration step takes the write lock first (`BEGIN IMMEDIATE`) and reads the
   version under it; the setup (WAL, then the migrations) is tried again for up to 10 seconds
   on "database is locked". The test now opens a fresh file from six threads ten times.
+
+### I-98: The first-run onboarding could miss its one chance (fixed)
+
+- **Seen:** 2026-11-14, on CI, in the built app's end-to-end run after P4C-11: Home loaded
+  and read sites and services, but the onboarding never opened.
+- **Why:** the app asked `setup.status` and `settings.get` once, as soon as kilnd answered,
+  and dropped any failure silently; right after kilnd starts, a first read can fail.
+- **Fix:** it asks again every 2 seconds, up to five more times, before giving up.

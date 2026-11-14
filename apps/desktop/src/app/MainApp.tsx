@@ -96,9 +96,17 @@ export function MainApp() {
   useEffect(() => {
     if (daemon !== "running" || askedSetUp) return;
     setAskedSetUp(true);
-    Promise.all([call<SetupStatus>("setup.status"), settingsGet()])
-      .then(([status, settings]) => !status.ready && !settings.onboarding_dismissed && setOnboarding(true))
-      .catch(() => {});
+    // Right after kilnd starts, a first read can fail (the state database being set up by
+    // several `kiln` processes at once, a cold start): ask again a few times before giving
+    // up, or a first run could miss its onboarding.
+    // (The main window lives as long as the app, so nothing cancels this.)
+    const ask = (left: number) =>
+      Promise.all([call<SetupStatus>("setup.status"), settingsGet()])
+        .then(([status, settings]) => !status.ready && !settings.onboarding_dismissed && setOnboarding(true))
+        .catch(() => {
+          if (left > 0) setTimeout(() => ask(left - 1), 2000);
+        });
+    ask(5);
   }, [daemon, askedSetUp]);
 
   useEffect(() => {
