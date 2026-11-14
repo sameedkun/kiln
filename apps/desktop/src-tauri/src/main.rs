@@ -502,13 +502,30 @@ fn toggle_popup(app: &AppHandle, icon: tauri::Rect) {
     let _ = popup.emit("kiln-popup-shown", ());
 }
 
+/// `WebView2`'s arguments when a debug build is driven end to end (P4-13): Tauri's own, plus a
+/// debugging port from `KILN_DEBUG_PORT`. Release builds never open one.
+fn browser_args() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let port: u16 = std::env::var("KILN_DEBUG_PORT").ok()?.parse().ok()?;
+    Some(format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+    ))
+}
+
 fn build_windows(
     app: &tauri::App,
     webview_dir: &std::path::Path,
     settings: &Settings,
     in_tray: bool,
 ) -> tauri::Result<bool> {
-    let main = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+    let args = browser_args();
+    let mut main = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()));
+    if let Some(args) = &args {
+        main = main.additional_browser_args(args);
+    }
+    let main = main
         .title("Kiln")
         .decorations(false)
         .inner_size(1120.0, 720.0)
@@ -535,7 +552,12 @@ fn build_windows(
         let _ = main.show();
         let _ = main.set_focus();
     }
-    let popup = WebviewWindowBuilder::new(app, TRAY, WebviewUrl::App("index.html#tray".into()))
+    // Both windows share one WebView2 environment, so they get the same arguments.
+    let mut popup = WebviewWindowBuilder::new(app, TRAY, WebviewUrl::App("index.html#tray".into()));
+    if let Some(args) = &args {
+        popup = popup.additional_browser_args(args);
+    }
+    let popup = popup
         .title("Kiln")
         .decorations(false)
         .inner_size(POPUP_WIDTH, 520.0)

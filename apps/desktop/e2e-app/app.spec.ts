@@ -38,7 +38,8 @@ async function mainWindow(): Promise<Page> {
 test("the built app starts kilnd and shows Kiln's own answers", async ({}, info) => {
   test.setTimeout(240_000);
   app = spawn(exe!, [], {
-    env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}` },
+    // A debug build opens WebView2's debugging port when asked (main.rs, browser_args).
+    env: { ...process.env, KILN_DEBUG_PORT: String(PORT) },
     stdio: "ignore",
   });
   const page = await mainWindow();
