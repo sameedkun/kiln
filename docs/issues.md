@@ -1429,3 +1429,9 @@ commits and PRs.
   address and port into a path, so the browser stays on the site's name (dev servers such as
   Vite redirect the same way). The Scenario follows the redirect as a browser and checks it
   lands on `rustfs.test/rustfs/console/`.
+
+### I-101: History showed Kiln's DNS rule as `nrpt_rule` (fixed)
+
+- **Found:** the Scenario (P4D-02), 2026-11-15: everything else in `kiln dns on` passed.
+- **Fix:** History describes it in words ("every .test name answered by Kiln (Windows name
+  resolution policy)", or the rule's removal), as for every other kind.

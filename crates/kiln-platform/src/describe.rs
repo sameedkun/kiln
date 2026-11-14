@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::autostart::AUTOSTART_KIND;
 use crate::env_file::ENV_KEYS_KIND;
 use crate::hosts_op::HOSTS_BLOCK_KIND;
+use crate::nrpt_op::NRPT_KIND;
 use crate::php_ext::PHP_EXT_KIND;
 use crate::shell_profile::SHELL_PROFILE_KIND;
 use crate::trust_nss::NSS_TRUST_KIND;
@@ -80,6 +81,14 @@ pub fn describe(kind: &str, params: &Value) -> String {
                 list(&keys, 4)
             )
         }
+        NRPT_KIND => {
+            let tld = params["tld"].as_str().unwrap_or("test");
+            if params["on"].as_bool().unwrap_or(true) {
+                format!("every .{tld} name answered by Kiln (Windows name resolution policy)")
+            } else {
+                format!(".{tld} names from the hosts file again (Kiln's rule removed)")
+            }
+        }
         other => other.to_owned(),
     }
 }
@@ -110,6 +119,14 @@ mod tests {
         assert_eq!(
             describe(HOSTS_BLOCK_KIND, &json!({"tld": "test", "entries": []})),
             "hosts file: Kiln's block removed"
+        );
+        assert_eq!(
+            describe(NRPT_KIND, &json!({"tld": "test", "on": true})),
+            "every .test name answered by Kiln (Windows name resolution policy)"
+        );
+        assert_eq!(
+            describe(NRPT_KIND, &json!({"tld": "test", "on": false})),
+            ".test names from the hosts file again (Kiln's rule removed)"
         );
         assert_eq!(
             describe(
