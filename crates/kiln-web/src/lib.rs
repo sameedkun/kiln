@@ -20,7 +20,7 @@ pub mod proxy;
 pub mod release;
 
 pub use admin::{AdminClient, AdminError};
-pub use config::{CaFiles, ConfigError, DEBUG_POOL_SUFFIX, SiteSpec, WebConfig};
+pub use config::{CaFiles, ConfigError, DEBUG_POOL_SUFFIX, LanShare, SiteSpec, WebConfig};
 pub use process::{Status, WebError, WebServer};
 pub use proxy::{ProxyTarget, TargetError};
 pub use release::{EXE_NAME, InstallError, Release};

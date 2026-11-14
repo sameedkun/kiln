@@ -75,8 +75,32 @@ pub fn share(name: &str) -> Result<(), String> {
 }
 
 /// `kiln share <site> [--stop]`.
-pub fn run(site: &str, stop: bool) -> Result<(), String> {
-    if stop { unshare(site) } else { share(site) }
+pub fn run(site: &str, stop: bool, lan: bool) -> Result<(), String> {
+    match (lan, stop) {
+        (true, stop) => share_lan(site, !stop),
+        (false, true) => unshare(site),
+        (false, false) => share(site),
+    }
+}
+
+/// `kiln share <site> --lan [--stop]` (ADR 0076 §4): this one site on this PC's private
+/// network address and a port of its own, until stopped. Windows asks, the first time, whether
+/// Kiln's web server may be reached on the network.
+fn share_lan(name: &str, on: bool) -> Result<(), String> {
+    let (host, _) = site(name)?;
+    match crate::web::set_lan(&host, on)? {
+        Some(url) => {
+            if crate::out::json() {
+                crate::out::data(json!({"host": host, "url": url}));
+            }
+            say!("{host} is shared on your network at {url}");
+            say!(
+                "Phones and PCs on the same network can open it; if Windows asks whether Kiln's web server may use the network, allow private networks only. `kiln share {name} --lan --stop` stops it."
+            );
+        }
+        None => say!("{host} isn't shared on your network any more."),
+    }
+    Ok(())
 }
 
 /// `kiln share <site> --stop`: stops and removes its tunnel; the address stops working.

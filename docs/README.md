@@ -91,7 +91,7 @@ working name). Start here.
 | [0073](adr/0073-stripe-webhooks.md) | Stripe webhooks: the pinned Stripe CLI as a site's process (`Runtime::Own`), `stripe listen` forwarding to `APP_URL/stripe/webhook`, the key from the project's `STRIPE_SECRET` in its environment only | accepted (Phase 4c) |
 | [0074](adr/0074-site-groups.md) | Site groups: a label per site in Kiln's settings (`kiln group <site> [<name>]`), not journaled; the Sites page shows a section per group | accepted (Phase 4c) |
 | [0075](adr/0075-git-branches-and-worktrees.md) | `kiln git branches|switch|worktree` through the user's Git: no switch over uncommitted changes, never forced; worktrees beside the project served as `<branch>.<site>` | accepted (Phase 4c) |
-| [0076](adr/0076-sharing-sites.md) | Sharing a site: a Cloudflare quick tunnel (pinned cloudflared as a project process, forwarding to loopback with the site's name; nothing new listens), `kiln share <site> [--stop]`; LAN sharing to follow | accepted (Phase 4c) |
+| [0076](adr/0076-sharing-sites.md) | Sharing a site: a Cloudflare quick tunnel (pinned cloudflared as a project process, forwarding to loopback with the site's name; nothing new listens), `kiln share <site> [--stop]`; and per-site LAN sharing on a private address (`--lan`), the only listener beyond loopback | accepted (Phase 4c) |
 
 ## Conventions
 

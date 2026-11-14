@@ -169,6 +169,7 @@ fn serves_php_through_recycling_workers_and_switches_pools_live() {
         storage_dir: dir.path().join("caddy").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
+        lan: Vec::new(),
         php_pools: std::collections::BTreeMap::from([("pool".to_owned(), upstreams)]),
     };
     server.start(&config(first.upstreams())).unwrap();

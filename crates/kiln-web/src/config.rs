@@ -22,6 +22,8 @@ pub const CA_ID: &str = "kiln";
 /// Caddy server names, visible in Caddy's logs.
 pub const HTTP_SERVER: &str = "kiln_http";
 pub const HTTPS_SERVER: &str = "kiln_https";
+/// The servers of sites shared on the LAN: `kiln_lan_0`, `kiln_lan_1`, … (ADR 0076 §4).
+pub const LAN_SERVER: &str = "kiln_lan_";
 /// Longest Unix socket path (`sockaddr_un`), excluding the terminating NUL.
 pub const MAX_SOCKET_PATH: usize = 107;
 
@@ -73,6 +75,19 @@ pub struct WebConfig {
     /// php-cgi pools by id, i.e. version (ADR 0014, 0016). A site whose pool is missing here is
     /// served as static files.
     pub php_pools: BTreeMap<String, Vec<SocketAddr>>,
+    /// Sites shared on the LAN ([ADR 0076] §4): the only listeners beyond loopback, one per
+    /// site, each on an address of its own. Empty unless the user shares a site.
+    ///
+    /// [ADR 0076]: ../../../docs/adr/0076-sharing-sites.md
+    pub lan: Vec<LanShare>,
+}
+
+/// One site shared on the LAN: served at `address` (this PC's network address and a port
+/// of its own) to any host name, over plain HTTP (a `.test` certificate can't name an IP).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanShare {
+    pub host: HostName,
+    pub address: SocketAddr,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -124,6 +139,7 @@ impl WebConfig {
                     .into_iter()
                     .map(move |ip| SocketAddr::new(ip, port))
             })
+            .chain(self.lan.iter().map(|share| share.address))
             .collect()
     }
 
@@ -199,6 +215,26 @@ impl WebConfig {
         }
     }
 
+    /// A site shared on the LAN: its own server on its own address, that site only, to any
+    /// host name (phones on the network don't know `.test` names). A share for a site no
+    /// longer served listens nowhere.
+    fn lan_servers(&self, servers: &mut BTreeMap<String, Server>) -> Result<(), ConfigError> {
+        for (n, share) in self.lan.iter().enumerate() {
+            let Some(site) = self.sites.iter().find(|s| s.host == share.host) else {
+                continue;
+            };
+            servers.insert(
+                format!("{LAN_SERVER}{n}"),
+                Server::new(
+                    vec![share.address.to_string()],
+                    vec![Route::any(self.site_handler(site)?)],
+                    false,
+                ),
+            );
+        }
+        Ok(())
+    }
+
     fn build(&self) -> Result<Caddy, ConfigError> {
         self.check()?;
 
@@ -218,9 +254,10 @@ impl WebConfig {
 
         let mut servers = BTreeMap::new();
         servers.insert(
-            HTTP_SERVER,
+            HTTP_SERVER.to_owned(),
             Server::new(self.listen(self.http_port), plain_routes, false),
         );
+        self.lan_servers(&mut servers)?;
 
         let secure_hosts: Vec<String> = self
             .sites
@@ -232,7 +269,7 @@ impl WebConfig {
             (Some(ca), false) => {
                 tls_routes.push(Route::not_linked());
                 servers.insert(
-                    HTTPS_SERVER,
+                    HTTPS_SERVER.to_owned(),
                     Server::new(self.listen(self.https_port), tls_routes, true),
                 );
                 (
@@ -400,7 +437,7 @@ struct Apps {
 
 #[derive(Debug, Serialize)]
 struct HttpApp {
-    servers: BTreeMap<&'static str, Server>,
+    servers: BTreeMap<String, Server>,
 }
 
 #[derive(Debug, Serialize)]
@@ -475,6 +512,15 @@ impl Route {
             matchers: matcher.into_iter().collect(),
             handle: vec![handler],
             terminal: false,
+        }
+    }
+
+    /// Every request, to one handler: a LAN share's only route.
+    fn any(handler: Handler) -> Self {
+        Self {
+            matchers: Vec::new(),
+            handle: vec![handler],
+            terminal: true,
         }
     }
 
@@ -938,6 +984,7 @@ mod tests {
             storage_dir: "/kiln/caddy/storage".into(),
             log_file: "/kiln/caddy/caddy.log".into(),
             admin_socket: "/kiln/caddy/admin.sock".into(),
+            lan: Vec::new(),
             php_pools: BTreeMap::new(),
         }
     }
@@ -1028,6 +1075,55 @@ mod tests {
         assert_eq!(
             ca["intermediate"]["private_key"],
             "/kiln/ca/intermediate.key"
+        );
+    }
+
+    #[test]
+    fn a_lan_share_is_the_only_listener_beyond_loopback_and_serves_only_its_site() {
+        let mut cfg = config(vec![site("blog", false), site("shop", true)]);
+        let lan: SocketAddr = "192.168.1.20:8101".parse().unwrap();
+        cfg.lan = vec![LanShare {
+            host: site("shop", true).host,
+            address: lan,
+        }];
+        let beyond: Vec<_> = cfg
+            .listeners()
+            .into_iter()
+            .filter(|a| !a.ip().is_loopback())
+            .collect();
+        assert_eq!(beyond, [lan]);
+        let value = json(&cfg);
+        let all = servers(&value);
+        let shared = &all[&format!("{LAN_SERVER}0")];
+        assert_eq!(shared["listen"], serde_json::json!(["192.168.1.20:8101"]));
+        let routes = shared["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 1, "one route: that site, for any host");
+        assert!(routes[0].get("match").is_none());
+        assert_eq!(
+            routes[0]["handle"],
+            json(&config(vec![site("shop", true)]))["apps"]["http"]["servers"][HTTPS_SERVER]["routes"]
+                [0]["handle"]
+        );
+        for (name, server) in all {
+            if name.starts_with(LAN_SERVER) {
+                continue;
+            }
+            for listen in server["listen"].as_array().unwrap() {
+                let addr: SocketAddr = listen.as_str().unwrap().parse().unwrap();
+                assert!(addr.ip().is_loopback(), "{name}: {addr}");
+            }
+        }
+        // A share for a site Kiln no longer serves listens nowhere.
+        cfg.lan[0].host = site("gone", false).host;
+        assert!(
+            cfg.listeners()
+                .iter()
+                .all(|a| a.ip().is_loopback() || *a == lan)
+        );
+        assert!(
+            !servers(&json(&cfg))
+                .keys()
+                .any(|n| n.starts_with(LAN_SERVER))
         );
     }
 

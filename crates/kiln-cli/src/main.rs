@@ -157,6 +157,9 @@ enum Command {
         /// Stop sharing it.
         #[arg(long)]
         stop: bool,
+        /// On your local network instead: this PC's address and a port of its own (ADR 0076).
+        #[arg(long)]
+        lan: bool,
     },
     /// Put a site in a group (sites that belong together, shown together), or with no group
     /// given, take it out of its group (ADR 0074).
@@ -1217,7 +1220,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Group { site, group } => groups::set(&site, group.as_deref()),
         Command::Git { action } => run_git(action),
-        Command::Share { site, stop } => share::run(&site, stop),
+        Command::Share { site, stop, lan } => share::run(&site, stop, lan),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {
             action: Some(UpdatesAction::CheckKiln { state }),

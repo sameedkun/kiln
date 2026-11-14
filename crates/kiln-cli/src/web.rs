@@ -207,8 +207,93 @@ fn web_config(store: &StateStore) -> Result<WebConfig, String> {
         storage_dir: run_dir.join("storage"),
         log_file: run.log_file(),
         admin_socket: run.admin_socket(),
+        lan: lan_config(store),
         php_pools: crate::pool::running_upstreams()?,
     })
+}
+
+/// The setting holding the sites shared on the LAN, as JSON: `{"shop.test": 8101}`.
+pub const LAN_KEY: &str = "sites.lan";
+
+/// The first port tried for a LAN share; each share takes the next free one.
+const LAN_FIRST_PORT: u16 = 8101;
+
+/// This PC's address on its local network: the one the system would send from, found
+/// without sending anything (a UDP socket's "connect" only picks the route). Only a private
+/// IPv4 address counts (10/8, 172.16/12, 192.168/16): never a public one.
+#[must_use]
+pub fn lan_ip() -> Option<std::net::Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket
+        .connect((std::net::Ipv4Addr::new(192, 0, 2, 1), 9))
+        .ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_private() => Some(ip),
+        _ => None,
+    }
+}
+
+/// The sites shared on the LAN, by host, with their ports.
+#[must_use]
+pub fn lan_shares(store: &StateStore) -> BTreeMap<String, u16> {
+    store
+        .setting(LAN_KEY)
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// The web server's LAN listeners for the shares (ADR 0076 §4): none without a private
+/// network address.
+fn lan_config(store: &StateStore) -> Vec<kiln_web::LanShare> {
+    let Some(ip) = lan_ip() else {
+        return Vec::new();
+    };
+    let tld = kiln_runtime::tld(store).ok();
+    lan_shares(store)
+        .into_iter()
+        .filter_map(|(host, port)| {
+            let host = kiln_core::HostName::new(&host, tld.as_ref()?).ok()?;
+            Some(kiln_web::LanShare {
+                host,
+                address: std::net::SocketAddr::from((ip, port)),
+            })
+        })
+        .collect()
+}
+
+/// Shares `host` on the LAN, or stops (`on` false): kept as a setting, then the web server
+/// reloaded. The address, while shared.
+pub fn set_lan(host: &str, on: bool) -> Result<Option<String>, String> {
+    let mut store = open_store()?;
+    let mut shares = lan_shares(&store);
+    let address = if on {
+        let ip = lan_ip().ok_or(
+            "this PC has no private network address (10.x, 172.16-31.x or 192.168.x) to share on",
+        )?;
+        let port = match shares.get(host) {
+            Some(&port) => port,
+            None => (LAN_FIRST_PORT..LAN_FIRST_PORT + 100)
+                .find(|p| {
+                    !shares.values().any(|used| used == p) && TcpListener::bind((ip, *p)).is_ok()
+                })
+                .ok_or("no free port from 8101 to 8200 to share on")?,
+        };
+        shares.insert(host.to_owned(), port);
+        Some(format!("http://{ip}:{port}"))
+    } else {
+        shares.remove(host);
+        None
+    };
+    let text = serde_json::to_string(&shares).map_err(|e| e.to_string())?;
+    store
+        .set_setting(LAN_KEY, &text)
+        .map_err(|e| e.to_string())?;
+    if is_running()? {
+        apply_site_change(&store)?;
+    }
+    Ok(address)
 }
 
 /// Every site Kiln serves: links plus parked subfolders, each with its detected driver
@@ -699,6 +784,7 @@ fn url_config(store: &StateStore) -> WebConfig {
         storage_dir: PathBuf::new(),
         log_file: PathBuf::new(),
         admin_socket: PathBuf::new(),
+        lan: Vec::new(),
         php_pools: BTreeMap::new(),
     }
 }
@@ -948,6 +1034,8 @@ fn sites_data(
         .setting(kiln_runtime::node::DEFAULT_KEY)
         .map_err(|e| e.to_string())?;
     let groups = crate::groups::groups(store);
+    let lan = lan_shares(store);
+    let lan_ip = if lan.is_empty() { None } else { lan_ip() };
     let sites: Vec<_> = all
         .sites
         .iter()
@@ -985,6 +1073,8 @@ fn sites_data(
                 "framework": framework_of(site.driver, &site.project).0,
                 "git_branch": git_branch(&site.project),
                 "group": groups.get(host),
+                // While shared on the LAN (ADR 0076 §4).
+                "lan_url": lan.get(host).and_then(|port| lan_ip.map(|ip| format!("http://{ip}:{port}"))),
                 "framework_version": framework_version(site.driver, &site.project),
                 "node": node_json(&kiln_runtime::node::node_for_dir(&nodes, default_node.as_deref(), &site.project)),
             })

@@ -592,7 +592,7 @@ function SiteShare({ site }: { site: Site }) {
   const tunnel = services.data?.instances.find((i) => i.kind === "tunnel" && i.project === site.project);
   if (site.source === "alias" || !services.data) return null;
   return (
-    <Section title="Sharing" meta={tunnel ? "anyone with the address can open it" : "only this PC can open it"}>
+    <Section title="Sharing" meta={tunnel || site.lan_url ? "shared: others can open it" : "only this PC can open it"}>
       <li className="flex flex-wrap items-center gap-3 border-b border-line px-1 py-4">
         {tunnel ? (
           <>
@@ -632,6 +632,47 @@ function SiteShare({ site }: { site: Site }) {
               }
             >
               Share…
+            </Button>
+          </>
+        )}
+      </li>
+      <li className="flex flex-wrap items-center gap-3 border-b border-line px-1 py-4">
+        {site.lan_url ? (
+          <>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title="On your local network">
+              {site.lan_url}
+            </span>
+            <Button
+              size="sm"
+              onClick={() =>
+                navigator.clipboard
+                  .writeText(site.lan_url!)
+                  .then(() => toast({ message: "Copied the address." }))
+                  .catch(() => toast({ message: "Couldn't copy it." }))
+              }
+            >
+              Copy
+            </Button>
+            <Button size="sm" onClick={() => run(["share", site.host, "--lan", "--stop"], `${site.host} isn't shared on your network any more.`)}>
+              Stop sharing on the network
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="flex-1 text-[13px] text-text-2">On your network: phones and PCs on the same Wi-Fi open {site.host} at this PC's address, without a tunnel.</span>
+            <Button
+              size="sm"
+              onClick={() =>
+                ask(
+                  `Share ${site.host} on your network?`,
+                  `Kiln serves ${site.host} on this PC's network address, on a port of its own, until you stop it: anyone on the same network can open it. Windows may ask whether Kiln's web server can use the network; allow private networks only. Kiln adds no firewall rule, and nothing else Kiln serves leaves this PC.`,
+                  "Share on the network",
+                  ["share", site.host, "--lan"],
+                  `${site.host} is shared on your network: its address is under Sharing.`,
+                )
+              }
+            >
+              Share on the network…
             </Button>
           </>
         )}

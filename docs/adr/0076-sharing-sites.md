@@ -1,6 +1,6 @@
 # 0076. Sharing a site
 
-- **Status:** accepted (tunnels); LAN sharing to follow under §4
+- **Status:** accepted; §4 (LAN sharing) approved by the user and built 2026-11-14
 - **Date:** 2026-11-14
 - **Task:** P4C-12 (from Phases 5 and 6) · Principle 3 (loopback only unless opted in per site)
 
@@ -27,10 +27,13 @@ only when the user opts in per site, and no firewall rules by default.
    own (`~/.cloudflared/config.yml`) never applies, and `--no-autoupdate`.
 3. **The app asks in words** before sharing: anyone with the address can open the site
    while it's shared. The site's Overview shows the address, with Copy and "Stop sharing".
-4. **LAN sharing comes next, as its own change**: one site, on its own port, on this PC's
-   network address, only while the user has it on; Windows' own firewall prompt is the
-   consent for the network, and Kiln adds no rule. It needs the web server's loopback-only
-   check relaxed for exactly that listener, so it gets its own review.
+4. **LAN sharing**, per site and opt-in (`kiln share <site> --lan [--stop]`): that one site
+   on this PC's private network address (10/8, 172.16/12 or 192.168/16, found by asking the
+   system which address it would route from; a public one is refused) and a port of its own
+   (8101 up), plain HTTP, to any host name, until stopped. Each share is its own server in
+   the web config, the only listeners beyond loopback (a test keeps every other listener on
+   loopback). Windows' own firewall prompt is the consent for the network; Kiln adds no
+   rule. `kiln --json sites` gives a shared site's `lan_url`.
 5. **ngrok and Expose** need accounts and aren't open source: if the user has them, they
    work against Kiln's sites as they are (`ngrok http --host-header=shop.test 8080`); Kiln
    doesn't download them.

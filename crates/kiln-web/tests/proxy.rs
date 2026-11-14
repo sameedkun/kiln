@@ -157,6 +157,7 @@ fn a_proxy_site_reaches_its_dev_server_with_live_reload() {
         storage_dir: dir.path().join("run").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
+        lan: Vec::new(),
         php_pools: std::collections::BTreeMap::new(),
     };
 

@@ -276,9 +276,9 @@ then new features.
 | P4C-09 | Stripe: `stripe listen` as a site's process, forwarding to the site; the user logs in to Stripe themselves; the webhook secret stays out of logs and History | [ADR 0073](adr/0073-stripe-webhooks.md), built (Stripe prints the signing secret into its own log; Kiln copies it nowhere) |
 | P4C-10 | Site groups: sites that belong together (an app, its admin, its blog), shown together, optionally sharing a database | [ADR 0074](adr/0074-site-groups.md), built (groups; a one-step shared database later) |
 | P4C-11 | Git: switch a site's branch; worktrees as sites of their own; never on a tree with uncommitted changes | from Phase 5; [ADR 0075](adr/0075-git-branches-and-worktrees.md), built |
-| P4C-12 | Sharing: a site on the LAN (opt-in per site, principle 3) and through a tunnel (Cloudflare Tunnel, ngrok, Expose) | from Phase 5 and 6 |
-| P4C-13 | Elasticsearch (or OpenSearch) as a service, from the vendor's own zip | the user's request; license and the bundled Java's size checked first |
-| P4C-14 | Names without the hosts file: a spike on wildcard `.test` through a resolver Kiln runs, so adding a site needs no administrator prompt | from Phase 6; a system change with its own ADR and consent |
+| P4C-12 | Sharing: a site on the LAN (opt-in per site, principle 3) and through a tunnel (Cloudflare Tunnel, ngrok, Expose) | from Phase 5 and 6; [ADR 0076](adr/0076-sharing-sites.md): tunnels built; LAN sharing per site, opt-in, approved by the user 2026-11-14 |
+| P4C-13 | Elasticsearch (or OpenSearch) as a service, from the vendor's own zip | the user chose both (2026-11-14): OpenSearch (Apache-2.0) and Elasticsearch (under its AGPL option), each its own kind |
+| P4C-14 | Names without the hosts file: a spike on wildcard `.test` through a resolver Kiln runs, so adding a site needs no administrator prompt | from Phase 6; a system change with its own ADR and consent; the user approved a CI spike first (2026-11-14) |
 | P4C-15 | Database snapshots and a Tinker console per site | from Phase 5 |
 
 ## Phase 3–5 scope (summary)

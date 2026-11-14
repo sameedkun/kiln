@@ -120,6 +120,7 @@ fn each_site_runs_on_its_own_php_version() {
         storage_dir: dir.path().join("caddy").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
+        lan: Vec::new(),
         php_pools: pools
             .pools
             .iter()

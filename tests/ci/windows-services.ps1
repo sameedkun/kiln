@@ -498,6 +498,26 @@ Check 'kiln share shop (ADR 0076): a trycloudflare.com address that serves the s
     }
     if (@(Get-CimInstance Win32_Process -Filter "Name='kiln-cloudflared.exe'").Length) { throw 'cloudflared still runs after --stop' }
 }
+Check 'kiln share shop --lan (ADR 0076 §4): one listener on the private address, serving that site to any name, gone after --stop' {
+    $beyond = { @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1', '0.0.0.0', '::' } | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) }
+    $before = & $beyond
+    try {
+        $out = Kiln share shop --lan
+        $url = [regex]::Match($out, 'http://(10|172|192)\.[0-9.]+:\d+').Value
+        if (-not $url) { throw "no private address in:`n$out" }
+        $page = curl.exe -sS --max-time 20 $url 2>&1 | Out-String
+        if ($page -notmatch 'Laravel') { throw "$url didn't serve the shop:`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
+        $new = @(& $beyond | Where-Object { $before -notcontains $_ })
+        if ($new.Length -ne 1 -or "http://$($new[0])" -ne $url) { throw "new listeners beyond loopback: $($new -join ', ')" }
+        $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })
+        if ($site.lan_url -ne $url) { throw "sites says $($site.lan_url)" }
+    } finally {
+        & $Kiln share shop --lan --stop 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+    $left = @(& $beyond | Where-Object { $before -notcontains $_ })
+    if ($left.Length) { throw "still listening after --stop: $($left -join ', ')" }
+}
 Check 'kiln git (ADR 0075): branches read, no switch over changes, a worktree served as its own site, then removed' {
     $repo = Join-Path $projects 'gitsite'
     Kiln new gitsite --template empty --path $projects | Out-Null

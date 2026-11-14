@@ -164,6 +164,7 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
         storage_dir: dir.path().join("run").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
+        lan: Vec::new(),
         php_pools: std::collections::BTreeMap::new(),
     };
 
@@ -357,6 +358,7 @@ fn restarts_on_a_validated_config_and_keeps_serving_when_caddy_rejects_one() {
         storage_dir: dir.path().join("run").join("storage"),
         log_file: server.log_file(),
         admin_socket: server.admin_socket(),
+        lan: Vec::new(),
         php_pools: std::collections::BTreeMap::new(),
     };
     let kiln_ca = CaFiles {
