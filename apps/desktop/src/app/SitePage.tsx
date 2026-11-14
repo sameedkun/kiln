@@ -12,6 +12,7 @@ import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
+import { useToast } from "../components/Toast";
 import { TextField } from "../components/TextField";
 import { call, openFolder, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
@@ -124,6 +125,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       <>
       <SiteGlance site={site} />
       <SiteGit site={site} go={go} />
+      <SiteShare site={site} />
       <Section title="How it runs">
         <li className="flex flex-wrap items-start gap-x-10 gap-y-4 border-b border-line px-1 py-4">
           {site.php ? (
@@ -579,6 +581,62 @@ function WorktreeDialog({ site, branches, onClose }: { site: Site; branches: str
       </datalist>
       <p className="mb-0 mt-2 text-xs text-text-3">{isNew ? `A new branch, from the one ${site.host} is on.` : valid ? "An existing branch." : ""}</p>
     </Dialog>
+  );
+}
+
+/** Sharing a site through a Cloudflare quick tunnel (ADR 0076): asked for in words, its public address shown while it runs. */
+function SiteShare({ site }: { site: Site }) {
+  const services = useRead<ServicesList>("services.list");
+  const { run, ask } = useChanges();
+  const toast = useToast();
+  const tunnel = services.data?.instances.find((i) => i.kind === "tunnel" && i.project === site.project);
+  if (site.source === "alias" || !services.data) return null;
+  return (
+    <Section title="Sharing" meta={tunnel ? "anyone with the address can open it" : "only this PC can open it"}>
+      <li className="flex flex-wrap items-center gap-3 border-b border-line px-1 py-4">
+        {tunnel ? (
+          <>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={tunnel.shared_url ?? undefined}>
+              {tunnel.shared_url ?? "Starting the tunnel…"}
+            </span>
+            {tunnel.shared_url && (
+              <Button
+                size="sm"
+                onClick={() =>
+                  navigator.clipboard
+                    .writeText(tunnel.shared_url!)
+                    .then(() => toast({ message: "Copied the address." }))
+                    .catch(() => toast({ message: "Couldn't copy it." }))
+                }
+              >
+                Copy
+              </Button>
+            )}
+            <Button size="sm" onClick={() => run(["share", site.host, "--stop"], `${site.host} isn't shared any more.`)}>
+              Stop sharing
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="flex-1 text-[13px] text-text-2">A public https address that reaches {site.host} while it's shared, through a Cloudflare quick tunnel. No account needed.</span>
+            <Button
+              size="sm"
+              onClick={() =>
+                ask(
+                  `Share ${site.host}?`,
+                  `Kiln starts a Cloudflare quick tunnel: a random https://….trycloudflare.com address that reaches ${site.host} from anywhere while it's shared. Anyone with the address can open it, so share it only with people you trust, and stop it when you're done. Kiln downloads cloudflared (about 55 MB) the first time.`,
+                  "Share it",
+                  ["share", site.host],
+                  `${site.host} is shared: its address is under Sharing.`,
+                )
+              }
+            >
+              Share…
+            </Button>
+          </>
+        )}
+      </li>
+    </Section>
   );
 }
 

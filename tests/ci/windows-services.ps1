@@ -477,6 +477,27 @@ Check 'kiln group shop "Acme Corp" (ADR 0074): in the sites list with its group,
     $global:LASTEXITCODE = 0
     Expect "doesn't serve nosuchsite.test" $refused
 }
+Check 'kiln share shop (ADR 0076): a trycloudflare.com address that serves the site, and nothing new on the network' {
+    $before = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1' } | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" })
+    try {
+        $out = Kiln share shop
+        $url = [regex]::Match($out, 'https://[a-z0-9-]+\.trycloudflare\.com').Value
+        if (-not $url) { throw "no address in:`n$out" }
+        # The tunnel's name takes a little while to resolve publicly.
+        $deadline = (Get-Date).AddSeconds(90)
+        do { Start-Sleep -Seconds 3; $page = curl.exe -sS -L --max-time 20 $url 2>&1 | Out-String } until ($page -match 'Laravel' -or (Get-Date) -gt $deadline)
+        if ($page -notmatch 'Laravel') { throw "$url didn't serve the shop:`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
+        $after = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1' } | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" })
+        $new = @($after | Where-Object { $before -notcontains $_ })
+        if ($new.Length) { throw "listening beyond loopback since sharing: $($new -join ', ')" }
+        $listed = ((& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.kind -eq 'tunnel' })
+        if ($listed.shared_url -ne $url) { throw "service list says $($listed.shared_url)" }
+    } finally {
+        & $Kiln share shop --stop 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+    if (@(Get-CimInstance Win32_Process -Filter "Name='kiln-cloudflared.exe'").Length) { throw 'cloudflared still runs after --stop' }
+}
 Check 'kiln git (ADR 0075): branches read, no switch over changes, a worktree served as its own site, then removed' {
     $repo = Join-Path $projects 'gitsite'
     Kiln new gitsite --template empty --path $projects | Out-Null

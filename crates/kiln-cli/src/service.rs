@@ -170,9 +170,56 @@ fn project_launch(
         return Err(format!("{} is gone", project.display()));
     }
     let runtime = runtime_for(store, provider, project)?;
-    provider
+    let mut launch = provider
         .project_launch(project, &runtime, &record.ports)
-        .ok_or_else(|| "it has no way to start".to_owned())
+        .ok_or_else(|| "it has no way to start".to_owned())?;
+    if provider.shares_site() {
+        launch.args.extend(share_args(store, record, project)?);
+    }
+    Ok(launch)
+}
+
+/// Where a tunnel forwards (ADR 0076): Kiln's web server on loopback, with the site's name as
+/// the host; a secure site over HTTPS, its certificate Kiln's own. And an empty config of
+/// Kiln's, so the user's own `~/.cloudflared/config.yml` never applies.
+fn share_args(
+    store: &StateStore,
+    record: &ServiceRecord,
+    project: &Path,
+) -> Result<Vec<String>, String> {
+    let site = crate::web::resolved(store)?
+        .sites
+        .into_iter()
+        .find(|s| s.alias_of.is_none() && s.project == project)
+        .ok_or_else(|| format!("no site serves {}", project.display()))?;
+    let host = site.host.as_str().to_owned();
+    let dirs = dirs_of(record)?;
+    std::fs::create_dir_all(&dirs.data)
+        .map_err(|e| format!("cannot create {}: {e}", dirs.data.display()))?;
+    let config = dirs.data.join("cloudflared.yml");
+    std::fs::write(
+        &config,
+        "# Kiln's own (ADR 0076): no tunnel of the user's applies.
+{}
+",
+    )
+    .map_err(|e| format!("cannot write {}: {e}", config.display()))?;
+    let mut args = vec!["--config".to_owned(), config.to_string_lossy().into_owned()];
+    if site.secure {
+        let port = crate::coexist::planned_port(store, &crate::coexist::HTTPS).unwrap_or(443);
+        args.extend([
+            "--url".to_owned(),
+            format!("https://127.0.0.1:{port}"),
+            "--no-tls-verify".to_owned(),
+            "--origin-server-name".to_owned(),
+            host.clone(),
+        ]);
+    } else {
+        let port = crate::coexist::planned_port(store, &crate::coexist::HTTP).unwrap_or(80);
+        args.extend(["--url".to_owned(), format!("http://127.0.0.1:{port}")]);
+    }
+    args.extend(["--http-host-header".to_owned(), host]);
+    Ok(args)
 }
 
 /// What the supervisor should run: every enabled instance.
@@ -1099,6 +1146,8 @@ pub fn list() -> Result<(), String> {
                 "version": r.version,
                 "ports": r.ports,
                 "used_by": used_by(r, &projects),
+                // A tunnel's public address, once it's up (ADR 0076).
+                "shared_url": (r.kind == "tunnel").then(|| crate::share::url_of(r)).flatten(),
                 // What `kiln env use` writes, for the page's .env tab (ADR 0068 §3).
                 "env": kiln_services::provider(&r.kind)
                     .map(|p| p.env_keys(&r.ports))

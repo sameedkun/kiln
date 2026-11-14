@@ -36,6 +36,7 @@ mod proxy;
 mod requests;
 mod service;
 mod services_up;
+mod share;
 mod tool;
 mod uninstall;
 mod updates;
@@ -147,6 +148,15 @@ enum Command {
     Git {
         #[command(subcommand)]
         action: GitAction,
+    },
+    /// Share a site through a Cloudflare quick tunnel: a public https://….trycloudflare.com
+    /// address that reaches it while it's shared (ADR 0076). Anyone with the address can open it.
+    Share {
+        /// The site, e.g. shop.
+        site: String,
+        /// Stop sharing it.
+        #[arg(long)]
+        stop: bool,
     },
     /// Put a site in a group (sites that belong together, shown together), or with no group
     /// given, take it out of its group (ADR 0074).
@@ -1207,6 +1217,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Group { site, group } => groups::set(&site, group.as_deref()),
         Command::Git { action } => run_git(action),
+        Command::Share { site, stop } => share::run(&site, stop),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {
             action: Some(UpdatesAction::CheckKiln { state }),

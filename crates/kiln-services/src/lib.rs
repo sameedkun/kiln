@@ -22,6 +22,7 @@ pub mod reverb;
 mod rustfs;
 pub mod stripe;
 pub mod tools;
+pub mod tunnel;
 
 pub use install::{InstallError, install, install_into_folder};
 
@@ -376,6 +377,14 @@ pub trait ServiceProvider: Sync {
         None
     }
 
+    /// Whether it forwards to the site serving its project (a tunnel, [ADR 0076]): Kiln adds
+    /// where to its project launch. False by default.
+    ///
+    /// [ADR 0076]: ../../../docs/adr/0076-sharing-sites.md
+    fn shares_site(&self) -> bool {
+        false
+    }
+
     /// A web UI to serve as a Kiln site ([ADR 0044]): the site's name (`mailpit` for
     /// `mailpit.test`) and the port role it listens on. None by default.
     ///
@@ -424,7 +433,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 15] = [
+    static PROVIDERS: [&dyn ServiceProvider; 16] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -440,6 +449,7 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &devprocs::Vite,
         &devprocs::Dumps,
         &stripe::Stripe,
+        &tunnel::Tunnel,
     ];
     &PROVIDERS
 }

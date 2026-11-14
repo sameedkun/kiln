@@ -59,6 +59,8 @@ export interface Instance {
   enabled: boolean;
   running: boolean;
   project: string | null;
+  /** A tunnel's public address, once it's up (ADR 0076). */
+  shared_url?: string | null;
   /** What `kiln env use` writes into a site's .env (ADR 0068 §3). */
   env: [string, string][];
 }
