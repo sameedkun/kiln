@@ -58,7 +58,12 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
   const port = mainPort(i);
   const tabs = [
     { id: "overview", label: "Overview" },
-    ...(hasDatabases ? [{ id: "databases", label: "Databases" }] : []),
+    ...(hasDatabases
+      ? [
+          { id: "databases", label: "Databases" },
+          { id: "snapshots", label: "Snapshots" },
+        ]
+      : []),
     { id: "logs", label: "Logs" },
     ...(i.env.length ? [{ id: "env", label: ".env" }] : []),
     { id: "tools", label: "Tools" },
@@ -94,6 +99,8 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
       <Tabs tabs={tabs} current={tabs.some((t) => t.id === tab) ? tab : "overview"} onSelect={setTab}>
         {tab === "databases" && hasDatabases ? (
           <ServiceDatabasesTab key={dropped} instance={i} running={running} go={go} onDrop={(db) => setOpen({ drop: db })} onDump={(db) => setOpen({ dumpOne: db })} />
+        ) : tab === "snapshots" && hasDatabases ? (
+          <ServiceSnapshots instance={i} running={running} />
         ) : tab === "logs" ? (
           <ServiceLog name={i.name} />
         ) : tab === "env" ? (
@@ -186,8 +193,6 @@ function ServiceDatabasesTab({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const valid = name ? databaseName(name) : null;
-  // Bumped after a snapshot, so the list below is read again.
-  const [snapped, setSnapped] = useState(0);
   if (!running) return <p className="m-0 px-1 text-[13px] text-text-2">Start {i.name} to see its databases.</p>;
   const total = (list.data?.databases ?? []).reduce((n, d) => n + d.bytes, 0);
   return (
@@ -217,7 +222,6 @@ function ServiceDatabasesTab({
             columns="minmax(160px,1fr) 100px minmax(160px,1.4fr) 80px"
             actions={
               <>
-                <Button variant="quiet" aria-label={`Snapshot ${d.name}`} title="Keep a snapshot to roll back to" icon={<Camera16Regular />} onClick={() => run(["db", "snapshot", i.name, d.name], `Kept a snapshot of ${d.name}.`).then(() => setSnapped((n) => n + 1))} />
                 <Button variant="quiet" aria-label={`Dump ${d.name}`} title="Dump it to a .sql file" icon={<ArrowDownload16Regular />} onClick={() => onDump(d.name)} />
                 <Button variant="quiet" aria-label={`Delete ${d.name}`} title="Delete it" icon={<Delete16Regular />} onClick={() => onDrop(d.name)} />
               </>
@@ -237,30 +241,55 @@ function ServiceDatabasesTab({
           </Row>
         ))}
       </Section>
-      <ServiceSnapshots key={snapped} instance={i} />
     </>
   );
 }
 
 /** A service's snapshots (ADR 0079): taken from a database's row, rolled back after asking. */
-function ServiceSnapshots({ instance: i }: { instance: Instance }) {
+function ServiceSnapshots({ instance: i, running }: { instance: Instance; running: boolean }) {
   const list = useRead<ServiceSnapshotsList>("services.snapshots", { name: i.name });
-  const { ask } = useChanges();
+  const databases = useRead<ServiceDatabases>(running ? "services.databases" : null, { name: i.name });
+  const { ask, run } = useChanges();
+  const [chosen, setChosen] = useState("");
+  const [busy, setBusy] = useState(false);
   const all = list.data?.snapshots ?? [];
+  const names = (databases.data?.databases ?? []).map((d) => d.name);
+  const db = chosen || names[0] || "";
   return (
+    <>
+      {running ? (
+        <div className="mb-5 flex items-end gap-3">
+          <Select label="Database" className="w-[240px]" value={db} onChange={(e) => setChosen(e.target.value)} options={names.map((n) => ({ value: n, label: n }))} />
+          <Button
+            variant="ink"
+            icon={<Camera16Regular />}
+            disabled={!db || busy}
+            onClick={async () => {
+              setBusy(true);
+              await run(["db", "snapshot", i.name, db], `Kept a snapshot of ${db}.`);
+              setBusy(false);
+              list.reload();
+            }}
+          >
+            {busy ? "Taking it…" : "Take a snapshot"}
+          </Button>
+        </div>
+      ) : (
+        <p className="mb-5 mt-0 px-1 text-[13px] text-text-2">Start {i.name} to take a snapshot; rolling back needs it running too.</p>
+      )}
     <Section title="Snapshots" meta={list.data ? `${all.length} · kept by Kiln` : undefined}>
-      {list.data && all.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">None yet: a database's camera button keeps one, to roll back to after a migration or a test that went wrong.</li>}
+      {list.data && all.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">None yet: a snapshot keeps a database as it is, to roll back to after a migration or a test that went wrong.</li>}
       {all.map((s) => {
         const at = s.file.slice(s.database.length + 2, -4);
         const when = `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)} ${at.slice(9, 11)}:${at.slice(11, 13)}:${at.slice(13, 15)} UTC`;
         return (
           <Row
             key={s.file}
-            columns="minmax(140px,1fr) minmax(150px,1fr) 90px"
+            columns="minmax(140px,1fr) minmax(170px,1fr) 90px 100px"
             actions={
               <Button
-                variant="quiet"
                 size="sm"
+                disabled={!running}
                 onClick={() =>
                   ask(
                     `Roll ${s.database} back?`,
@@ -282,6 +311,7 @@ function ServiceSnapshots({ instance: i }: { instance: Instance }) {
         );
       })}
     </Section>
+    </>
   );
 }
 

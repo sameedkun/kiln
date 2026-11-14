@@ -310,10 +310,19 @@ describe("a site's processes (ADR 0069)", async () => {
 });
 
 describe("a new site from a template (ADR 0070)", async () => {
-  const { newArgs, templates } = await import("./NewSiteDialog");
+  const { newArgs, templates, templateFor, frameworks } = await import("./NewSiteDialog");
 
   it("offers the CLI's templates, Laravel first", () => {
-    expect(templates.map((t) => t.id)).toEqual(["laravel", "react", "vue", "livewire", "symfony", "bedrock", "empty"]);
+    expect(templates.map((t) => t.id)).toEqual(["laravel", "react", "vue", "livewire", "symfony", "wordpress", "empty"]);
+    expect(frameworks.map((f) => f.id)).toEqual(["laravel", "symfony", "wordpress", "empty"]);
+  });
+
+  it("makes a template from a framework, and from Laravel with a starter kit (P4D-03)", () => {
+    expect(templateFor("laravel", "")).toBe("laravel");
+    expect(templateFor("laravel", "vue")).toBe("vue");
+    expect(templateFor("wordpress", "")).toBe("wordpress");
+    expect(templateFor("symfony", "react")).toBe("symfony");
+    for (const f of frameworks) expect(templates.some((t) => t.id === templateFor(f.id, ""))).toBe(true);
   });
 
   it("passes only what was chosen", () => {

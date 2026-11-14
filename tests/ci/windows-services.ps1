@@ -382,6 +382,10 @@ Check 'service add rustfs: from GitHub, running on loopback' {
     $script:s3 = PortOf $out 's3'; $script:console = PortOf $out 'console'
 }
 Check 'RustFS listens on 127.0.0.1 only (S3 and console)' { OnlyLoopback 'kiln-rustfs' 2 }
+Check 'rustfs.test serves its web console (P4D-05)' {
+    $page = Page (SiteBase 'rustfs')
+    if ($page -notmatch 'rustfs') { throw "no console page:`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
+}
 # One S3 request, signed with AWS Signature Version 4 and the credentials Kiln sets.
 function S3($method, $path, [byte[]] $body = @()) {
     $sha = [Security.Cryptography.SHA256]::Create()

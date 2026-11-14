@@ -87,6 +87,11 @@ impl ServiceProvider for Rustfs {
         "kiln-rustfs"
     }
 
+    /// Its web console, as `rustfs.test` (ADR 0044; P4D-05).
+    fn web_ui(&self) -> Option<(&'static str, &'static str)> {
+        Some(("rustfs", CONSOLE.role))
+    }
+
     /// Laravel's `s3` disk, pointed at RustFS with path-style URLs. The bucket stays the
     /// project's own choice (`AWS_BUCKET`).
     /// Listening isn't serving yet: until its access control has loaded, RustFS answers every
