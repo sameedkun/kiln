@@ -101,6 +101,35 @@ pub fn add(name: &str, spec: Option<&str>) -> Result<(), String> {
     crate::ext::toggle(&[package.name.to_owned()], Some(&record.version), true)
 }
 
+/// For a new PHP (ADR 0072): adds `name` if Kiln has a build pinned for that PHP, saying so;
+/// a PHP without one, or a failed download, is a note, never an error.
+pub fn add_by_default(name: &str, version: &str) {
+    let Some(package) = pecl::package(name) else {
+        return;
+    };
+    let Ok(store) = crate::web::open_store() else {
+        return;
+    };
+    let Ok(record) = crate::ext::target(&store, Some(version)) else {
+        return;
+    };
+    drop(store);
+    if package
+        .build_for(&record.version, &record.archive)
+        .is_none()
+    {
+        return;
+    }
+    crate::out::step(&format!("Adding php{name}"));
+    match add(name, Some(version)) {
+        Ok(()) => say!(
+            "Added php{name} {} (`php ext off {name}` turns it off).",
+            package.version
+        ),
+        Err(e) => say!("Note: php{name} wasn't added: {e}. `kiln php ext add {name}` tries again."),
+    }
+}
+
 /// For `php update`: the PECL extensions `old` has that `new` lacks are placed in `new` too,
 /// so their toggles carry over.
 pub fn carry_files(old: &PhpRecord, new: &PhpRecord) {

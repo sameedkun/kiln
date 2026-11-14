@@ -567,6 +567,9 @@ enum PhpAction {
         /// downloading one.
         #[arg(long)]
         system: bool,
+        /// Windows: don't add phpredis, which Kiln adds to a new PHP by default (ADR 0072).
+        #[arg(long)]
+        without_redis: bool,
     },
     /// List the PHP versions Kiln has installed.
     List,
@@ -1021,7 +1024,11 @@ fn run_ca(action: CaAction) -> Result<(), String> {
 fn run_php(action: PhpAction) -> Result<(), String> {
     match action {
         PhpAction::Available => php::available(),
-        PhpAction::Install { version, system } => php::install(&version, system),
+        PhpAction::Install {
+            version,
+            system,
+            without_redis,
+        } => php::install(&version, system, !without_redis),
         PhpAction::List => php::list(),
         PhpAction::Remove { version } => php::remove(&version),
         PhpAction::Update { version } => php::update(version.as_deref()),

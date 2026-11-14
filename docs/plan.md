@@ -272,7 +272,7 @@ then new features.
 | P4C-05 | A site's overview with everything about it: requests over time, response codes, timing, its services, processes, PHP, Git branch | built |
 | P4C-06 | New site from the app: a Laravel app with or without a starter kit (React, Vue, Livewire), Symfony, WordPress, an empty folder | through Composer; [ADR 0070](adr/0070-new-site-templates.md), built |
 | P4C-07 | pgAdmin on request ("Add pgAdmin?" on PostgreSQL's page), with Kiln's instances already connected; never by default | EDB's zip already holds pgAdmin 4, which Kiln skipped (ADR 0040); [ADR 0071](adr/0071-pgadmin-on-request.md), built |
-| P4C-08 | phpredis with every new PHP by default, as Herd does; amends ADR 0067 | |
+| P4C-08 | phpredis with every new PHP by default, as Herd does; amends ADR 0067 | [ADR 0072](adr/0072-phpredis-by-default.md), built |
 | P4C-09 | Stripe: `stripe listen` as a site's process, forwarding to the site; the user logs in to Stripe themselves; the webhook secret stays out of logs and History | |
 | P4C-10 | Site groups: sites that belong together (an app, its admin, its blog), shown together, optionally sharing a database | |
 | P4C-11 | Git: switch a site's branch; worktrees as sites of their own; never on a tree with uncommitted changes | from Phase 5 |

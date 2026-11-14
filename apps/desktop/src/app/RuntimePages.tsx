@@ -49,7 +49,7 @@ interface Offer {
 }
 
 /** What can be installed, read from the network only when the user asks (ADR 0053 §4). */
-function InstallDialog({ what, load, args, onClose }: { what: string; load: () => Promise<Offer[]>; args: (o: Offer) => string[]; onClose: () => void }) {
+function InstallDialog({ what, load, args, note, onClose }: { what: string; load: () => Promise<Offer[]>; args: (o: Offer) => string[]; note?: string; onClose: () => void }) {
   const { run } = useChanges();
   const { progress, onLine } = useProgress();
   const [offers, setOffers] = useState<Offer[] | null>(null);
@@ -72,6 +72,7 @@ function InstallDialog({ what, load, args, onClose }: { what: string; load: () =
         </Button>
       }
     >
+      {note && <p className="mt-0">{note}</p>}
       {!offers && !error && <p className="m-0">Asking what's available…</p>}
       {error && <p className="m-0 text-text">{error}</p>}
       {offers && (
@@ -222,6 +223,7 @@ export function PhpPage() {
             (await call<PhpAvailable>("php.available")).releases.map((r) => ({ line: r.line, version: r.version, detail: r.archive, installed: r.installed }))
           }
           args={(o) => ["php", "install", o.version]}
+          note="phpredis comes with it, as with Herd: Laravel's fastest Redis client. Its switch is under the version's extensions."
         />
       )}
     </Page>

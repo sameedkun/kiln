@@ -110,7 +110,7 @@ pub fn available() -> Result<(), String> {
     Ok(())
 }
 
-pub fn install(spec: &str, system: bool) -> Result<(), String> {
+pub fn install(spec: &str, system: bool, with_redis: bool) -> Result<(), String> {
     if !cfg!(windows) {
         return if system {
             install_system(spec)
@@ -161,6 +161,11 @@ pub fn install(spec: &str, system: bool) -> Result<(), String> {
         );
         say!("php.ini enables: {}", installed.extensions.join(", "));
         say!("It checked out: `php -v` reports {}.", installed.version);
+        // As Herd does: phpredis with every new PHP it has a build for (ADR 0072). Only a
+        // convenience, so a failure is a note; `--without-redis` skips it.
+        if with_redis {
+            crate::pecl::add_by_default("redis", &installed.version);
+        }
     }
     Ok(())
 }
@@ -512,7 +517,8 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
             continue;
         }
         say!("PHP {minor}: {current} → {newest}");
-        install(newest, false)?;
+        // An update carries the old version's extensions over instead (phpredis only if it had it).
+        install(newest, false, false)?;
         let mut store = open_store()?;
         let now = kiln_runtime::installed(&store).map_err(|e| e.to_string())?;
         if let (Some(old), Some(new)) = (

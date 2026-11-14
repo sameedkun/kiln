@@ -180,8 +180,8 @@ Check 'a stop shuts PostgreSQL down cleanly (its log says so), and start brings 
 }
 
 Say '== phpMyAdmin and Adminer (ADR 0043)'
-Check 'php install 8.5, web install and web start (plain HTTP, for the tools)' {
-    Kiln php install 8.5 | Out-Null
+Check 'php install 8.5 (with phpredis, ADR 0072), web install and web start (plain HTTP, for the tools)' {
+    Expect 'Added phpredis' (Kiln php install 8.5)
     Kiln web install | Out-Null
     $script:web = Kiln web start
 }
@@ -728,7 +728,9 @@ Check 'every pinned PECL build matches its SHA-256 on downloads.php.net' {
     }
 }
 Check 'kiln php ext add redis: checked, placed, turned on; phpredis talks to Kiln''s Redis' {
-    Expect 'redis is now on' (Kiln php ext add redis)
+    # PHP 8.5 came with it (ADR 0072): adding it again finds it there, already on.
+    $added = Kiln php ext add redis
+    if ($added -notmatch 'redis is (now|already) on') { throw "ext add redis said:`n$added" }
     $port = ((& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.name -eq 'redis-8.10' }).main_port
     $script = Join-Path $dir 'phpredis.php'
     Set-Content $script -Encoding ascii -Value "<?php `$r = new Redis(); `$r->connect('127.0.0.1', $port); `$r->set('kiln-phpredis', 'ok'); echo `$r->get('kiln-phpredis');"
