@@ -628,7 +628,11 @@ echo 'kiln-dispatched on ' . config('queue.default') . "\n";
     if (-not (Test-Path $done)) { throw "the job didn't run within 60 s:`n$(Kiln service logs queue-shop)" }
     # The worker logs DONE just after the job's own write: wait for the line too.
     $deadline = (Get-Date).AddSeconds(15)
-    do { $workerLog = Kiln service logs queue-shop } until ($workerLog -match 'DONE' -or (Get-Date) -gt $deadline -or -not (Start-Sleep -Milliseconds 500))
+    while ($true) {
+        $workerLog = Kiln service logs queue-shop
+        if ($workerLog -match 'DONE' -or (Get-Date) -gt $deadline) { break }
+        Start-Sleep -Milliseconds 500
+    }
     Expect 'DONE' $workerLog
     # The app finds it by the site's folder, exactly as `sites` gives it (ADR 0060 §6).
     $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' }).project
