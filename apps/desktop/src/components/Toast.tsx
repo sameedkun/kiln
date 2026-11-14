@@ -1,4 +1,14 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 
 export interface ToastOptions {
   message: string;
@@ -33,7 +43,10 @@ const SHOWN_FOR_MS = 6000;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Shown[]>([]);
   const next = useRef(0);
-  const dismiss = useCallback((id: number) => setToasts((all) => all.filter((t) => t.id !== id)), []);
+  const dismiss = useCallback(
+    (id: number) => setToasts((all) => all.filter((t) => t.id !== id)),
+    [],
+  );
   const show = useCallback(
     (toast: ToastOptions) => {
       const replaced = toast.replaces;
@@ -49,60 +62,100 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [dismiss],
   );
   const value = useMemo(() => ({ show, dismiss }), [show, dismiss]);
-  // Dialogs are the browser's modal <dialog>, in its top layer, where no z-index reaches: the
-  // toasts go there too (a manual popover), raised again on every change, so a job's progress
-  // shows above an open dialog rather than under its backdrop (P4D-03).
-  const layer = useRef<HTMLDivElement>(null);
-  // Only while a modal dialog is open: otherwise the stack stays an ordinary live region in
-  // the page, which screen readers follow best.
+  // Dialogs are the browser's modal <dialog>, above everything else in the window: while one
+  // is open, the toasts are drawn inside it, under its content, so a job's progress shows in
+  // the dialog that started it rather than under its backdrop (P4D-03).
+  const [host, setHost] = useState<HTMLDialogElement | null>(null);
   useEffect(() => {
-    const el = layer.current as (HTMLDivElement & { showPopover?: () => void; hidePopover?: () => void }) | null;
-    if (!el || typeof el.showPopover !== "function" || typeof el.hidePopover !== "function") return;
-    try {
-      const open = el.hasAttribute("popover") && el.matches(":popover-open");
-      if (toasts.length && document.querySelector("dialog[open]")) {
-        if (open) el.hidePopover();
-        if (!el.hasAttribute("popover")) el.setAttribute("popover", "manual");
-        el.showPopover();
-      } else if (el.hasAttribute("popover")) {
-        if (open) el.hidePopover();
-        el.removeAttribute("popover");
-      }
-    } catch {
-      // A browser without the Popover API keeps them in the page.
-    }
-  }, [toasts]);
+    const find = () => {
+      const open = [
+        ...document.querySelectorAll<HTMLDialogElement>("dialog[open]"),
+      ];
+      setHost(open.at(-1) ?? null);
+    };
+    find();
+    const watch = new MutationObserver(find);
+    watch.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["open"],
+      childList: true,
+    });
+    return () => watch.disconnect();
+  }, []);
   return (
     <Context.Provider value={value}>
       {children}
-      <div
-        ref={layer}
-        role="status"
-        aria-live="polite"
-        className="pointer-events-none fixed inset-auto bottom-[18px] left-1/2 z-[60] m-0 flex w-[min(520px,calc(100%-32px))] -translate-x-1/2 flex-col items-center gap-2 overflow-visible border-0 bg-transparent p-0"
-      >
-        {toasts.map((t) => (
+      {host ? (
+        createPortal(
           <div
-            key={t.id}
-            className={`backdrop pop-frame pointer-events-auto flex min-h-11 animate-[rise_.16s_var(--ease-out)] items-center gap-3 rounded-full py-1.5 pl-[18px] text-[13px] ${t.action ? "pr-1.5" : "pr-[18px]"}`}
+            role="status"
+            aria-live="polite"
+            className="flex flex-col items-center gap-2 px-6 pb-4"
           >
-            {t.sticky && <span aria-hidden className="size-3 shrink-0 animate-spin rounded-full border-2 border-text-3 border-t-ember" />}
-            <span>{t.message}</span>
-            {t.action && (
-              <button
-                type="button"
-                onClick={() => {
-                  t.action?.onClick();
-                  dismiss(t.id);
-                }}
-                className="h-[30px] rounded-full px-3 font-medium text-text hover:bg-hover"
+            {toasts.map((t) => (
+              <div
+                key={t.id}
+                className={`backdrop pop-frame pointer-events-auto flex min-h-11 animate-[rise_.16s_var(--ease-out)] items-center gap-3 rounded-full py-1.5 pl-[18px] text-[13px] ${t.action ? "pr-1.5" : "pr-[18px]"}`}
               >
-                {t.action.label}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
+                {t.sticky && (
+                  <span
+                    aria-hidden
+                    className="size-3 shrink-0 animate-spin rounded-full border-2 border-text-3 border-t-ember"
+                  />
+                )}
+                <span>{t.message}</span>
+                {t.action && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      t.action?.onClick();
+                      dismiss(t.id);
+                    }}
+                    className="h-[30px] rounded-full px-3 font-medium text-text hover:bg-hover"
+                  >
+                    {t.action.label}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>,
+          host,
+        )
+      ) : (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed bottom-[18px] left-1/2 z-[60] flex w-[min(520px,calc(100%-32px))] -translate-x-1/2 flex-col items-center gap-2"
+        >
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`backdrop pop-frame pointer-events-auto flex min-h-11 animate-[rise_.16s_var(--ease-out)] items-center gap-3 rounded-full py-1.5 pl-[18px] text-[13px] ${t.action ? "pr-1.5" : "pr-[18px]"}`}
+            >
+              {t.sticky && (
+                <span
+                  aria-hidden
+                  className="size-3 shrink-0 animate-spin rounded-full border-2 border-text-3 border-t-ember"
+                />
+              )}
+              <span>{t.message}</span>
+              {t.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    t.action?.onClick();
+                    dismiss(t.id);
+                  }}
+                  className="h-[30px] rounded-full px-3 font-medium text-text hover:bg-hover"
+                >
+                  {t.action.label}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </Context.Provider>
   );
 }

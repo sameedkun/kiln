@@ -133,6 +133,12 @@ function Sheet() {
         }
       >
         Kiln stops serving <b className="text-text">https://shop.test</b>. The folder D:\Code\shop and its database stay as they are, and History can undo this.
+        {/* A job's progress while a dialog is open: above its backdrop (P4D-03). */}
+        <div className="mt-3">
+          <Button size="sm" onClick={() => toast({ message: "Unpacking MySQL 9.7.4…", sticky: true })}>
+            Show a working notice
+          </Button>
+        </div>
       </Dialog>
     </div>
   );
