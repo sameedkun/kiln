@@ -285,3 +285,26 @@ describe("fixes from the user's run (P4C-01)", async () => {
     expect(progressText({ type: "progress", label: "Downloading mysql.zip", done: 34 * 1_048_576, total: 120 * 1_048_576 })).toBe("Downloading mysql.zip · 34 of 120 MB");
   });
 });
+
+describe("a site's processes (ADR 0069)", async () => {
+  const { siteInstances, nextWorkerName } = await import("./SitePage");
+  const inst = (name: string, kind: string, project = "D:/shop") => ({ name, kind, version: "1", ports: {}, main_port: null, used_by: [], web: null, databases: false, enabled: true, running: true, project, env: [] as [string, string][] });
+
+  it("names a site's processes in order, numbering extra queue workers", () => {
+    const all = [inst("queue-shop-10", "queue"), inst("vite-shop", "vite"), inst("queue-shop-2", "queue"), inst("queue-shop", "queue"), inst("queue-blog", "queue", "D:/blog")];
+    expect(siteInstances(all, "D:/shop").map((p) => [p.instance.name, p.label])).toEqual([
+      ["queue-shop", "Queue worker"],
+      ["queue-shop-2", "Queue worker 2"],
+      ["queue-shop-10", "Queue worker 3"],
+      ["vite-shop", "Vite"],
+    ]);
+  });
+
+  it("picks the next free worker name, up to eight", () => {
+    expect(nextWorkerName([])).toBeNull();
+    expect(nextWorkerName([inst("queue-shop", "queue")])).toBe("queue-shop-2");
+    expect(nextWorkerName([inst("queue-shop", "queue"), inst("queue-shop-3", "queue")])).toBe("queue-shop-2");
+    const eight = [inst("queue-shop", "queue"), ...[2, 3, 4, 5, 6, 7, 8].map((n) => inst(`queue-shop-${n}`, "queue"))];
+    expect(nextWorkerName(eight)).toBeNull();
+  });
+});

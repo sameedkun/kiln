@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
 import { Button } from "../components/Button";
+import { Chips } from "../components/Chips";
 import { Notice } from "../components/Notice";
 import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
@@ -9,7 +10,7 @@ import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { call, openFolder, type EnvShow, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { call, openFolder, type EnvShow, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
@@ -46,6 +47,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
   const caReady = ca.data ? ca.data.intermediate_days_left !== null : true;
   const { run, ask, confirm, open } = useChanges();
   const [tab, setTab] = useState("overview");
+  // The log the Logs tab shows: a file of the app's or one of its processes' (ADR 0069).
+  const [logSource, setLogSource] = useState<string | null>(null);
   // Switching PHP starts the other version's workers and reloads the web server: seconds.
   const [switching, setSwitching] = useState(false);
   const site = sites.data?.sites.find((s) => s.host === host);
@@ -105,7 +108,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       ) : tab === "requests" ? (
         <SiteRequestsTab host={site.host} />
       ) : tab === "logs" ? (
-        <SiteLog host={site.host} />
+        <SiteLog site={site} first={logSource} onChoose={setLogSource} />
       ) : tab === "dumps" ? (
         <SiteDumps site={site} />
       ) : (
@@ -183,7 +186,13 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
 
       <SiteServices site={site} go={go} />
 
-      <SiteProcesses site={site} go={go} />
+      <SiteProcesses
+        site={site}
+        onLog={(source) => {
+          setLogSource(source);
+          setTab("logs");
+        }}
+      />
 
       {site.source === "link" && (
         <Button
@@ -239,7 +248,33 @@ export const processes: { kind: string; label: string; what: string; laravel: bo
 ];
 
 /** The queue worker, scheduler and Vite for this site's project: started here, kept up by Kiln. */
-function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void }) {
+/** The most queue workers a site runs (ADR 0069 §2). */
+const MOST_WORKERS = 8;
+
+/**
+ * A site's process instances in the order of `processes`, each with the name the page shows:
+ * "Queue worker", "Queue worker 2", … (ADR 0069 §1).
+ */
+export function siteInstances(instances: Instance[], project: string): { instance: Instance; label: string }[] {
+  return processes.flatMap((p) =>
+    instances
+      .filter((i) => i.kind === p.kind && i.project === project)
+      .sort((a, b) => a.name.length - b.name.length || a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .map((instance, n) => ({ instance, label: n === 0 ? p.label : `${p.label} ${n + 1}` })),
+  );
+}
+
+/** The name for one more queue worker: the first one's name and the next free number. */
+export function nextWorkerName(workers: Instance[]): string | null {
+  const base = workers[0]?.name;
+  if (!base) return null;
+  for (let n = 2; n <= MOST_WORKERS; n++) {
+    if (!workers.some((w) => w.name === `${base}-${n}`)) return `${base}-${n}`;
+  }
+  return null;
+}
+
+function SiteProcesses({ site, onLog }: { site: Site; onLog: (source: string) => void }) {
   const services = useRead<ServicesList>("services.list");
   const { run, ask, confirm } = useChanges();
   if (site.source === "alias") return null;
@@ -247,18 +282,30 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
   return (
     <Section title="Dev processes" meta="kept running by Kiln">
       {shown.map((p) => {
-        const instance = services.data?.instances.find((i) => i.kind === p.kind && i.project === site.project);
+        const all = siteInstances(services.data?.instances ?? [], site.project)
+          .filter((x) => x.instance.kind === p.kind)
+          .map((x) => x.instance);
+        const instance = all[0];
         const port = instance && Object.values(instance.ports)[0];
+        const lower = p.label.toLowerCase();
         const toggle = instance
-          ? () => run(["service", instance.enabled ? "stop" : "start", instance.name], `${instance.enabled ? "Stopped" : "Started"} the ${p.label.toLowerCase()} for ${site.host}.`)
+          ? async () => {
+              // Start and Stop act on every worker (ADR 0069 §3).
+              const verb = instance.enabled ? "stop" : "start";
+              for (const i of all) {
+                if (i.enabled === instance.enabled) await run(["service", verb, i.name], `${instance.enabled ? "Stopped" : "Started"} ${i.name}.`);
+              }
+            }
           : async () => {
-              if (!(await run(["service", "add", p.kind, "--project", site.project], `The ${p.label.toLowerCase()} runs for ${site.host} now.`))) return;
+              if (!(await run(["service", "add", p.kind, "--project", site.project], `The ${lower} runs for ${site.host} now.`))) return;
               // A process with .env keys (the dump server) is wired through its preview.
               if (p.kind !== "dumps") return;
               const now = await call<ServicesList>("services.list").catch(() => null);
               const added = now?.instances.find((i) => i.kind === p.kind && i.project === site.project);
               if (added) confirm(`Send ${site.host}'s dumps to Kiln?`, ["env", "use", added.name], `${site.host}'s dump() output shows in its Dumps tab now.`);
             };
+        const next = p.kind === "queue" ? nextWorkerName(all) : null;
+        const last = all.length > 1 ? all[all.length - 1] : null;
         return (
           <Row
             key={p.kind}
@@ -266,16 +313,19 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
             actions={
               instance && (
                 <>
-                  <Button variant="quiet" size="sm" onClick={() => go(`logs:service:${instance.name}`)}>
+                  <Button variant="quiet" size="sm" onClick={() => onLog(`service:${instance.name}`)}>
                     Log
                   </Button>
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    onClick={() => ask(`Remove ${instance.name}?`, `Kiln stops running the ${p.label.toLowerCase()} for ${site.host}. The project stays as it is.`, "Remove", ["service", "remove", instance.name], `Removed ${instance.name}.`)}
-                  >
-                    Remove
-                  </Button>
+                  {/* With several workers, "−" takes them away one at a time first. */}
+                  {all.length === 1 && (
+                    <Button
+                      variant="quiet"
+                      size="sm"
+                      onClick={() => ask(`Remove ${instance.name}?`, `Kiln stops running the ${lower} for ${site.host}. The project stays as it is.`, "Remove", ["service", "remove", instance.name], `Removed ${instance.name}.`)}
+                    >
+                      Remove
+                    </Button>
+                  )}
                 </>
               )
             }
@@ -284,6 +334,31 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
             <span className="text-[12.5px] text-text-2">
               {p.what}
               {port ? <span className="figures"> On 127.0.0.1:{port}.</span> : null}
+              {p.kind === "queue" && instance && (
+                <span className="mt-1.5 flex items-center gap-2">
+                  <span className="figures text-text">
+                    {all.length} worker{all.length === 1 ? "" : "s"}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    aria-label="One worker fewer"
+                    disabled={!last}
+                    onClick={() => last && run(["service", "remove", last.name], `${site.host} runs ${all.length - 1} queue worker${all.length - 1 === 1 ? "" : "s"} now.`)}
+                  >
+                    −
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    aria-label="One more worker"
+                    disabled={!next}
+                    onClick={() => next && run(["service", "add", "queue", "--project", site.project, "--name", next], `${site.host} runs ${all.length + 1} queue workers now.`)}
+                  >
+                    +
+                  </Button>
+                </span>
+              )}
             </span>
             <span className="flex items-center justify-end gap-3">
               {instance ? (
@@ -292,7 +367,7 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
                 <span className="text-[12.5px] text-text-3">Off</span>
               )}
               {services.data && (
-                <Button size="sm" aria-label={`${instance?.enabled ? "Stop" : "Start"} the ${p.label.toLowerCase()}`} onClick={toggle}>
+                <Button size="sm" aria-label={`${instance?.enabled ? "Stop" : "Start"} the ${lower}`} onClick={toggle}>
                   {instance?.enabled ? "Stop" : "Start"}
                 </Button>
               )}
@@ -366,35 +441,50 @@ function SiteDumps({ site }: { site: Site }) {
   return <LogPanel source={`service:${dumps.name}`} label={`${site.host}'s dumps`} />;
 }
 
-/** The site's own log: the newest in its storage/logs (ADR 0059 §4). */
-function SiteLog({ host }: { host: string }) {
+/**
+ * The site's logs (ADR 0069 §1): its app's files in storage/logs (newest laravel*.log first,
+ * ADR 0059 §4), then each of its processes' logs.
+ */
+function SiteLog({ site, first, onChoose }: { site: Site; first: string | null; onChoose: (source: string) => void }) {
   const sources = useRead<LogSources>("logs.sources");
-  const main = `site:${host}`;
-  // The site's other files in storage/logs: "site:<host>/<file>", newest first.
-  const files = (sources.data?.sources ?? []).filter((s) => s.id === main || s.id.startsWith(`${main}/`));
-  const [chosen, setChosen] = useState(main);
-  const log = files.find((s) => s.id === chosen) ?? files[0];
+  const services = useRead<ServicesList>("services.list");
+  const main = `site:${site.host}`;
+  const all = sources.data?.sources ?? [];
+  // The site's own files: "site:<host>" and "site:<host>/<file>".
+  const files = all.filter((s) => s.id === main || s.id.startsWith(`${main}/`));
+  const procs = siteInstances(services.data?.instances ?? [], site.project).flatMap((p) => {
+    const source = all.find((s) => s.id === `service:${p.instance.name}` || s.id.startsWith(`service:${p.instance.name}/`));
+    return source ? [{ label: p.label, source }] : [];
+  });
+  const chosen = first ?? files[0]?.id ?? procs[0]?.source.id ?? null;
+  const isApp = chosen === null || chosen === main || chosen.startsWith(`${main}/`);
+  const log = isApp ? (files.find((s) => s.id === chosen) ?? files[0]) : all.find((s) => s.id === chosen);
   if (!sources.data) return null;
-  if (!log) {
-    return (
-      <p className="m-0 px-1 text-[13px] text-text-2">
-        {host} has no log yet: Kiln shows the newest file in its storage/logs once the site writes one. Kiln's own logs (the web server, PHP's errors, services) are on the Logs page.
-      </p>
-    );
-  }
+  const choices = [...(files.length ? [{ id: "app", label: "App" }] : []), ...procs.map((p) => ({ id: p.source.id, label: p.label }))];
   return (
     <div>
-      {files.length > 1 && (
+      {choices.length > 1 && (
+        <div className="mb-3">
+          <Chips label="Which log" value={isApp ? "app" : (chosen ?? "app")} onChange={(id) => onChoose(id === "app" ? (files[0]?.id ?? main) : id)} options={choices} />
+        </div>
+      )}
+      {isApp && files.length > 1 && (
         <div className="mb-3 max-w-[320px]">
           <Select
             label="File in storage/logs"
-            value={log.id}
-            onChange={(e) => setChosen(e.target.value)}
+            value={log?.id ?? main}
+            onChange={(e) => onChoose(e.target.value)}
             options={files.map((f) => ({ value: f.id, label: f.id === main ? `${f.path.split(/[\\/]/).pop()} (main)` : f.label }))}
           />
         </div>
       )}
-      <LogPanel key={log.id} source={log.id} label={log.label} />
+      {log ? (
+        <LogPanel key={log.id} source={log.id} label={log.label} />
+      ) : (
+        <p className="m-0 px-1 text-[13px] text-text-2">
+          {site.host} has no log yet: Kiln shows the newest file in its storage/logs once the site writes one, and its processes' logs once they run. Kiln's own logs (the web server, PHP's errors, services) are on the Logs page.
+        </p>
+      )}
     </div>
   );
 }

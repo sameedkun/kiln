@@ -639,6 +639,16 @@ echo 'kiln-dispatched on ' . config('queue.default') . "\n";
     $inst = ((& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.name -eq 'queue-shop' }).project
     if ($site -ne $inst) { throw "site folder $site, instance folder $inst" }
 }
+Check 'a second queue worker for the same site (ADR 0069): its own process, removed on its own' {
+    Expect 'running as queue-shop-2' (Kiln service add queue --project $shop --name queue-shop-2)
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((QueueProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if ((QueueProcesses).Count -lt 2) { throw "$((QueueProcesses).Count) queue:listen process(es)" }
+    Kiln service remove queue-shop-2 | Out-Null
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((QueueProcesses).Count -gt 1 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if ((QueueProcesses).Count -ne 1) { throw "$((QueueProcesses).Count) queue:listen process(es) after removing the second" }
+}
 Check 'service stop queue-shop: no queue process is left (its own process tree is ended)' {
     Kiln service stop queue-shop | Out-Null
     $left = QueueProcesses
