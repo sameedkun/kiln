@@ -298,23 +298,6 @@ source (MIT, cloned by the user) may be read for ideas; no code is copied.
 | P4D-08 | Using a service from the site's own page | |
 | P4D-09 | Further features from Lerd's source | after P4D-01 to 08 |
 
-## Phase 4d: from the user's second run (Windows)
-
-The user's run of Phase 4c (2026-11-15) found these; they come before more features. Lerd's
-source (MIT, cloned by the user) may be read for ideas; no code is copied.
-
-| ID | Task | Notes |
-|---|---|---|
-| P4D-01 | pgAdmin on a PC without PostgreSQL on PATH: its libpq and tools kept from `runtime/` | CI's runner had a system PostgreSQL, which hid it |
-| P4D-02 | Names without the hosts file, built (ADR 0078): kilnd answers `.test`, one NRPT rule with consent | approved by the user 2026-11-15 |
-| P4D-03 | The app's forms and notices: labels above every select, the new-site dialog in order with starter kits only for Laravel, progress shown above a dialog's backdrop, toasts aligned, snapshots in a tab of their own | |
-| P4D-04 | Framework icons instead of letters | from Simple Icons (CC0) |
-| P4D-05 | RustFS's console as `rustfs.test` | |
-| P4D-06 | Git's "dubious ownership" explained, with a way to trust the folder | |
-| P4D-07 | WordPress from wordpress.org, set up to run (its database made, `wp-config.php` written); no Laravel advice for sites that aren't Laravel | |
-| P4D-08 | Using a service from the site's own page | |
-| P4D-09 | Further features from Lerd's source | after P4D-01 to 08 |
-
 ## Phase 3–5 scope (summary)
 
 - **Phase 3:** see above.
