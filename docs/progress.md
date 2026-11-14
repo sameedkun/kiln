@@ -1511,7 +1511,7 @@ Plan: [plan.md, Phase 4d](plan.md#phase-4d-from-the-users-second-run-windows).
 | P4D-06 | Git's dubious ownership | built | `kiln git trust` |
 | P4D-07 | WordPress from wordpress.org, set up | built | ADR 0070 amended |
 | P4D-08 | Using a service from the site's page | built | |
-| P4D-09 | Features from Lerd's source | planned | |
+| P4D-09 | Features from Lerd's source | done | read 2026-11-15; Phase 4e planned from it |
 
 ## Phase 4c: a richer app, Windows (in progress)
 

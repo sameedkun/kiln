@@ -298,6 +298,35 @@ source (MIT, cloned by the user) may be read for ideas; no code is copied.
 | P4D-08 | Using a service from the site's own page | |
 | P4D-09 | Further features from Lerd's source | after P4D-01 to 08 |
 
+## Phase 4e: what Lerd has that Kiln doesn't (Windows)
+
+From a read of Lerd's source (MIT, 2026-11-15): ideas only, no code copied. Ranked by what a
+Laravel or WordPress developer on Windows gains; each gets its ADR first. Lerd's container,
+Linux and macOS features, and anything that listens beyond loopback, are left out.
+
+| ID | Task | Size | Notes |
+|---|---|---|---|
+| P4E-01 | A cloned project to a running site in one step (`kiln init`): PHP, HTTPS and services asked once, then composer and JS installs, `.env` and its key, migrations, storage link, asset build; resumable | M | builds on `services up`, `env use`, `new --db` |
+| P4E-02 | Site doctor: `.env` against `.env.example` (missing, extra, duplicate keys), the app key, vendor and node_modules, the database exists, the PHP range, wiring, the site's own answer; each fix previewed | M | not `--fix` (ADR 0017): a fix is a journaled step |
+| P4E-03 | Service settings for non-Laravel config files: `env use` writes `wp-config.php` (and later Drupal's `settings.php`) in place, with undo | S | |
+| P4E-04 | Extra names per site from the CLI and app (`kiln domain add/remove`); `secure` and `unsecure` keep `APP_URL` in step | S | |
+| P4E-05 | Run commands from the site page: artisan, composer scripts, tests, `vendor/bin` tools (Pint, PHPStan, Pest), streamed | S–M | |
+| P4E-06 | Open in your editor: detected (VS Code, PhpStorm, Cursor, Zed, Sublime) or chosen; `kiln code`; `file:line` in logs opens there | S | |
+| P4E-07 | Snapshots taken for you before a branch switch, migrations and a drop, and on a schedule, with retention and "keep" | S–M | Phase 5's "snapshots before migrations" |
+| P4E-08 | Windows notifications: mail caught by Mailpit, a dev process that stopped, a long job done; the last 50 kept in the app | M | |
+| P4E-09 | Xdebug's other modes: coverage (for `pest --coverage`), profile, trace | S | |
+| P4E-10 | Editing php.ini, the site's `.env` and a service's config in the app, validated, with backups to restore | M | |
+| P4E-11 | Service updates: a newer patch shown, one or all updated, the previous kept to roll back | M | |
+| P4E-12 | Database servers Kiln doesn't run (Herd's, XAMPP's, a Windows service) used as services: wiring, dumps, snapshots | M | read-only toward them except what the user asks |
+
+Later, each needing a check first: a debug window with SQL queries and N+1s (an
+`auto_prepend_file`, not Lerd's extension); a profiler (SPX on Windows unverified); browser
+console logs; Vite on the site's own name; worker options and custom workers; Git diff, commit
+and pull in the app, and a database per worktree; more tunnel providers; real site groups;
+deeper MCP with assistant registration; route timing; Ctrl+K palette; self-update; a
+bug-report bundle; Node patch updates and Bun. Not for Kiln: Horizon (needs pcntl), Swoole,
+LAN-exposed services, `doctor --fix`.
+
 ## Phase 3–5 scope (summary)
 
 - **Phase 3:** see above.
