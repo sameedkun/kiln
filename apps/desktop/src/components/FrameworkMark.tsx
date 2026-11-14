@@ -1,35 +1,46 @@
-// A site's framework at a glance (P4C-04): Kiln's own monogram on a tint of a hue per
-// framework. Frameworks' logos are their owners' marks, so none is drawn here. The letters
-// stay in the text colour, so contrast holds in light, dark and high-contrast modes.
+import { siCraftcms, siDrupal, siHtml5, siLaravel, siPhp, siRoots, siStatamic, siSymfony, siWordpress, type SimpleIcon } from "simple-icons";
 
-const marks: Record<string, { letters: string; hue: string }> = {
-  laravel: { letters: "Lv", hue: "#e5533d" },
-  statamic: { letters: "St", hue: "#ff269e" },
-  symfony: { letters: "Sf", hue: "#7d8b99" },
-  drupal: { letters: "Dr", hue: "#2b8ad6" },
-  craft: { letters: "Cr", hue: "#e5422b" },
-  "wordpress-bedrock": { letters: "Bd", hue: "#5a8f3c" },
-  wordpress: { letters: "Wp", hue: "#3d7fb8" },
-  php: { letters: "Php", hue: "#7a86b8" },
-  static: { letters: "Ht", hue: "#c9853a" },
+// A site's framework at a glance (P4D-04): the framework's own icon, from Simple Icons
+// (CC0), in its brand colour on a quiet tile. A brand colour too dark or too light to see on
+// both backgrounds (Symfony's black) is drawn in the text colour instead.
+
+const icons: Record<string, SimpleIcon> = {
+  laravel: siLaravel,
+  statamic: siStatamic,
+  symfony: siSymfony,
+  drupal: siDrupal,
+  craft: siCraftcms,
+  "wordpress-bedrock": siRoots,
+  wordpress: siWordpress,
+  php: siPhp,
+  static: siHtml5,
 };
 
-/** The mark for a framework id (the CLI's `framework`, or a driver name). */
-export function markOf(framework: string): { letters: string; hue: string } {
-  return marks[framework] ?? marks.php;
+/** The icon for a framework id (the CLI's `framework`, or a driver name). */
+export function iconOf(framework: string): SimpleIcon {
+  return icons[framework] ?? siPhp;
+}
+
+/** Whether a brand colour reads on both light and dark tiles: its luminance in the middle. */
+export function readable(hex: string): boolean {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return l > 0.12 && l < 0.85;
 }
 
 export function FrameworkMark({ framework, label }: { framework: string; label: string }) {
-  const { letters, hue } = markOf(framework);
+  const icon = iconOf(framework);
+  const colour = readable(icon.hex) ? `#${icon.hex}` : "currentColor";
   return (
     <span
       role="img"
       aria-label={label}
       title={label}
-      className="inline-grid h-[22px] min-w-[22px] shrink-0 place-items-center rounded-md px-1 text-[10.5px] font-semibold tracking-[-.01em] text-text forced-colors:border forced-colors:border-[CanvasText]"
-      style={{ background: `color-mix(in oklch, ${hue} 26%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklch, ${hue} 45%, transparent)` }}
+      className="inline-grid size-[22px] shrink-0 place-items-center rounded-md bg-hover text-text forced-colors:border forced-colors:border-[CanvasText]"
     >
-      {letters}
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-[14px] forced-colors:fill-[CanvasText]" fill={colour}>
+        <path d={icon.path} />
+      </svg>
     </span>
   );
 }
