@@ -24,6 +24,7 @@ mod footprint;
 mod git;
 mod groups;
 mod history;
+mod init;
 mod logs;
 mod mcp;
 mod new;
@@ -270,6 +271,32 @@ enum Command {
         /// such as mysql-8.4. Its .env is pointed there and the migrations run.
         #[arg(long)]
         db: Option<String>,
+    },
+    /// Set up a project cloned from Git and serve it: Composer and npm installs, .env and its
+    /// key, a database, migrations, the storage link, the front end built. Each step is
+    /// skipped when it's done, so running it again picks up where it stopped.
+    Init {
+        /// The project folder (default: the current one).
+        path: Option<PathBuf>,
+        /// Use a Kiln database: mysql, mariadb or pgsql (its first instance), or an instance
+        /// such as mysql-8.4. Its .env is pointed there and the migrations run.
+        #[arg(long)]
+        db: Option<String>,
+        /// PHP version to use, e.g. 8.3; written to a new kiln.toml.
+        #[arg(long)]
+        php: Option<String>,
+        /// Serve it over HTTPS.
+        #[arg(long)]
+        secure: bool,
+        /// Seed the database after migrating.
+        #[arg(long)]
+        seed: bool,
+        /// Leave the front end (npm) out.
+        #[arg(long)]
+        no_build: bool,
+        /// Do not ask before running the steps.
+        #[arg(long, short)]
+        yes: bool,
     },
     /// Bring a project's settings over from another tool.
     Import {
@@ -1273,7 +1300,8 @@ fn run(command: Command) -> Result<(), String> {
         command @ (Command::Group { .. }
         | Command::Git { .. }
         | Command::Share { .. }
-        | Command::Tinker { .. }) => run_site_tools(command),
+        | Command::Tinker { .. }
+        | Command::Init { .. }) => run_site_tools(command),
         Command::Updates { action } => run_updates(action),
         Command::Cache {
             action: CacheAction::Clear,
@@ -1380,6 +1408,23 @@ fn run_site_tools(command: Command) -> Result<(), String> {
         Command::Git { action } => run_git(action),
         Command::Share { site, stop, lan } => share::run(&site, stop, lan),
         Command::Tinker { site, code } => tinker::run(&site, &code),
+        Command::Init {
+            path,
+            db,
+            php,
+            secure,
+            seed,
+            no_build,
+            yes,
+        } => init::init(&init::Options {
+            dir: path,
+            db,
+            php,
+            secure,
+            seed,
+            no_build,
+            yes,
+        }),
         _ => unreachable!("run passes only a site's tools here"),
     }
 }

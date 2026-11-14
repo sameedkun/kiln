@@ -57,6 +57,8 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["git", "worktree", "remove"], false),
     (&["unproxy"], false),
     (&["new"], false),
+    // Runs the project's own scripts (Composer, npm, artisan): the steps are shown first.
+    (&["init"], true),
     (&["import", "herd"], false),
     (&["php", "install"], false),
     (&["php", "remove"], false),

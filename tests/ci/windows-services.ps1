@@ -496,6 +496,27 @@ function ShopPage {
     if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
 }
 Check 'the app serves pages on MySQL 8.4' { ShopPage }
+Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link set up on MySQL and served; a second run has nothing to do' {
+    # As a clone from Git has it: no vendor, node_modules, .env or storage link.
+    $clone = Join-Path $projects 'cloned'
+    robocopy $shop $clone /E /XJ /NFL /NDL /NJH /NJS /XD vendor node_modules /XF .env | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
+    $global:LASTEXITCODE = 0
+    try {
+        $out = Kiln init $clone --db mysql-8.4 --no-build --yes
+        foreach ($step in 'composer install --no-interaction', 'Wrote .env from .env.example', 'php artisan key:generate', 'Created the database cloned', 'php artisan migrate --force', 'php artisan storage:link', 'Set up: ') { Expect $step $out }
+        if ($out -match 'npm') { throw "--no-build ran npm:`n$out" }
+        $count = Client 'mysql-8.4' 'cloned' 'SELECT COUNT(*) FROM migrations;'
+        if ($count -notmatch '(?m)^\s*[1-9]') { throw "no migrations on mysql-8.4:`n$count" }
+        $page = Page (SiteBase 'cloned')
+        if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
+        Expect 'nothing to do' (Kiln init $clone --no-build --yes)
+    } finally {
+        & $Kiln unlink cloned 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $clone
+    }
+}
 Check 'kiln group shop "Acme Corp" (ADR 0074): in the sites list with its group, then out of it' {
     Expect 'shop.test is in the group Acme Corp' (Kiln group shop 'Acme Corp')
     $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })

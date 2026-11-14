@@ -1,15 +1,16 @@
-import { Add16Regular, Delete16Regular, Folder16Regular, Globe20Regular, Link16Regular, LockClosed12Regular, MoreHorizontal16Regular, Open16Regular } from "@fluentui/react-icons";
+import { Add16Regular, ArrowDownload16Regular, Delete16Regular, Folder16Regular, Globe20Regular, Link16Regular, LockClosed12Regular, MoreHorizontal16Regular, Open16Regular } from "@fluentui/react-icons";
 import { useState, type ReactNode } from "react";
 import { Button } from "../components/Button";
 import { FrameworkMark } from "../components/FrameworkMark";
 import { Dialog } from "../components/Dialog";
 import { Menu } from "../components/Menu";
 import { Page } from "../components/Page";
+import { Select } from "../components/Select";
 import { Detail, Row, RowName, Section } from "../components/Rows";
 import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
 import { TextField } from "../components/TextField";
-import { openFolder, pickFolder, proxyTarget, siteName, type Proxy, type Site, type SitesList } from "./api";
+import { openFolder, pickFolder, proxyTarget, siteName, type Proxy, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 import { NewSiteDialog } from "./NewSiteDialog";
@@ -49,7 +50,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
   const { run, ask, open } = useChanges();
   const [filter, setFilter] = useState("");
   const [grouping, setGrouping] = useState<Site | null>(null);
-  const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "proxy" } | { kind: "new" }>(null);
+  const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "init"; folder: string } | { kind: "proxy" } | { kind: "new" }>(null);
 
   const match = (text: string) => text.toLowerCase().includes(filter.trim().toLowerCase());
   const matching = (sites.data?.sites ?? []).filter((s) => match(s.host) || match(framework(s)) || (s.group ? match(s.group) : false));
@@ -62,6 +63,10 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
   const link = async () => {
     const folder = await pickFolder("Choose a project folder to serve");
     if (folder) setAdding({ kind: "link", folder });
+  };
+  const setUp = async () => {
+    const folder = await pickFolder("Choose the project you cloned");
+    if (folder) setAdding({ kind: "init", folder });
   };
   const park = async () => {
     const folder = await pickFolder("Choose a folder of projects: each folder in it becomes a site");
@@ -174,6 +179,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
           )}
           items={[
             { label: "New site from a template…", icon: <Add16Regular />, onSelect: () => setAdding({ kind: "new" }) },
+            { label: "Set up a cloned project…", icon: <ArrowDownload16Regular />, onSelect: setUp },
             { label: "Link a folder…", icon: <Link16Regular />, groupStart: true, onSelect: link },
             { label: "Park a folder of projects…", icon: <Folder16Regular />, onSelect: park },
             { label: "Proxy to a port…", icon: <Globe20Regular className="size-4" />, groupStart: true, onSelect: () => setAdding({ kind: "proxy" }) },
@@ -229,6 +235,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
       )}
 
       {adding?.kind === "link" && <LinkDialog folder={adding.folder} onClose={() => setAdding(null)} />}
+      {adding?.kind === "init" && <SetUpDialog folder={adding.folder} onClose={() => setAdding(null)} />}
       {adding?.kind === "proxy" && <ProxyDialog onClose={() => setAdding(null)} />}
       {adding?.kind === "new" && <NewSiteDialog folders={parked} onClose={() => setAdding(null)} />}
       {grouping && <GroupDialog site={grouping} groups={[...new Set((sites.data?.sites ?? []).flatMap((s) => (s.group ? [s.group] : [])))]} onClose={() => setGrouping(null)} />}
@@ -273,6 +280,68 @@ function LinkDialog({ folder, onClose }: { folder: string; onClose: () => void }
       <p className="mt-0 font-mono text-xs break-all">{folder}</p>
       <TextField label="Site name" value={name} onChange={(e) => setName(e.target.value)} hint={valid ? `Opens as ${valid}.test` : undefined} error={name && !valid ? "Letters, digits and hyphens only." : undefined} />
       <div className="mt-4">
+        <Switch checked={secure} onChange={setSecure} label="HTTPS" description="With Kiln's own certificate" />
+      </div>
+    </Dialog>
+  );
+}
+
+/** `kiln init`'s arguments for the dialog's choices (ADR 0080). */
+export function initArgs(o: { folder: string; db: string; secure: boolean; seed: boolean; build: boolean }): string[] {
+  return [
+    "init",
+    o.folder,
+    ...(o.db ? ["--db", o.db] : []),
+    ...(o.secure ? ["--secure"] : []),
+    ...(o.seed && o.db ? ["--seed"] : []),
+    ...(o.build ? [] : ["--no-build"]),
+  ];
+}
+
+/** A cloned project set up in one go (ADR 0080): the choices here, then the steps to confirm. */
+function SetUpDialog({ folder, onClose }: { folder: string; onClose: () => void }) {
+  const { confirm } = useChanges();
+  const services = useRead<ServicesList>("services.list");
+  const [db, setDb] = useState("");
+  const [secure, setSecure] = useState(false);
+  const [seed, setSeed] = useState(false);
+  const [build, setBuild] = useState(true);
+  const databases = (services.data?.instances ?? []).filter((i) => ["mysql", "mariadb", "postgres"].includes(i.kind) && i.enabled);
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Set up a cloned project"
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="ink"
+            onClick={() => {
+              onClose();
+              confirm(`Set up ${folderName(folder)}?`, initArgs({ folder, db, secure, seed, build }), `${folderName(folder)} is set up.`);
+            }}
+          >
+            Show the steps…
+          </Button>
+        </>
+      }
+    >
+      <p className="mt-0 font-mono text-xs break-all">{folder}</p>
+      <p className="text-[13px] text-text-2">
+        Kiln serves it, installs its packages, makes its .env and key, and builds its front end, skipping what's already done. You'll see each step before anything runs: Composer, npm and artisan run the
+        project's own scripts.
+      </p>
+      <div className="grid gap-4">
+        <Select
+          label="Database"
+          className="w-full"
+          value={db}
+          onChange={(e) => setDb(e.target.value)}
+          options={[{ value: "", label: "As its .env says (migrations left to you)" }, ...databases.map((i) => ({ value: i.name, label: `${i.name} (${i.kind}), then migrate` }))]}
+        />
+        <Switch checked={seed} onChange={setSeed} label="Seed it" description={db ? "After the migrations" : "With a database of Kiln's"} disabled={!db} />
+        <Switch checked={build} onChange={setBuild} label="Build the front end" description="npm with Kiln's Node" />
         <Switch checked={secure} onChange={setSecure} label="HTTPS" description="With Kiln's own certificate" />
       </div>
     </Dialog>

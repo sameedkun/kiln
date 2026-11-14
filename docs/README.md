@@ -95,6 +95,7 @@ working name). Start here.
 | [0077](adr/0077-search-engines.md) | OpenSearch 3.9 and Elasticsearch 9.5 as service kinds: their bundled Java under Kiln names, `-E` settings on loopback, single node, security off, 512 MB heap, a config folder per instance; their own CI workflow | accepted (Phase 4c) |
 | [0078](adr/0078-names-without-the-hosts-file.md) | Names without the hosts file: kilnd answers `.test` on loopback and one NRPT rule, added once with consent, sends `.test` there (`kiln dns on`, Settings → Site names) | accepted (Phase 4d) |
 | [0079](adr/0079-snapshots-and-tinker.md) | Database snapshots (`kiln db snapshot|snapshots|rollback`, the state before a rollback kept too) and `kiln tinker <site> <code>`; a camera button and Snapshots list per service, a Tinker tab per Laravel site | accepted (Phase 4c) |
+| [0080](adr/0080-setting-up-a-cloned-project.md) | `kiln init`: a cloned project served and set up in one step (Composer, `.env` and its key, a database, migrations only against one it wired, the storage link, the front end); each step skipped when done; the steps shown before anything runs | accepted (Phase 4e) |
 
 ## Conventions
 

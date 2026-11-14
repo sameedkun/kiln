@@ -137,11 +137,17 @@ pub fn up(project: Option<PathBuf>, yes: bool) -> Result<(), String> {
         }
         return crate::service::start(&[]);
     }
+    up_in(&dir, &wants, yes).map(|_| ())
+}
+
+/// The services `wants` lists for the project in `dir`: found or added, started, and wired
+/// into its `.env`. `true` if a database was wired.
+pub fn up_in(dir: &Path, wants: &[ServiceWant], yes: bool) -> Result<bool, String> {
     let mut chosen: Vec<(String, &'static dyn ServiceProvider)> = Vec::new();
-    for want in &wants {
+    for want in wants {
         let provider = crate::service::provider_of(kind_of(&want.kind))?;
         let name = if provider.runs_in_project() {
-            project_instance(provider, want, &dir)?
+            project_instance(provider, want, dir)?
         } else {
             instance_for(provider, want, release_for(provider, want)?)?
         };
@@ -150,22 +156,22 @@ pub fn up(project: Option<PathBuf>, yes: bool) -> Result<(), String> {
     let names: Vec<String> = chosen.iter().map(|(name, _)| name.clone()).collect();
     crate::service::start(&names)?;
     say!("Running: {}.", names.join(", "));
-    wire(&dir, &chosen, yes)
+    wire(dir, &chosen, yes)
 }
 
 /// Offers `kiln env use` for each instance with `.env` keys. Only the first database is
-/// wired: a second would set the same `DB_*` keys.
+/// wired: a second would set the same `DB_*` keys. `true` if a database was wired.
 fn wire(
     dir: &Path,
     chosen: &[(String, &'static dyn ServiceProvider)],
     yes: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if !dir.join(".env").is_file() {
         say!(
             "{} has no .env, so nothing was wired; `kiln env use <instance>` does it later.",
             dir.display()
         );
-        return Ok(());
+        return Ok(false);
     }
     let mut database: Option<&str> = None;
     for (name, provider) in chosen {
@@ -193,7 +199,7 @@ fn wire(
             yes,
         )?;
     }
-    Ok(())
+    Ok(database.is_some())
 }
 
 #[cfg(test)]

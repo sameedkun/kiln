@@ -122,14 +122,20 @@ const EMPTY_INDEX: &str = "<?php\n// Served by Kiln. Replace this with your site
 /// Without Kiln's Node, or on failure, it says what to run instead: the project itself is
 /// made either way.
 fn build_front_end(project: &Path) {
-    let manual = || {
-        say!(
-            "Its front end isn't built yet: run `npm install` and `npm run build` (or `npm run dev`) in {}.",
-            project.display()
-        );
-    };
+    if npm(project, &[&["install"], &["run", "build"]]) {
+        return;
+    }
+    say!(
+        "Its front end isn't built yet: run `npm install` and `npm run build` (or `npm run dev`) in {}.",
+        project.display()
+    );
+}
+
+/// Runs npm with Kiln's Node in `project`, each of `steps` in turn, its output shown. `false`
+/// if one couldn't run or failed, having said why.
+pub(crate) fn npm(project: &Path, steps: &[&[&str]]) -> bool {
     let Some(local) = kiln_state::default_local_dir() else {
-        return manual();
+        return false;
     };
     let nodes = kiln_node::installed(&local.join(kiln_runtime::node::NODE_DIR));
     let default_spec = crate::web::open_store()
@@ -139,7 +145,7 @@ fn build_front_end(project: &Path) {
         kiln_runtime::node::node_for_dir(&nodes, default_spec.as_deref(), project).node
     else {
         say!("Kiln has no Node yet (`kiln node install lts`).");
-        return manual();
+        return false;
     };
     let exe = node.dir.join(if cfg!(windows) {
         "node.exe"
@@ -152,9 +158,9 @@ fn build_front_end(project: &Path) {
         node.dir.join("lib/node_modules/npm/bin/npm-cli.js")
     };
     let Ok(path) = path_with(exe.parent().unwrap_or(&node.dir)) else {
-        return manual();
+        return false;
     };
-    for args in [&["install"][..], &["run", "build"][..]] {
+    for &args in steps {
         crate::out::step(&format!(
             "Running npm {} with Node {}",
             args.join(" "),
@@ -174,15 +180,18 @@ fn build_front_end(project: &Path) {
                     args.join(" "),
                     status.code().unwrap_or(1)
                 );
-                return manual();
+                return false;
             }
             Err(e) => {
                 say!("cannot run npm: {e}");
-                return manual();
+                return false;
             }
         }
     }
-    say!("Built its front end with Node {}.", node.version);
+    if steps.last() == Some(&&["run", "build"][..]) {
+        say!("Built its front end with Node {}.", node.version);
+    }
+    true
 }
 
 /// The site name `name` gives, which is also the folder's name: a single lowercase label.
@@ -203,7 +212,7 @@ fn project_name(name: &str, tld: &Tld) -> Result<String, String> {
 }
 
 /// The `kiln.toml` `kiln new --php` writes.
-fn manifest_for(php: &str) -> String {
+pub(crate) fn manifest_for(php: &str) -> String {
     manifest::render(
         &manifest::Manifest {
             php: Some(php.to_owned()),
@@ -233,7 +242,7 @@ fn chosen_php(spec: Option<&str>) -> Result<PhpRecord, String> {
 }
 
 /// `PATH` with `dir` first.
-fn path_with(dir: &Path) -> Result<OsString, String> {
+pub(crate) fn path_with(dir: &Path) -> Result<OsString, String> {
     let rest = std::env::var_os("PATH").unwrap_or_default();
     std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&rest)))
         .map_err(|e| e.to_string())
@@ -243,7 +252,7 @@ fn path_with(dir: &Path) -> Result<OsString, String> {
 /// meaning its first running instance ([ADR 0045] §5).
 ///
 /// [ADR 0045]: ../../../docs/adr/0045-env-wiring.md
-fn db_instance(spec: &str) -> Result<String, String> {
+pub(crate) fn db_instance(spec: &str) -> Result<String, String> {
     let services = crate::web::open_store()?
         .services()
         .map_err(|e| e.to_string())?;
@@ -356,44 +365,12 @@ fn create_with_composer(
     project: &Path,
     record: &PhpRecord,
 ) -> Result<(), String> {
-    let local =
-        kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
-    if !local.join(COMPOSER_PHAR).is_file() {
-        say!("Composer isn't installed yet; installing it first.");
-        crate::php::composer_install()?;
-    }
-
     say!(
         "Creating {} with PHP {} and Composer ({package})...",
         project.display(),
         record.version
     );
-    let here = DirPhp {
-        site: None,
-        php: SitePhp {
-            php: Some(record.clone()),
-            pinned: None,
-            from_project: false,
-            fell_back: false,
-        },
-    };
-    let mut command = kiln_runtime::shim::command(
-        Tool::Composer,
-        &here,
-        &local.join(COMPOSER_PHAR),
-        create_args(package, name),
-    )?;
-    command
-        .current_dir(parent)
-        .env("PATH", path_with(&record.dir)?);
-    #[cfg(windows)]
-    {
-        // Ctrl+C goes to Composer (same console); Kiln waits for it to stop.
-        let _ = kiln_sys::win::survive_ctrl_c();
-    }
-    // Its output is shown; with --json, as notes (ADR 0053 §1).
-    let status =
-        crate::out::run_shown(&mut command).map_err(|e| format!("cannot run Composer: {e}"))?;
+    let status = composer(create_args(package, name), parent, record)?;
     if !status.success() {
         let left = if project.exists() {
             format!(
@@ -409,6 +386,42 @@ fn create_with_composer(
         ));
     }
     Ok(())
+}
+
+/// Runs Kiln's Composer with `args` in `dir`, with `record`'s PHP, its output shown;
+/// installs Composer first if Kiln has none yet.
+pub(crate) fn composer(
+    args: Vec<OsString>,
+    dir: &Path,
+    record: &PhpRecord,
+) -> Result<std::process::ExitStatus, String> {
+    let local =
+        kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
+    if !local.join(COMPOSER_PHAR).is_file() {
+        say!("Composer isn't installed yet; installing it first.");
+        crate::php::composer_install()?;
+    }
+    let here = DirPhp {
+        site: None,
+        php: SitePhp {
+            php: Some(record.clone()),
+            pinned: None,
+            from_project: false,
+            fell_back: false,
+        },
+    };
+    let mut command =
+        kiln_runtime::shim::command(Tool::Composer, &here, &local.join(COMPOSER_PHAR), args)?;
+    command
+        .current_dir(dir)
+        .env("PATH", path_with(&record.dir)?);
+    #[cfg(windows)]
+    {
+        // Ctrl+C goes to Composer (same console); Kiln waits for it to stop.
+        let _ = kiln_sys::win::survive_ctrl_c();
+    }
+    // Its output is shown; with --json, as notes (ADR 0053 §1).
+    crate::out::run_shown(&mut command).map_err(|e| format!("cannot run Composer: {e}"))
 }
 
 /// Serves the new project as `<name>.<tld>`: linked, or already served from a parked folder.

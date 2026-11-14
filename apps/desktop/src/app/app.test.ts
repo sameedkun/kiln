@@ -342,3 +342,19 @@ describe("a new site from a template (ADR 0070)", async () => {
     ]);
   });
 });
+
+describe("setting up a cloned project (ADR 0080)", async () => {
+  const { initArgs } = await import("./SitesPage");
+  it("passes only the choices made; a seed only with a database of Kiln's", () => {
+    expect(initArgs({ folder: "C:\code\shop", db: "", secure: false, seed: true, build: true })).toEqual(["init", "C:\code\shop"]);
+    expect(initArgs({ folder: "C:\code\shop", db: "mysql-8.4", secure: true, seed: true, build: false })).toEqual([
+      "init",
+      "C:\code\shop",
+      "--db",
+      "mysql-8.4",
+      "--secure",
+      "--seed",
+      "--no-build",
+    ]);
+  });
+});
