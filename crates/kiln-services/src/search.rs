@@ -51,9 +51,14 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The data and logs folders, and the instance's config folder from the release's.
+/// The data, logs and temp folders, and the instance's config folder from the release's.
 fn init(dirs: &InstanceDirs) -> Result<(), String> {
-    for dir in [&dirs.data, &dirs.instance().join("logs")] {
+    // OpenSearch refuses to start without its temp folder (`java.io.tmpdir`).
+    for dir in [
+        &dirs.data,
+        &dirs.instance().join("logs"),
+        &dirs.instance().join("tmp"),
+    ] {
         fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let conf = conf_dir(dirs);
@@ -366,5 +371,6 @@ mod tests {
         assert!(conf_dir(&dirs).join("opensearch.yml").is_file());
         assert!(conf_dir(&dirs).join("jvm.options.d").is_dir());
         assert!(dirs.instance().join("logs").is_dir());
+        assert!(dirs.instance().join("tmp").is_dir());
     }
 }
