@@ -90,6 +90,7 @@ working name). Start here.
 | [0072](adr/0072-phpredis-by-default.md) | phpredis added with every new PHP on Windows (as Herd does), journaled and undoable; `--without-redis` skips it; `php update` carries the old version's choice; amends ADR 0067 | accepted (Phase 4c) |
 | [0073](adr/0073-stripe-webhooks.md) | Stripe webhooks: the pinned Stripe CLI as a site's process (`Runtime::Own`), `stripe listen` forwarding to `APP_URL/stripe/webhook`, the key from the project's `STRIPE_SECRET` in its environment only | accepted (Phase 4c) |
 | [0074](adr/0074-site-groups.md) | Site groups: a label per site in Kiln's settings (`kiln group <site> [<name>]`), not journaled; the Sites page shows a section per group | accepted (Phase 4c) |
+| [0075](adr/0075-git-branches-and-worktrees.md) | `kiln git branches|switch|worktree` through the user's Git: no switch over uncommitted changes, never forced; worktrees beside the project served as `<branch>.<site>` | accepted (Phase 4c) |
 
 ## Conventions
 

@@ -308,6 +308,7 @@ impl Daemon {
         "updates.check",
         "requests.get",
         "services.databases",
+        "git.branches",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -637,6 +638,26 @@ impl Daemon {
             }
             Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
             None => self.read(&["requests"]),
+        }
+    }
+
+    /// `git.branches` ([ADR 0075]): a site's branches and worktrees. Only a site's name
+    /// reaches the command line.
+    ///
+    /// [ADR 0075]: ../../../docs/adr/0075-git-branches-and-worktrees.md
+    fn git_branches(&self, params: &Value) -> Result<Value, RpcError> {
+        match params["host"].as_str() {
+            Some(host)
+                if !host.is_empty()
+                    && !host.starts_with(['-', '.'])
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') =>
+            {
+                self.read(&["git", "branches", host])
+            }
+            Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
+            None => Err(RpcError::kiln("params.host (a site) is missing")),
         }
     }
 
@@ -971,6 +992,7 @@ impl Handler for Daemon {
             "requests.get" => self.requests(params),
             "services.logs" => self.service_logs(params),
             "services.databases" => self.service_databases(params),
+            "git.branches" => self.git_branches(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.get" => {

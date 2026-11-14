@@ -477,6 +477,39 @@ Check 'kiln group shop "Acme Corp" (ADR 0074): in the sites list with its group,
     $global:LASTEXITCODE = 0
     Expect "doesn't serve nosuchsite.test" $refused
 }
+Check 'kiln git (ADR 0075): branches read, no switch over changes, a worktree served as its own site, then removed' {
+    $repo = Join-Path $projects 'gitsite'
+    Kiln new gitsite --template empty --path $projects | Out-Null
+    try {
+        $g = { param([string[]] $a) & git -C $repo @a 2>&1 | Out-String }
+        & $g init, '-q', '-b', 'main' | Out-Null
+        & $g config, 'user.email', 'ci@kiln.invalid' | Out-Null
+        & $g config, 'user.name', 'Kiln CI' | Out-Null
+        & $g add, '-A' | Out-Null
+        & $g commit, '-q', '-m', 'first' | Out-Null
+        & $g branch, 'feature/checkout' | Out-Null
+        $data = (& $Kiln --json git branches gitsite | Select-Object -Last 1 | ConvertFrom-Json).data
+        if ($data.current -ne 'main' -or $data.branches -notcontains 'feature/checkout' -or $data.dirty) { throw "branches: $($data | ConvertTo-Json -Compress)" }
+        Add-Content (Join-Path $repo 'public\index.php') '<?php // a change'
+        $refused = (& $Kiln git switch gitsite feature/checkout 2>&1 | Out-String)
+        $global:LASTEXITCODE = 0
+        Expect 'uncommitted changes' $refused
+        & $g checkout, '--', '.' | Out-Null
+        Expect 'gitsite.test is on feature/checkout now' (Kiln git switch gitsite feature/checkout)
+        Kiln git switch gitsite main | Out-Null
+        Kiln git worktree add gitsite feature/checkout | Out-Null
+        Expect 'It works.' (Page (SiteBase 'feature-checkout.gitsite'))
+        $tree = ((& $Kiln --json git branches gitsite | Select-Object -Last 1 | ConvertFrom-Json).data.worktrees | Select-Object -First 1)
+        if ($tree.host -ne 'feature-checkout.gitsite.test') { throw "worktree: $($tree | ConvertTo-Json -Compress)" }
+        Expect 'Removed the worktree' (Kiln git worktree remove gitsite feature/checkout)
+        if (Test-Path "$repo-feature-checkout") { throw 'the worktree folder is still there' }
+        if ((Kiln sites) -match 'feature-checkout') { throw 'the worktree is still served' }
+    } finally {
+        & $Kiln unlink gitsite 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        Remove-Item -Recurse -Force $repo, "$repo-feature-checkout" -ErrorAction SilentlyContinue
+    }
+}
 Check 'kiln new hello --template empty (ADR 0070): a folder with a first page, served at once' {
     $out = Kiln new hello --template empty --path $projects
     Expect 'first page in public/index.php' $out

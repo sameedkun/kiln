@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-10 built (ADRs 0068 to 0074); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-11 built (ADRs 0068 to 0075); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1514,7 +1514,7 @@ Plan: [plan.md, Phase 4c](plan.md#phase-4c-a-richer-app-windows). Asked for by t
 | P4C-08 | phpredis with every new PHP | built | [ADR 0072](adr/0072-phpredis-by-default.md); the Scenario's PHP 8.5 comes with it |
 | P4C-09 | Stripe listener | built | [ADR 0073](adr/0073-stripe-webhooks.md); pin checked against Stripe's checksums file; the Scenario runs it with a fake key |
 | P4C-10 | Site groups | built | [ADR 0074](adr/0074-site-groups.md); render-tested; the Scenario sets and clears one |
-| P4C-11 | Git branches and worktrees | planned | |
+| P4C-11 | Git branches and worktrees | built | [ADR 0075](adr/0075-git-branches-and-worktrees.md); a unit test with real Git; the Scenario switches and serves a worktree |
 | P4C-12 | LAN and tunnel sharing | planned | |
 | P4C-13 | Elasticsearch or OpenSearch | planned | |
 | P4C-14 | Names without the hosts file (spike) | planned | |
@@ -1889,6 +1889,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4C-07 on CI:** pgAdmin ran first time in both Scenario jobs (its page at `pgadmin.test` in about 76 s, loopback only, Kiln's servers loaded, `%APPDATA%\pgAdmin` untouched, removed cleanly); a unit test had assumed `.exe` and failed on Linux. **P4C-08 built** ([ADR 0072](adr/0072-phpredis-by-default.md)): `kiln php install` adds phpredis to a new PHP it has a build for, journaled like `php ext add redis`; `--without-redis` skips it, a failure is only a note, and `php update` carries the old version's choice instead. The app's PHP install dialog says so. |
 | 2026-11-14 | **P4C-09 built** ([ADR 0073](adr/0073-stripe-webhooks.md)): "Stripe webhooks" joins a Laravel site's dev processes: the Stripe CLI 1.55.11 (Apache-2.0, pinned by GitHub's digest and Stripe's own checksums file) runs `stripe listen --forward-to <APP_URL>/stripe/webhook`, kept up by Kiln. The key is the project's `STRIPE_SECRET`, read from its `.env` at each start into the process's environment only; a project without it, or without `APP_URL`, is refused. It's the first project process with a program of its own (`Runtime::Own`), downloaded when added. |
 | 2026-11-14 | **P4C-09 on CI:** with a fake key `stripe listen` exits and is restarted, so the Scenario once read an empty command line; it now catches one run's, and always removes the listener (a crash-looping one had failed the later service counts). **P4C-10 built** ([ADR 0074](adr/0074-site-groups.md)): `kiln group <site> [<name>]` puts a site in a group or takes it out (a label in Kiln's settings, not journaled); `kiln --json sites` gives each site's `group`; the Sites page shows a section per group above the parked and linked ones, each site's menu has "Put in a group…", and finding a site matches its group. |
+| 2026-11-14 | **P4C-11 built** ([ADR 0075](adr/0075-git-branches-and-worktrees.md)): `kiln git branches <site>` (also `git.branches` in kilnd), `kiln git switch <site> <branch>` (only on a clean tree; never forced, stashed or discarded), `kiln git worktree add <site> <branch> [--new]` (a worktree beside the project, linked as `<branch>.<site>`) and `kiln git worktree remove` (unlinked, then `git worktree remove` without `--force`), all through the user's own Git with branch names checked by Git's `check-ref-format`. The site's Overview has a Git section: switch branch (off with uncommitted changes, saying why), its worktrees and their sites, "New worktree…". |
 
 ## How to update this file
 

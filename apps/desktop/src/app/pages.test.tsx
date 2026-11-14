@@ -366,3 +366,40 @@ describe("site groups (ADR 0074)", () => {
     expect(groupName("x".repeat(41))).toBeNull();
   });
 });
+
+describe("a site's Git (ADR 0075)", () => {
+  it("won't switch over uncommitted changes, and lists its worktrees with their sites", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["git.branches"] = () => ({
+      host: "shop.test",
+      current: "main",
+      branches: ["feature/checkout", "main"],
+      dirty: true,
+      worktrees: [{ path: "D:/Code/shop-feature-checkout", branch: "feature/checkout", host: "feature-checkout.shop.test" }],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    const git = await screen.findByRole("region", { name: "Git" });
+    expect(git.textContent).toContain("uncommitted changes");
+    expect(git.textContent).toContain("feature-checkout.shop.test");
+    await userEvent.selectOptions(screen.getByLabelText("Branch"), "feature/checkout");
+    expect((screen.getByRole("button", { name: "Switch" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

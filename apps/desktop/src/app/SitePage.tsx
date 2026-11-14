@@ -2,16 +2,18 @@ import { useState } from "react";
 import { ArrowLeft16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
 import { BarChart } from "../components/BarChart";
 import { Button } from "../components/Button";
+import { Dialog } from "../components/Dialog";
 import { Chips } from "../components/Chips";
 import { Notice } from "../components/Notice";
 import { Page } from "../components/Page";
-import { Row, Section } from "../components/Rows";
+import { Row, RowName, Section } from "../components/Rows";
 import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { call, openFolder, type EnvShow, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { TextField } from "../components/TextField";
+import { call, openFolder, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
@@ -121,6 +123,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       ) : (
       <>
       <SiteGlance site={site} />
+      <SiteGit site={site} go={go} />
       <Section title="How it runs">
         <li className="flex flex-wrap items-start gap-x-10 gap-y-4 border-b border-line px-1 py-4">
           {site.php ? (
@@ -455,6 +458,127 @@ function SiteGlance({ site }: { site: Site }) {
         </li>
       )}
     </Section>
+  );
+}
+
+/** A site's Git (ADR 0075): its branch to switch, never over uncommitted changes, and its worktrees served as sites. */
+function SiteGit({ site, go }: { site: Site; go: (page: string) => void }) {
+  const git = useRead<GitBranches>("git.branches", { host: site.host });
+  const { run, ask, open } = useChanges();
+  const [branch, setBranch] = useState("");
+  const [adding, setAdding] = useState(false);
+  if (git.error) {
+    return (
+      <Section title="Git">
+        <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">{/not a git repository/i.test(git.error) ? "Not a Git repository." : git.error}</li>
+      </Section>
+    );
+  }
+  if (!git.data) return null;
+  const g = git.data;
+  const target = branch || g.current;
+  return (
+    <Section
+      title="Git"
+      meta={g.dirty ? "uncommitted changes" : undefined}
+      action={
+        <Button variant="quiet" size="sm" onClick={() => setAdding(true)}>
+          New worktree…
+        </Button>
+      }
+    >
+      <li className="flex flex-wrap items-end gap-3 border-b border-line px-1 py-4">
+        <Select label="Branch" value={target} onChange={(e) => setBranch(e.target.value)} options={g.branches.map((b) => ({ value: b, label: b === g.current ? `${b} (current)` : b }))} />
+        <Button disabled={target === g.current || g.dirty} onClick={async () => (await run(["git", "switch", site.host, target], `${site.host} is on ${target} now.`)) && setBranch("")}>
+          Switch
+        </Button>
+        {g.dirty && <span className="pb-2 text-xs text-text-3">Commit or stash its changes to switch: Kiln never switches over them.</span>}
+      </li>
+      {g.worktrees.map((w) => (
+        <Row
+          key={w.path}
+          columns="minmax(140px,1fr) minmax(160px,1.6fr) auto"
+          actions={
+            w.branch && (
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={() =>
+                  ask(
+                    `Remove the worktree of ${w.branch}?`,
+                    `Kiln stops serving it, then Git removes ${w.path}; Git refuses if it has uncommitted changes. The branch stays.`,
+                    "Remove",
+                    ["git", "worktree", "remove", site.host, w.branch!],
+                    `Removed the worktree of ${w.branch}.`,
+                  )
+                }
+              >
+                Remove
+              </Button>
+            )
+          }
+        >
+          <RowName sub={w.path} mono>
+            {w.branch ?? "detached"}
+          </RowName>
+          <span className="text-[12.5px] text-text-2">
+            {w.host ? (
+              <button type="button" className="hover:underline" onClick={() => go(`site:${w.host}`)}>
+                {w.host}
+              </button>
+            ) : (
+              "not served"
+            )}
+          </span>
+          <span>{w.host && <Button variant="quiet" size="sm" aria-label={`Open ${w.host}`} icon={<Open16Regular />} onClick={() => open(w.host!)} />}</span>
+        </Row>
+      ))}
+      {adding && <WorktreeDialog site={site} branches={g.branches} onClose={() => setAdding(false)} />}
+    </Section>
+  );
+}
+
+/** A branch's worktree beside the project, served as <branch>.<site> (ADR 0075). */
+function WorktreeDialog({ site, branches, onClose }: { site: Site; branches: string[]; onClose: () => void }) {
+  const { run } = useChanges();
+  const [branch, setBranch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const name = branch.trim();
+  const valid = name !== "" && !name.startsWith("-") && !/\s|\.\.|[~^:?*[\\]/.test(name);
+  const isNew = valid && !branches.includes(name);
+  return (
+    <Dialog
+      open
+      onClose={() => !busy && onClose()}
+      title="New worktree"
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant="ink"
+            disabled={!valid || busy}
+            onClick={async () => {
+              setBusy(true);
+              await run(["git", "worktree", "add", site.host, name, ...(isNew ? ["--new"] : [])], `The worktree of ${name} is served.`);
+              onClose();
+            }}
+          >
+            {busy ? "Making…" : "Make it"}
+          </Button>
+        </>
+      }
+    >
+      <p className="mt-0">A second checkout of a branch, in a folder beside {site.host}'s, served as a site of its own: work on two branches at once.</p>
+      <TextField label="Branch" list="kiln-branches" placeholder="feature/checkout" value={branch} onChange={(e) => setBranch(e.target.value)} error={branch && !valid ? "Not a branch name Git takes." : undefined} />
+      <datalist id="kiln-branches">
+        {branches.map((b) => (
+          <option key={b} value={b} />
+        ))}
+      </datalist>
+      <p className="mb-0 mt-2 text-xs text-text-3">{isNew ? `A new branch, from the one ${site.host} is on.` : valid ? "An existing branch." : ""}</p>
+    </Dialog>
   );
 }
 

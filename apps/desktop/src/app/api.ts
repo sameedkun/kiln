@@ -62,6 +62,14 @@ export interface Instance {
   /** What `kiln env use` writes into a site's .env (ADR 0068 §3). */
   env: [string, string][];
 }
+/** `git.branches` (ADR 0075). */
+export interface GitBranches {
+  host: string;
+  current: string;
+  branches: string[];
+  dirty: boolean;
+  worktrees: { path: string; branch: string | null; host: string | null }[];
+}
 /** `services.databases` (ADR 0068 §1). */
 export interface ServiceDatabases {
   databases: { name: string; bytes: number; used_by: string[] }[];

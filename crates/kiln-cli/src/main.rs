@@ -21,6 +21,7 @@ mod dump;
 mod env;
 mod ext;
 mod footprint;
+mod git;
 mod groups;
 mod history;
 mod logs;
@@ -140,6 +141,12 @@ enum Command {
     Mcp {
         #[command(subcommand)]
         action: Option<McpAction>,
+    },
+    /// A site's Git branch and worktrees, through your own Git (ADR 0075). Never on a tree
+    /// with uncommitted changes.
+    Git {
+        #[command(subcommand)]
+        action: GitAction,
     },
     /// Put a site in a group (sites that belong together, shown together), or with no group
     /// given, take it out of its group (ADR 0074).
@@ -312,6 +319,51 @@ enum ImportFrom {
         /// Replace an existing kiln.toml.
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GitAction {
+    /// The site's branch, its local branches, whether it has uncommitted changes, and its
+    /// worktrees. Changes nothing.
+    Branches {
+        /// The site, e.g. shop.
+        site: String,
+    },
+    /// Switch the site's folder to another branch (`git switch`), only with no uncommitted
+    /// changes.
+    Switch {
+        /// The site, e.g. shop.
+        site: String,
+        /// The branch.
+        branch: String,
+    },
+    /// Worktrees of the site's repository, served as sites of their own.
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorktreeAction {
+    /// A worktree of a branch beside the project, served as <branch>.<site>.
+    Add {
+        /// The site, e.g. shop.
+        site: String,
+        /// The branch.
+        branch: String,
+        /// Make the branch, from the one the site is on.
+        #[arg(long)]
+        new: bool,
+    },
+    /// Stop serving a worktree and remove it (Git refuses if it has uncommitted changes).
+    /// The branch stays.
+    Remove {
+        /// The site, e.g. shop.
+        site: String,
+        /// The worktree's branch.
+        branch: String,
     },
 }
 
@@ -892,6 +944,9 @@ fn changes_state(command: &Command) -> bool {
                 action: Some(DbAction::List { .. }),
                 ..
             }
+            | Command::Git {
+                action: GitAction::Branches { .. }
+            }
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -1151,6 +1206,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Mcp { action } => run_mcp(action),
         Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Group { site, group } => groups::set(&site, group.as_deref()),
+        Command::Git { action } => run_git(action),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {
             action: Some(UpdatesAction::CheckKiln { state }),
@@ -1250,6 +1306,19 @@ fn run_node(action: NodeAction) -> Result<(), String> {
         NodeAction::List => node::list(),
         NodeAction::Remove { version } => node::remove(&version),
         NodeAction::Default { version } => node::set_default(&version),
+    }
+}
+
+fn run_git(action: GitAction) -> Result<(), String> {
+    match action {
+        GitAction::Branches { site } => git::branches(&site),
+        GitAction::Switch { site, branch } => git::switch(&site, &branch),
+        GitAction::Worktree {
+            action: WorktreeAction::Add { site, branch, new },
+        } => git::worktree_add(&site, &branch, new),
+        GitAction::Worktree {
+            action: WorktreeAction::Remove { site, branch },
+        } => git::worktree_remove(&site, &branch),
     }
 }
 
