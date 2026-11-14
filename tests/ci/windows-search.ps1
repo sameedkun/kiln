@@ -21,7 +21,8 @@ function Check($name, [scriptblock] $body) {
 }
 function Http($method, $url, $body) {
     $args = @('-sS', '--max-time', '30', '-X', $method, $url)
-    if ($body) { $args += @('-H', 'Content-Type: application/json', '-d', $body) }
+    # Through a file: Windows PowerShell strips double quotes from a native command's arguments.
+    if ($body) { $file = Join-Path $dir 'body.json'; [IO.File]::WriteAllText($file, $body); $args += @('-H', 'Content-Type: application/json', '--data-binary', "@$file") }
     curl.exe @args 2>&1 | Out-String
 }
 
@@ -43,13 +44,19 @@ foreach ($e in $engines) {
         if ($actual -ne $published) { throw "SHA-512 $actual, published $published" }
     }
     Check "$($e.kind): added, answers on loopback only, indexes and finds a document" {
-        $out = Kiln service add $e.kind
+        $inst = Join-Path "$env:LOCALAPPDATA\Kiln\services" $e.name
+        $why = {
+            $output = Get-Content (Join-Path $inst "$($e.name).log") -Tail 40 -ErrorAction SilentlyContinue | Out-String
+            $own = Get-ChildItem (Join-Path $inst 'logs') -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "-- $($_.Name)"; Get-Content $_.FullName -Tail 25 } | Out-String
+            "`n== its output:`n$output`n== its own logs:`n$own"
+        }
+        try { $out = Kiln service add $e.kind } catch { throw "$_$(& $why)" }
         if ($out -notmatch "running as $($e.name)") { throw $out }
         $port = [int][regex]::Match($out, 'http 127\.0\.0\.1:(\d+)').Groups[1].Value
         $base = "http://127.0.0.1:$port"
         $deadline = (Get-Date).AddSeconds(120)
         do { Start-Sleep -Seconds 2; $health = Http GET "$base/_cluster/health" } until ($health -match '"status"' -or (Get-Date) -gt $deadline)
-        if ($health -notmatch '"status":"(green|yellow)"') { throw "health: $health`n$(Kiln service logs $e.name)" }
+        if ($health -notmatch '"status":"(green|yellow)"') { throw "health: $health$(& $why)" }
         $listening = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -in (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "*\Kiln\services\bin\$($e.kind)\*" }).ProcessId })
         $beyond = @($listening | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1' })
         if ($beyond.Length) { throw "listens beyond loopback: $(($beyond | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')" }
