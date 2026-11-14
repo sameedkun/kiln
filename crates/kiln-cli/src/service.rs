@@ -84,6 +84,25 @@ fn write_config(
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// pgAdmin's list of Kiln's PostgreSQL instances (ADR 0071), which its launcher loads before
+/// each start: one added since shows after a restart of pgAdmin.
+fn write_pgadmin_servers(store: &StateStore, dirs: &InstanceDirs) -> Result<(), String> {
+    let postgres = provider_of("postgres")?;
+    let role = postgres.ports().first().map_or("postgres", |p| p.role);
+    let instances: Vec<(String, u16)> = store
+        .services()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|r| r.kind == "postgres")
+        .filter_map(|r| r.ports.get(role).map(|&port| (r.name.clone(), port)))
+        .collect();
+    let path = kiln_services::pgadmin::servers_file(dirs);
+    std::fs::create_dir_all(&dirs.data)
+        .map_err(|e| format!("cannot create {}: {e}", dirs.data.display()))?;
+    std::fs::write(&path, kiln_services::pgadmin::servers_json(&instances))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// The PHP or Node executable Kiln picks for `project`, as `provider` runs on
 /// ([ADR 0060] §1).
 ///
@@ -167,6 +186,9 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
         } else {
             // Rewritten before every start, so a changed port takes effect.
             write_config(provider, &dirs, &record.ports)?;
+            if record.kind == "pgadmin" {
+                write_pgadmin_servers(store, &dirs)?;
+            }
             provider.launch(&dirs, &record.ports)
         };
         // A process that listens on nothing (a queue worker, ADR 0060) runs on port 0.

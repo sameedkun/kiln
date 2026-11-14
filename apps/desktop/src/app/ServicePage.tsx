@@ -14,7 +14,7 @@ import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { fewNames, useRead } from "./hooks";
 import { LogPanel } from "./LogsPage";
-import { databaseName, DumpDialog, PortsDialog, RemoveDialog, RestoreDialog, WireDialog } from "./ServicesPage";
+import { databaseName, DumpDialog, JobDialog, PortsDialog, RemoveDialog, RestoreDialog, WireDialog } from "./ServicesPage";
 
 /** Bytes as people read them: "0 B", "46.0 MB". */
 export function size(bytes: number): string {
@@ -29,7 +29,7 @@ export function size(bytes: number): string {
   return `${n.toFixed(1)} ${units[unit]}`;
 }
 
-type Open = "ports" | "wire" | "dump" | "restore" | "remove" | { drop: string } | { dumpOne: string };
+type Open = "ports" | "wire" | "dump" | "restore" | "remove" | "pgadmin" | { drop: string } | { dumpOne: string };
 
 // One service (ADR 0068): what it is, its databases, logs, .env values and tools.
 export function ServicePage({ name, go }: { name: string; go: (page: string) => void }) {
@@ -99,7 +99,7 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
         ) : tab === "env" ? (
           <ServiceEnv instance={i} />
         ) : tab === "tools" ? (
-          <ServiceTools instance={i} hosts={(sites.data?.sites ?? []).map((s) => s.host)} onOpen={setOpen} />
+          <ServiceTools instance={i} hosts={(sites.data?.sites ?? []).map((s) => s.host)} pgadmin={services.data?.instances.find((x) => x.kind === "pgadmin")} onOpen={setOpen} />
         ) : (
           <ServiceOverview instance={i} go={go} />
         )}
@@ -110,6 +110,22 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
       {open === "dump" && <DumpDialog instance={i} onClose={() => setOpen(null)} />}
       {open === "restore" && <RestoreDialog instance={i} onClose={() => setOpen(null)} />}
       {open === "remove" && <RemoveDialog instance={i} onClose={() => setOpen(null)} />}
+      {open === "pgadmin" && (
+        <JobDialog
+          title="Add pgAdmin?"
+          action="Add pgAdmin"
+          ready
+          onClose={() => setOpen(null)}
+          work={() => run(["service", "add", "pgadmin"], "pgAdmin is running at pgadmin.test.")}
+        >
+          <p className="mt-0">
+            pgAdmin 4 comes in the same PostgreSQL download Kiln already checks, so a PC with PostgreSQL 18 has it downloaded. It unpacks to about 340 MB, without its desktop shell.
+          </p>
+          <p className="mb-0">
+            It runs on this PC only (127.0.0.1) and is served at pgadmin.test, with Kiln's PostgreSQL instances listed. Its settings stay in Kiln's folder, apart from any pgAdmin you have, and it doesn't check for updates.
+          </p>
+        </JobDialog>
+      )}
       {typeof open === "object" && open && "dumpOne" in open && <DumpDialog instance={i} database={open.dumpOne} onClose={() => setOpen(null)} />}
       {typeof open === "object" && open && "drop" in open && <DropDialog instance={i} database={open.drop} onDump={() => setOpen({ dumpOne: open.drop })} onClose={() => { setOpen(null); setDropped((n) => n + 1); }} />}
     </Page>
@@ -258,7 +274,7 @@ function ServiceEnv({ instance: i }: { instance: Instance }) {
   );
 }
 
-function ServiceTools({ instance: i, hosts, onOpen }: { instance: Instance; hosts: string[]; onOpen: (o: Open) => void }) {
+function ServiceTools({ instance: i, hosts, pgadmin, onOpen }: { instance: Instance; hosts: string[]; pgadmin?: Instance; onOpen: (o: Open) => void }) {
   const { run, open: visit } = useChanges();
   const tool = (name: string) => hosts.find((h) => h.startsWith(`${name}.`));
   const browsers = i.databases && i.kind !== "mongodb" ? (i.kind === "postgres" ? [["adminer", "Adminer"]] : [["pma", "phpMyAdmin"], ["adminer", "Adminer"]]) : [];
@@ -285,6 +301,15 @@ function ServiceTools({ instance: i, hosts, onOpen }: { instance: Instance; host
           () => (host ? visit(host) : run(["tool", "add", site === "pma" ? "phpmyadmin" : "adminer"], `${label} is set up at ${site}.test.`)),
         );
       })}
+      {i.kind === "postgres" &&
+        item(
+          "Browse in pgAdmin",
+          pgadmin
+            ? `Served at ${pgadmin.web ?? "pgadmin.test"}, with Kiln's PostgreSQL instances listed.`
+            : "Not added: pgAdmin 4 from the same PostgreSQL download, about 340 MB unpacked. Only if you want it.",
+          pgadmin ? "Open pgAdmin" : "Add pgAdmin…",
+          () => (pgadmin ? visit(pgadmin.web ?? "pgadmin.test") : onOpen("pgadmin")),
+        )}
       {item("Restart", "Stops it and starts it again.", "Restart", () => run(["service", "restart", i.name], `Restarted ${i.name}.`))}
       {item("Remove", "Removes it from Kiln; you choose whether its data stays.", "Remove…", () => onOpen("remove"), true)}
     </Section>

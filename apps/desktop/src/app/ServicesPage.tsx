@@ -34,6 +34,7 @@ const categories: { id: string; label: string; kinds: string[] }[] = [
   { id: "search", label: "Search", kinds: ["meilisearch"] },
   { id: "mail", label: "Mail", kinds: ["mailpit"] },
   { id: "storage", label: "Storage", kinds: ["rustfs"] },
+  { id: "tools", label: "Data tools", kinds: ["pgadmin"] },
   { id: "realtime", label: "Realtime", kinds: ["reverb"] },
   { id: "dev", label: "Dev processes", kinds: ["queue", "scheduler", "vite", "dumps"] },
 ];

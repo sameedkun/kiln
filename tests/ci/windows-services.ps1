@@ -259,6 +259,23 @@ Check 'https://mailpit.test: the inbox over HTTPS, with a certificate from Kiln'
     if ($LASTEXITCODE -ne 0) { throw "curl couldn't verify or reach it:`n$page" }
     if (($page | ConvertFrom-Json).total -ne 1) { throw "the inbox over HTTPS answered:`n$page" }
 }
+Say '== pgAdmin, on request (ADR 0071)'
+Check 'service add pgadmin: from PostgreSQL 18''s zip, on loopback, its own settings, Kiln''s servers listed' {
+    $out = Kiln service add pgadmin
+    Expect 'running as pgadmin-9' $out
+    $port = PortOf $out 'http'
+    $deadline = (Get-Date).AddSeconds(150)
+    do { Start-Sleep -Seconds 3; $page = Page (SiteBase 'pgadmin') } until ($page -match 'pgAdmin' -or (Get-Date) -gt $deadline)
+    if ($page -notmatch 'pgAdmin') { throw "no pgAdmin page:`n$($page.Substring(0, [Math]::Min(400, $page.Length)))`n$(Kiln service logs pgadmin-9)" }
+    $listening = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+    if (-not $listening -or ($listening | Where-Object { $_.LocalAddress -ne '127.0.0.1' })) { throw "listens on: $($listening.LocalAddress -join ', ')" }
+    Expect 'Kiln: servers loaded' (Kiln service logs pgadmin-9)
+    $servers = Get-Content "$env:LOCALAPPDATA\Kiln\services\pgadmin-9\data\servers.json" -Raw | ConvertFrom-Json
+    if ($servers.Servers.'1'.Name -notmatch '^postgres-') { throw "servers.json: $($servers | ConvertTo-Json -Depth 4)" }
+    if (Test-Path "$env:APPDATA\pgAdmin") { throw 'it wrote to %APPDATA%\pgAdmin, another pgAdmin''s settings' }
+    Kiln service remove pgadmin-9 --delete-data | Out-Null
+    if ((Kiln sites) -match 'pgadmin.test') { throw 'pgadmin.test is still served after removing it' }
+}
 Say '== Redis (ADR 0041)'
 # A client's commands go through files, not a pipe: Windows PowerShell puts a byte-order mark
 # in front of what it pipes to a program, and redis-cli reads it as part of the first command.
