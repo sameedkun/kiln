@@ -398,8 +398,12 @@ Check 'service add rustfs: from GitHub, running on loopback' {
 }
 Check 'RustFS listens on 127.0.0.1 only (S3 and console)' { OnlyLoopback 'kiln-rustfs' 2 }
 Check 'rustfs.test serves its web console (P4D-05)' {
-    $page = Page (SiteBase 'rustfs')
-    if ($page -notmatch 'rustfs') { throw "no console page:`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
+    # Kiln's CA is set up by now, so it's served over HTTPS: its URL as `kiln sites` gives it.
+    $url = [regex]::Match((Kiln sites), 'https?://rustfs\.test[^\s]*').Value
+    if (-not $url) { throw "no rustfs.test in:`n$(Kiln sites)" }
+    $uri = [Uri] $url
+    $page = curl.exe -sS -L --max-time 30 --ssl-revoke-best-effort --cacert "$env:APPDATA\Kiln\ca\root.crt" --resolve "$($uri.Host):$($uri.Port):127.0.0.1" $url 2>&1 | Out-String
+    if ($page -notmatch 'rustfs') { throw "no console page at $($url):`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
 }
 # One S3 request, signed with AWS Signature Version 4 and the credentials Kiln sets.
 function S3($method, $path, [byte[]] $body = @()) {
@@ -602,7 +606,7 @@ Check 'kiln new hello --template empty (ADR 0070): a folder with a first page, s
     Expect 'It works.' (Page (SiteBase 'hello'))
     $refused = (& $Kiln new other --template symfony --db mysql-8.4 --path $projects 2>&1 | Out-String)
     $global:LASTEXITCODE = 0
-    Expect '--db is for Laravel projects' $refused
+    Expect '--db is for Laravel and WordPress projects' $refused
     if (Test-Path (Join-Path $projects 'other')) { throw 'a refused new made a folder' }
     Kiln unlink hello | Out-Null
     Remove-Item -Recurse -Force (Join-Path $projects 'hello')
