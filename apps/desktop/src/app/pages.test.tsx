@@ -312,9 +312,12 @@ describe("a site at a glance (P4C-05)", () => {
     });
     shell(<SitePage host="shop.test" go={() => {}} />);
     const glance = await screen.findByRole("region", { name: "At a glance" });
-    await vi.waitFor(() => expect(glance.textContent).toContain("feature/checkout"));
-    expect(glance.textContent).toContain("Requests today7");
-    expect(glance.textContent).toContain("1 of 1 running");
+    // Three reads answer in any order: wait for each.
+    await vi.waitFor(() => {
+      expect(glance.textContent).toContain("feature/checkout");
+      expect(glance.textContent).toContain("Requests today7");
+      expect(glance.textContent).toContain("1 of 1 running");
+    });
     expect(glance.textContent).toContain("5 × 2xx · 1 × 4xx · 1 × 5xx");
     expect(glance.textContent).toContain("Uses mysql-8.4 (mysql).");
     expect(screen.getByText("3 h ago: 2 requests, 1 failed")).toBeTruthy();
