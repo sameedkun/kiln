@@ -1346,6 +1346,13 @@ pub fn wildcard_dns(store: &StateStore) -> bool {
         .is_some_and(|v| v == "on")
 }
 
+/// Records whether Kiln's rule is on: kilnd answers names, and the hosts file isn't offered.
+pub fn set_wildcard_dns(on: bool) -> Result<(), String> {
+    open_store()?
+        .set_setting(kiln_daemon::dns::ON_KEY, if on { "on" } else { "off" })
+        .map_err(|e| e.to_string())
+}
+
 /// `kiln dns on|off|status` (ADR 0078).
 pub fn dns(state: &str, yes: bool) -> Result<(), String> {
     match state {

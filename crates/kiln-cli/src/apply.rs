@@ -293,6 +293,11 @@ mod system {
         ctx.engine.revert(id, force).map_err(|e| e.to_string())?;
         ctx.session.finish().map_err(|e| e.to_string())?;
         say!("Undone.");
+        if entry.kind == kiln_platform::nrpt_op::NRPT_KIND {
+            // The setting follows the rule, so the hosts file is offered again (ADR 0078).
+            let on = !entry.params["on"].as_bool().unwrap_or(true);
+            crate::web::set_wildcard_dns(on)?;
+        }
         if entry.kind == kiln_platform::php_ext::PHP_EXT_KIND {
             let version = entry.params["version"].as_str().unwrap_or_default();
             return crate::web::restart_php(&crate::web::open_store()?, version);
@@ -789,6 +794,13 @@ pub fn ca_init(tld: Option<&str>) -> Result<(), String> {
             Some(tld) => tld,
             None => kiln_runtime::tld(&store).map_err(|e| e.to_string())?,
         };
+        // Kiln's DNS rule names the TLD it was added for (ADR 0078).
+        let current = kiln_runtime::tld(&store).map_err(|e| e.to_string())?;
+        if tld != current && crate::web::wildcard_dns(&store) {
+            return Err(format!(
+                "Kiln answers names under .{current}; run `kiln dns off` first, then `kiln dns on` again after `kiln ca init`."
+            ));
+        }
         let suffix = format!(".{tld}");
         let mut others: Vec<String> = store
             .sites()

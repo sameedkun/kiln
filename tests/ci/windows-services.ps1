@@ -1170,7 +1170,14 @@ Check 'kiln dns on: Kiln''s rule added through the helper, kilnd answers, any .t
     $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })
     if (-not $site.in_hosts) { throw 'shop.test still reported as missing from the hosts file' }
     Expect 'Kiln answers names under its TLD' (Kiln dns status)
-    Expect '.test' (Kiln history)
+    Expect 'every .test name answered by Kiln' (Kiln history)
+    # Undone from History, the rule goes and Kiln says names come from the hosts file again.
+    $op = [regex]::Match($out, 'operation #(\d+)').Groups[1].Value
+    Kiln undo $op --yes | Out-Null
+    if (Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.test' }) { throw 'the rule is still there after undo' }
+    Expect 'Names come from the hosts file' (Kiln dns status)
+    # On again, for uninstall to take out.
+    Expect 'Every name under .test now reaches this PC' (Kiln dns on --yes)
 }
 Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
     $before = Kiln history

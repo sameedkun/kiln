@@ -422,6 +422,11 @@ pub fn uninstall(options: Options) -> Result<(), String> {
             format!("{e}\nUninstall stopped here and deleted nothing; fix the cause and run `kiln uninstall` again.")
         })?;
         say!("Undid {} operation(s).", ids.len());
+        // Kiln's DNS rule was undone with the rest: if Kiln's state is kept, names come from the
+        // hosts file again (ADR 0078).
+        if crate::web::open_store().is_ok_and(|s| crate::web::wildcard_dns(&s)) {
+            let _ = crate::web::set_wildcard_dns(false);
+        }
     }
     if keep_files {
         say!("Done. Kiln's folders were kept (--keep-files).");

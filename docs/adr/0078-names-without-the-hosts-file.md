@@ -78,3 +78,8 @@ answered or dropped, never a panic).
 the app's "add the new names to the hosts file?" offer, which isn't made while the rule is on.
 The app's Settings has "Site names", to turn it on (previewed, one administrator prompt) or
 back to the hosts file.
+
+**The setting follows the rule.** Undoing the rule from History sets `dns.wildcard` back, so
+the hosts file is offered again; uninstall turns it off with the rest. `kiln ca init --tld`
+won't change the TLD while the rule is on, as the rule names the old one (`kiln dns off`
+first).
