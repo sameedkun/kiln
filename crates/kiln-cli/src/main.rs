@@ -20,6 +20,7 @@ mod doctor;
 mod dump;
 mod env;
 mod ext;
+mod footprint;
 mod history;
 mod logs;
 mod new;
@@ -123,6 +124,15 @@ enum Command {
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
     Doctor,
+    /// What Kiln uses on this PC: memory and CPU per kind of Kiln process, disk use per folder
+    /// (ADR 0063). Changes nothing.
+    Footprint,
+    /// Kiln's download cache: `kiln cache clear` removes it; Kiln downloads again what it
+    /// needs.
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Kiln's logs: without a source, every log Kiln knows of (its own, the web server's,
     /// PHP's, each service's, each Laravel site's); with one, its last lines (ADR 0059).
     Logs {
@@ -427,6 +437,12 @@ enum AppAction {
         #[arg(long, short)]
         yes: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum CacheAction {
+    /// Remove the verified copies of downloads Kiln has already installed.
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -783,6 +799,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Setup
             | Command::Settings
             | Command::Logs { .. }
+            | Command::Footprint
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -1030,6 +1047,10 @@ fn run(command: Command) -> Result<(), String> {
         Command::Doctor => unreachable!("handled in main"),
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
+        Command::Footprint => footprint::footprint(),
+        Command::Cache {
+            action: CacheAction::Clear,
+        } => footprint::clear_cache(),
         Command::Logs { source, lines } => logs::logs(source.as_deref(), lines),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
@@ -1089,26 +1110,8 @@ fn run(command: Command) -> Result<(), String> {
             action: ShimsAction::Install { yes },
         } => apply::shims_install(yes),
         Command::Php { action } => run_php(action),
-        Command::Node { action } => match action {
-            NodeAction::Available => node::available(),
-            NodeAction::Install { version } => node::install(&version),
-            NodeAction::List => node::list(),
-            NodeAction::Remove { version } => node::remove(&version),
-            NodeAction::Default { version } => node::set_default(&version),
-        },
-        Command::Web { action } => match action {
-            WebAction::Install { archive } => web::install(archive),
-            WebAction::Start {
-                http_port,
-                https_port,
-                auto_ports,
-            } => web::start(http_port, https_port, auto_ports),
-            WebAction::Stop => web::stop(),
-            WebAction::Reload => web::reload(),
-            WebAction::Restart => web::restart(),
-            WebAction::Status => web::status(),
-            WebAction::Config => web::print_config(),
-        },
+        Command::Node { action } => run_node(action),
+        Command::Web { action } => run_web(action),
         Command::New {
             name,
             path,
@@ -1122,6 +1125,32 @@ fn run(command: Command) -> Result<(), String> {
         Command::App { action } => run_app(action),
         Command::Daemon { action } => run_daemon(action),
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
+    }
+}
+
+fn run_node(action: NodeAction) -> Result<(), String> {
+    match action {
+        NodeAction::Available => node::available(),
+        NodeAction::Install { version } => node::install(&version),
+        NodeAction::List => node::list(),
+        NodeAction::Remove { version } => node::remove(&version),
+        NodeAction::Default { version } => node::set_default(&version),
+    }
+}
+
+fn run_web(action: WebAction) -> Result<(), String> {
+    match action {
+        WebAction::Install { archive } => web::install(archive),
+        WebAction::Start {
+            http_port,
+            https_port,
+            auto_ports,
+        } => web::start(http_port, https_port, auto_ports),
+        WebAction::Stop => web::stop(),
+        WebAction::Reload => web::reload(),
+        WebAction::Restart => web::restart(),
+        WebAction::Status => web::status(),
+        WebAction::Config => web::print_config(),
     }
 }
 

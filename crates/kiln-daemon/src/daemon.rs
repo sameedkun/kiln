@@ -304,6 +304,7 @@ impl Daemon {
         "settings.get",
         "logs.sources",
         "logs.tail",
+        "footprint.get",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -928,6 +929,7 @@ impl Handler for Daemon {
                 Ok(data)
             }
             "logs.tail" => self.log_tail(params),
+            "footprint.get" => self.read(&["footprint"]),
             "services.logs" => self.service_logs(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),

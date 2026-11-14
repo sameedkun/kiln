@@ -823,6 +823,24 @@ Check 'kiln logs: every log Kiln knows of, and following one through the daemon 
     if ($refused -notmatch 'no log called') { throw "a file that isn't a log was read:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+Check 'kiln footprint: Kiln''s processes with their memory, and its folders on disk' {
+    $data = ((Kiln --json footprint) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data
+    foreach ($label in 'Web server', 'PHP') {
+        if (-not ($data.processes | Where-Object { $_.label -like "$label*" -and $_.memory_bytes -gt 0 })) { throw "no $label process in: $($data.processes.label -join ', ')" }
+    }
+    if (-not ($data.processes | Where-Object { $_.label -like 'mysql *' })) { throw "no MySQL in: $($data.processes.label -join ', ')" }
+    if (-not ($data.folders | Where-Object { $_.label -eq 'PHP' -and $_.bytes -gt 10MB })) { throw "PHP's folder: $($data.folders | ConvertTo-Json)" }
+    if ($data.cache_bytes -le 0) { throw 'the download cache is empty' }
+    Expect '"memory_bytes"' (Kiln daemon call footprint.get)
+}
+Check 'kiln cache clear: the download cache is emptied; what is installed keeps working' {
+    $out = (Kiln --json cache clear) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+    if ($out.data.freed_bytes -le 0) { throw "nothing freed: $($out | ConvertTo-Json)" }
+    $left = ((Kiln --json footprint) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data.cache_bytes
+    if ($left -ne 0) { throw "$left bytes left in the cache" }
+    ShopPage
+}
+
 Check 'kiln --json sites: JSON Lines ending in one result, with the sites as data' {
     $lines = @(& $Kiln --json sites)
     if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE`n$($lines -join "`n")" }

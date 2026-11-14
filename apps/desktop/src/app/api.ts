@@ -110,6 +110,14 @@ export interface LogTail {
   reset: boolean;
 }
 
+export interface Footprint {
+  processes: { label: string; count: number; memory_bytes: number; cpu_percent: number }[];
+  memory_bytes: number;
+  folders: { label: string; path: string; bytes: number }[];
+  disk_bytes: number;
+  cache_bytes: number;
+}
+
 export interface ServiceKind {
   kind: string;
   name: string;

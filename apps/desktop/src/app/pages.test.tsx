@@ -118,9 +118,19 @@ describe("Settings", () => {
     answers.login_item = () => "none";
     answers["settings.get"] = () => ({ tld: "test", http: { port: 8080, auto: true }, https: { port: 8443, auto: true }, php_workers: 4 });
     answers["setup.status"] = () => ({ ready: true, web: { installed: true, running: true } });
+    answers["footprint.get"] = () => ({
+      processes: [{ label: "PHP 8.4.27 workers", count: 4, memory_bytes: 90_000_000, cpu_percent: 0.4 }],
+      memory_bytes: 90_000_000,
+      folders: [{ label: "Download cache", path: "C:/k/downloads", bytes: 104_857_600 }],
+      disk_bytes: 104_857_600,
+      cache_bytes: 104_857_600,
+    });
     shell(<Settings setUp={() => {}} />);
     expect(await screen.findByText(/HTTP on 8080, HTTPS on 8443\. Kiln picks them/)).toBeTruthy();
     expect(screen.getByText(".test")).toBeTruthy();
+    expect(await screen.findByText("PHP 8.4.27 workers")).toBeTruthy();
+    expect(screen.getByText("100.0 MB")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear the download cache" })).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "PHP workers" }) as HTMLSelectElement).value).toBe("4");
 
     await userEvent.click(screen.getByRole("button", { name: "Change…" }));

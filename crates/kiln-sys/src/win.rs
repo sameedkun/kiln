@@ -51,6 +51,7 @@ use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
+use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND,
     RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey, RegDeleteKeyValueW, RegDeleteTreeW,
@@ -59,10 +60,10 @@ use windows_sys::Win32::System::Registry::{
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateProcessAsUserW,
-    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+    PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTF_USESTDHANDLES,
+    STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -412,6 +413,43 @@ impl Process {
         Ok(PathBuf::from(OsString::from_wide(&buffer)))
     }
 
+    /// Its memory in use (working set, bytes) and the processor time it has used (kernel plus
+    /// user). Query rights are enough ([`Process::open_for_query`]).
+    pub fn usage(&self) -> io::Result<(u64, Duration)> {
+        // SAFETY: all-zero is a valid PROCESS_MEMORY_COUNTERS apart from cb, set next.
+        let mut memory: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        memory.cb = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS>()).unwrap_or(0);
+        // SAFETY: valid process handle; `memory` is the struct this call expects, with its size.
+        let ok = unsafe { K32GetProcessMemoryInfo(raw(&self.handle), &raw mut memory, memory.cb) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let zero = windows_sys::Win32::Foundation::FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: valid process handle and four valid FILETIME out pointers.
+        let ok = unsafe {
+            GetProcessTimes(
+                raw(&self.handle),
+                &raw mut created,
+                &raw mut exited,
+                &raw mut kernel,
+                &raw mut user,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let ticks = |t: windows_sys::Win32::Foundation::FILETIME| {
+            (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)
+        };
+        // FILETIME counts 100-nanosecond intervals.
+        let cpu = Duration::from_nanos((ticks(kernel) + ticks(user)).saturating_mul(100));
+        Ok((memory.WorkingSetSize as u64, cpu))
+    }
+
     /// Whether the process is still running.
     pub fn is_running(&self) -> io::Result<bool> {
         Ok(self.wait(Duration::ZERO)?.is_none())
@@ -759,6 +797,37 @@ fn extended_tcp_table(family: u32) -> io::Result<Vec<u8>> {
         }
     }
     Err(io::Error::other("the TCP table kept changing size"))
+}
+
+/// Every running process: its ID and its executable's file name (a snapshot; PIDs may be
+/// reused).
+pub fn processes() -> io::Result<Vec<(u32, String)>> {
+    // SAFETY: plain call; INVALID_HANDLE_VALUE is handled below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let snapshot = owned(snapshot);
+    let mut all = Vec::new();
+    // SAFETY: all-zero is a valid PROCESSENTRY32W apart from dwSize, set next.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(0);
+    // SAFETY: valid snapshot handle and entry with dwSize set.
+    let mut ok = unsafe { Process32FirstW(raw(&snapshot), &raw mut entry) };
+    while ok != 0 {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        all.push((
+            entry.th32ProcessID,
+            String::from_utf16_lossy(&entry.szExeFile[..len]),
+        ));
+        // SAFETY: as above.
+        ok = unsafe { Process32NextW(raw(&snapshot), &raw mut entry) };
+    }
+    Ok(all)
 }
 
 /// Each running process's parent, by process ID (a snapshot; PIDs may be reused).
@@ -1530,6 +1599,25 @@ mod tests {
         assert_eq!(parents.get(&child.id()), Some(&std::process::id()));
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    #[test]
+    fn we_are_in_the_process_list_with_our_memory_and_time() {
+        let me = std::process::id();
+        let all = processes().unwrap();
+        let name = std::env::current_exe().unwrap();
+        let name = name.file_name().unwrap().to_string_lossy();
+        assert!(
+            all.iter()
+                .any(|(pid, exe)| *pid == me && exe.eq_ignore_ascii_case(&name))
+        );
+        let (memory, cpu) = Process::open_for_query(me)
+            .unwrap()
+            .unwrap()
+            .usage()
+            .unwrap();
+        assert!(memory > 1 << 20, "{memory}");
+        assert!(cpu < Duration::from_secs(3600));
     }
 
     #[test]

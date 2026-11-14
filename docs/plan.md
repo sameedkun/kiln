@@ -232,7 +232,7 @@ request (2026-11-12).
 | P4-13 | Tests on CI: frontend tests, API contract tests against a real `kilnd`, end-to-end runs of the built app (WebDriver) on the Windows runner | P4-03 | Runs with every task |
 | P4-14 | The Phase 4 exit run: CI plus a by-hand check on a developer machine | all | |
 | P4-15 | The screens: every page drawn in the design gallery from the base components, with sample data that drafts the API's shapes | P4-02 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); **Done** 2026-11-12 |
-| P4-16 | Kiln's footprint: memory and CPU per Kiln process, disk use by folder, clearing the download cache | P4-03 | ADR 0052 |
+| P4-16 | Kiln's footprint: memory and CPU per Kiln process, disk use by folder, clearing the download cache | P4-03 | ADR 0052; [ADR 0063](adr/0063-footprint.md); built |
 | P4-17 | Updates: PHP patch updates shown where they apply; checking GitHub for a new Kiln, off by default | P4-03 | ADR 0052 |
 | P4-18 | Request timing per site from Caddy's access log: median, slowest 5%, counts, failures, slowest requests; kept on the PC | P4-03 | ADR 0052; its own ADR first |
 | P4-19 | An MCP server for AI assistants (`kiln mcp`, from Phase 5): reads sites, services, logs and history; changes through the CLI, in History; off by default | P4-01 | ADR 0052; its own ADR first |

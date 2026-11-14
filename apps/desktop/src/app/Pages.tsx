@@ -4,10 +4,10 @@ import { Dialog } from "../components/Dialog";
 import { Select } from "../components/Select";
 import { TextField } from "../components/TextField";
 import { Page } from "../components/Page";
-import { Section } from "../components/Rows";
+import { Row, Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
-import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type KilnSettings, type SetupStatus } from "./api";
+import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type KilnSettings, type SetupStatus } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -80,6 +80,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
         </SettingRow>
       </Section>
       <KilnSection />
+      <FootprintSection />
     </Page>
   );
 }
@@ -181,5 +182,72 @@ function PortsDialog({ settings, running, onClose, apply }: { settings: KilnSett
         </p>
       </div>
     </Dialog>
+  );
+}
+
+/** Bytes in words: 85.9 MB, 1.2 GB. */
+export function size(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+// What Kiln uses on this PC (ADR 0063): its processes' memory and CPU, its folders on disk,
+// and the one part that is safe to clear.
+function FootprintSection() {
+  const footprint = useRead<Footprint>("footprint.get");
+  const { ask } = useChanges();
+  const f = footprint.data;
+  return (
+    <>
+      <Section title="Memory and CPU" meta={f ? `${size(f.memory_bytes)} together` : "measuring…"} action={<Button variant="quiet" size="sm" onClick={footprint.reload}>Measure again</Button>}>
+        {f && f.processes.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">No Kiln process is running.</li>}
+        {f?.processes.map((p) => (
+          <Row key={p.label} columns="minmax(200px,1fr) 110px 90px">
+            <span className="text-[13px]">
+              {p.label}
+              {p.count > 1 && <span className="figures ml-1.5 text-text-3">×{p.count}</span>}
+            </span>
+            <span className="figures text-right text-[12.5px]">{size(p.memory_bytes)}</span>
+            <span className="figures text-right text-[12.5px] text-text-2">{p.cpu_percent.toFixed(1)}% CPU</span>
+          </Row>
+        ))}
+      </Section>
+      <Section
+        title="On disk"
+        meta={f ? `${size(f.disk_bytes)} together` : undefined}
+        action={
+          f && f.cache_bytes > 0 ? (
+            <Button
+              variant="quiet"
+              size="sm"
+              onClick={() =>
+                ask(
+                  "Clear the download cache?",
+                  `It holds verified copies of what Kiln has already installed (${size(f.cache_bytes)}). Nothing installed changes; Kiln downloads again what it needs later.`,
+                  "Clear it",
+                  ["cache", "clear"],
+                  "The download cache is cleared.",
+                )
+              }
+            >
+              Clear the download cache
+            </Button>
+          ) : undefined
+        }
+      >
+        {f?.folders.map((d) => (
+          <Row key={d.label} columns="minmax(200px,1fr) 110px">
+            <span className="min-w-0">
+              <span className="block text-[13px]">{d.label}</span>
+              <span className="block truncate font-mono text-[11.5px] text-text-3" title={d.path}>
+                {d.path}
+              </span>
+            </span>
+            <span className="figures text-right text-[12.5px]">{size(d.bytes)}</span>
+          </Row>
+        ))}
+      </Section>
+    </>
   );
 }
