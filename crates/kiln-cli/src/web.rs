@@ -853,27 +853,40 @@ pub fn settings() -> Result<(), String> {
     Ok(())
 }
 
-/// The framework's version in a project (ADR 0055 §1): its package in `composer.lock`, or
-/// `WordPress`' own version file.
-fn framework_version(driver: kiln_sites::Driver, project: &Path) -> Option<String> {
+/// The framework a project is built on, by name, and its version when Kiln can read it (ADR
+/// 0055 §1, P4C-04): the driver, refined where one driver serves several (Statamic is a
+/// Laravel app); versions come from `composer.lock`, or the version file of `WordPress` itself.
+fn framework_of(driver: kiln_sites::Driver, project: &Path) -> (&'static str, Option<String>) {
     use kiln_sites::Driver;
-    let package = match driver {
-        Driver::Laravel => "laravel/framework",
-        Driver::Symfony => "symfony/framework-bundle",
-        Driver::Drupal => "drupal/core",
-        Driver::Craft => "craftcms/cms",
-        Driver::WordPressBedrock => "roots/wordpress",
-        Driver::WordPress => return wordpress_version(project),
-        Driver::PhpPublic | Driver::PhpWeb | Driver::Php | Driver::Static => return None,
+    let lock: Option<serde_json::Value> = std::fs::read_to_string(project.join("composer.lock"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let package = |name: &str| -> Option<String> {
+        lock.as_ref()?["packages"]
+            .as_array()?
+            .iter()
+            .find(|p| p["name"] == name)?["version"]
+            .as_str()
+            .map(|v| v.trim_start_matches('v').to_owned())
     };
-    let lock = std::fs::read_to_string(project.join("composer.lock")).ok()?;
-    let lock: serde_json::Value = serde_json::from_str(&lock).ok()?;
-    lock["packages"]
-        .as_array()?
-        .iter()
-        .find(|p| p["name"] == package)?["version"]
-        .as_str()
-        .map(|v| v.trim_start_matches('v').to_owned())
+    match driver {
+        Driver::Laravel => match package("statamic/cms") {
+            Some(version) => ("statamic", Some(version)),
+            None => ("laravel", package("laravel/framework")),
+        },
+        Driver::Symfony => ("symfony", package("symfony/framework-bundle")),
+        Driver::Drupal => ("drupal", package("drupal/core")),
+        Driver::Craft => ("craft", package("craftcms/cms")),
+        Driver::WordPressBedrock => ("wordpress-bedrock", package("roots/wordpress")),
+        Driver::WordPress => ("wordpress", wordpress_version(project)),
+        Driver::PhpPublic | Driver::PhpWeb | Driver::Php => ("php", None),
+        Driver::Static => ("static", None),
+    }
+}
+
+/// The framework's version in a project, as [`framework_of`] reads it.
+fn framework_version(driver: kiln_sites::Driver, project: &Path) -> Option<String> {
+    framework_of(driver, project).1
 }
 
 /// `$wp_version = '6.6.2';` in `wp-includes/version.php`.
@@ -941,6 +954,7 @@ fn sites_data(
                 "php": php,
                 "in_hosts": listed(host),
                 "project": site.project,
+                "framework": framework_of(site.driver, &site.project).0,
                 "framework_version": framework_version(site.driver, &site.project),
                 "node": node_json(&kiln_runtime::node::node_for_dir(&nodes, default_node.as_deref(), &site.project)),
             })
@@ -1264,6 +1278,22 @@ mod framework_tests {
         assert_eq!(
             framework_version(kiln_sites::Driver::Static, dir.path()),
             None
+        );
+    }
+
+    #[test]
+    fn a_statamic_site_is_named_as_statamic() {
+        let dir = project(&[(
+            "composer.lock",
+            r#"{"packages":[{"name":"laravel/framework","version":"v12.38.1"},{"name":"statamic/cms","version":"v5.70.0"}]}"#,
+        )]);
+        assert_eq!(
+            framework_of(kiln_sites::Driver::Laravel, dir.path()),
+            ("statamic", Some("5.70.0".to_owned()))
+        );
+        assert_eq!(
+            framework_of(kiln_sites::Driver::Php, dir.path()),
+            ("php", None)
         );
     }
 

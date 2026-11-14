@@ -14,7 +14,8 @@ import { call, openFolder, type EnvShow, type Instance, type LogSources, type Re
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
-import { framework } from "./SitesPage";
+import { framework, frameworkId } from "./SitesPage";
+import { FrameworkMark } from "../components/FrameworkMark";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
 
@@ -76,7 +77,12 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
     <Page
       title={site.host}
       leading={back}
-      after={<Tag>{framework(site)}</Tag>}
+      after={
+        <>
+          <FrameworkMark framework={frameworkId(site)} label={framework(site)} />
+          <Tag>{framework(site)}</Tag>
+        </>
+      }
       actions={
         <>
           <Button variant="quiet" aria-label="Open the folder" title="Open the folder" icon={<Folder16Regular />} onClick={() => openFolder(site.host)} />

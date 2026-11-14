@@ -1,6 +1,7 @@
 import { Add16Regular, Folder16Regular, Globe20Regular, Link16Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 import { Button } from "../../components/Button";
+import { FrameworkMark } from "../../components/FrameworkMark";
 import { Menu } from "../../components/Menu";
 import { Page } from "../../components/Page";
 import { Detail, Row, RowName, Section } from "../../components/Rows";
@@ -43,7 +44,7 @@ export function Sites({ go }: { go: Go }) {
         <Section key={g.title} title={g.title} meta={`${g.sites.length} · ${g.meta}`}>
           {g.sites.map((s) => (
             <Row key={s.name} columns={cols} actions={<SiteActions name={s.name} folder={Boolean(s.folder)} />}>
-              <RowName before={s.secure ? lock : noLock} sub={s.folder ?? (s.proxy ? `→ ${s.proxy}` : s.note)} mono={Boolean(s.folder ?? s.proxy)}>
+              <RowName before={<>{s.secure ? lock : noLock}{s.framework && <FrameworkMark framework={s.framework.split(" ")[0].toLowerCase()} label={s.framework} />}</>} sub={s.folder ?? (s.proxy ? `→ ${s.proxy}` : s.note)} mono={Boolean(s.folder ?? s.proxy)}>
                 {s.folder ? (
                   <button type="button" className="hover:underline" onClick={() => go(`site:${s.name}`)}>
                     {s.name}

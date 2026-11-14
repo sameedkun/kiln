@@ -1,6 +1,7 @@
 import { Add16Regular, Delete16Regular, Folder16Regular, Globe20Regular, Link16Regular, LockClosed12Regular, MoreHorizontal16Regular, Open16Regular } from "@fluentui/react-icons";
 import { useState, type ReactNode } from "react";
 import { Button } from "../components/Button";
+import { FrameworkMark } from "../components/FrameworkMark";
 import { Dialog } from "../components/Dialog";
 import { Menu } from "../components/Menu";
 import { Page } from "../components/Page";
@@ -14,18 +15,22 @@ import { useRead } from "./hooks";
 
 const cols = "minmax(200px,1.4fr) 150px 80px 80px minmax(140px,1fr) 112px";
 
+/** The framework's id: the CLI's own name for it, or the driver's for an older `kiln`. */
+export const frameworkId = (site: Site) => site.framework ?? site.driver;
+
 /** A framework as a word, with its version when Kiln could read it (ADR 0051 §4). */
 export function framework(site: Site): string {
   const names: Record<string, string> = {
     laravel: "Laravel",
+    statamic: "Statamic",
     symfony: "Symfony",
     drupal: "Drupal",
     craft: "Craft",
     "wordpress-bedrock": "Bedrock",
     wordpress: "WordPress",
-    static: "Static",
+    static: "Static HTML",
   };
-  const name = names[site.driver] ?? "PHP";
+  const name = names[frameworkId(site)] ?? "PHP";
   return site.framework_version ? `${name} ${site.framework_version.split(".").slice(0, 2).join(".")}` : name;
 }
 
@@ -92,7 +97,16 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
         </>
       }
     >
-      <RowName before={lockIcon(s.secure)} sub={s.project} mono>
+      <RowName
+        before={
+          <>
+            {lockIcon(s.secure)}
+            <FrameworkMark framework={frameworkId(s)} label={framework(s)} />
+          </>
+        }
+        sub={s.project}
+        mono
+      >
         <button type="button" className="hover:underline" onClick={() => go(`site:${s.host}`)}>
           {s.host}
         </button>

@@ -21,6 +21,8 @@ export interface Site {
   in_hosts: boolean;
   /** The project's folder (ADR 0055 §1). */
   project: string;
+  /** What it's built on (P4C-04): `laravel`, `statamic`, `symfony`, … `php`, `static`. */
+  framework?: string;
   framework_version: string | null;
   node: { version: string | null; asked_by: string | null; asks_for: string | null; fell_back: boolean };
 }
