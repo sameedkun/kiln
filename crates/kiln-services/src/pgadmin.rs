@@ -252,13 +252,13 @@ mod tests {
         assert!(text.contains("else:\n    if os.path.isfile(servers):\n        done = "));
         let launch = Pgadmin.launch(&dirs, &BTreeMap::new());
         assert_eq!(launch.args, [dirs.config().to_string_lossy().into_owned()]);
-        assert!(
-            launch
-                .program
-                .ends_with("pgAdmin 4/python/kiln-pgadmin.exe")
-                || launch
-                    .program
-                    .ends_with("pgAdmin 4\\python\\kiln-pgadmin.exe")
+        // Beside python.exe, whatever the OS's separator and executable suffix.
+        assert_eq!(
+            launch.program,
+            dirs.bin
+                .join("pgAdmin 4")
+                .join("python")
+                .join(format!("kiln-pgadmin{EXE_SUFFIX}"))
         );
     }
 
