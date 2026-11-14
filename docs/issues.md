@@ -1380,3 +1380,17 @@ commits and PRs.
   waits for that process to end, printing its parent, command line and both logs if it
   doesn't; the reboot check prints the logs when the services don't come back. The fix
   follows from what they show.
+
+### I-97: Several `kiln` processes setting up a fresh state database at once (fixed)
+
+- **Seen:** 2026-11-14, on CI, in the built app's end-to-end run: on a fresh PC the app's
+  first reads start several `kiln --json` processes together, and Home showed "state
+  database error: table settings already exists" instead of the onboarding. It had passed
+  the run before by luck.
+- **Why:** the schema version was read outside the migration's transaction, so two processes
+  both saw version 0 and both created the tables. A test opening one fresh file from six
+  threads also met "database is locked" while they switched it to WAL, which SQLite can
+  return without waiting.
+- **Fix:** each migration step takes the write lock first (`BEGIN IMMEDIATE`) and reads the
+  version under it; the setup (WAL, then the migrations) is tried again for up to 10 seconds
+  on "database is locked". The test now opens a fresh file from six threads ten times.

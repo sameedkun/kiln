@@ -118,10 +118,28 @@ impl StateStore {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // WAL keeps readers (CLI) and the writer (daemon) from blocking each other; FULL
         // fsyncs every commit, so an acknowledged journal entry is durable.
-        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        schema::migrate(&mut conn, &location)?;
+        // Several processes setting up a fresh file at once can get "database is locked" here
+        // without SQLite's busy wait (switching to WAL, upgrading a read lock), so the setup
+        // is tried again for a few seconds; each step is safe to repeat.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let setup = (|| -> Result<(), StateError> {
+                conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+                conn.pragma_update(None, "synchronous", "FULL")?;
+                conn.pragma_update(None, "foreign_keys", "ON")?;
+                schema::migrate(&mut conn, &location)
+            })();
+            match setup {
+                Ok(()) => break,
+                Err(StateError::Sqlite(e))
+                    if e.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
         Ok(Self { conn, location })
     }
 
@@ -314,6 +332,23 @@ impl Journal for StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_processes_opening_a_fresh_store_at_once_all_succeed() {
+        for _ in 0..10 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("state.db");
+            let openers: Vec<_> = (0..6)
+                .map(|_| {
+                    let path = path.clone();
+                    std::thread::spawn(move || StateStore::open(&path).map(|_| ()))
+                })
+                .collect();
+            for opener in openers {
+                opener.join().unwrap().unwrap();
+            }
+        }
+    }
     use kiln_ops::testing::{check_journal_contract, check_journal_persistence, sample_entry};
 
     #[test]

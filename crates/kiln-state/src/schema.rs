@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 use crate::store::StateError;
 
@@ -84,27 +84,25 @@ const MIGRATIONS: &[&str] = &[
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
 pub(crate) fn migrate(conn: &mut Connection, location: &str) -> Result<(), StateError> {
-    let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if current > SCHEMA_VERSION {
-        return Err(StateError::TooNew {
-            location: location.to_owned(),
-            found: current,
-            supported: SCHEMA_VERSION,
-        });
-    }
-    for (index, sql) in MIGRATIONS
-        .iter()
-        .enumerate()
-        .skip(usize::try_from(current).unwrap_or(0))
-    {
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
-        tx.pragma_update(
-            None,
-            "user_version",
-            i64::try_from(index + 1).unwrap_or(i64::MAX),
-        )?;
+    // One step at a time, each in a transaction that takes the write lock first and reads the
+    // version under it: on a fresh PC the app starts several `kiln` processes at once,
+    // and without the lock two of them both saw version 0 and both created the tables
+    // ("table settings already exists").
+    loop {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current > SCHEMA_VERSION {
+            return Err(StateError::TooNew {
+                location: location.to_owned(),
+                found: current,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        if current == SCHEMA_VERSION {
+            return Ok(());
+        }
+        tx.execute_batch(MIGRATIONS[usize::try_from(current).unwrap_or(0)])?;
+        tx.pragma_update(None, "user_version", current + 1)?;
         tx.commit()?;
     }
-    Ok(())
 }
