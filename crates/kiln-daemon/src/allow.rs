@@ -60,6 +60,7 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["php", "workers"], false),
     (&["php", "ext", "on"], false),
     (&["php", "ext", "off"], false),
+    (&["php", "ext", "add"], false),
     (&["php", "xdebug", "on"], false),
     (&["php", "xdebug", "off"], false),
     (&["node", "install"], false),

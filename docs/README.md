@@ -82,6 +82,7 @@ working name). Start here.
 | [0064](adr/0064-updates.md) | Updates: `kiln updates` (a read, `updates.check`) compares installed PHP with windows.php.net's newest patches, and Kiln with its newest GitHub release only when `kiln updates check-kiln on` (off by default); no self-update, the releases page opens | accepted (Phase 4) |
 | [0065](adr/0065-request-timing.md) | Request timing: Caddy writes a JSON access log of its own (credentials redacted by Caddy, kept on the PC); `kiln requests [site]` (a read, `requests.get`) gives count, failures, median, slowest 5% and the slowest requests per site; a site's Requests tab | accepted (Phase 4) |
 | [0066](adr/0066-mcp-server.md) | An MCP server for AI assistants: `kiln mcp` on standard input and output; read tools through `kiln --json` (sites, services, logs, requests, history, doctor); service start/stop/restart and undo only after `kiln mcp allow-changes on`; arguments checked; registered with no assistant | accepted (Phase 4) |
+| [0067](adr/0067-pecl-extensions.md) | PECL extensions: phpredis 6.3.0's Windows builds pinned by SHA-256 computed on a runner (none are published) and checked again by CI; `kiln php ext add redis` places the DLL in a PHP's `ext` folder and turns it on (journaled); carried over by `php update` | accepted (Phase 4) |
 
 ## Conventions
 

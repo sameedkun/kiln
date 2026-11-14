@@ -250,10 +250,12 @@ pub fn serve() -> Result<(), String> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        // A byte-order mark, as Windows PowerShell puts before what it pipes in UTF-8.
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
+        let reply = match serde_json::from_str::<Value>(line) {
             Ok(message) => handle(&message, changes, &mut run_kiln),
             Err(e) => Some(json!({
                 "jsonrpc": "2.0", "id": null,

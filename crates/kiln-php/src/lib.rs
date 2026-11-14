@@ -13,6 +13,7 @@ pub mod index;
 pub mod ini;
 pub mod install;
 pub mod linux;
+pub mod pecl;
 pub mod xdebug;
 
 pub use index::{INDEX_LIMIT, INDEX_URL, IndexError, PhpRelease};

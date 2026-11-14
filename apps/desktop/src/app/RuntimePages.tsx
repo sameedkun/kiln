@@ -251,6 +251,18 @@ function Extensions({ php, lines, onChoose }: { php: string; lines: string[]; on
           Built in, always on: <span className="font-mono">{ext.data.built_in.join(", ")}</span>
         </li>
       )}
+      {/* PECL extensions Kiln pins (ADR 0067): added once, then a switch like the others. */}
+      {ext.data && !ext.data.static_build && !ext.data.toggles.some((t) => t.name === "redis") && (
+        <li className="flex items-center justify-between gap-4 border-t border-line px-1 py-3">
+          <span className="text-[13px] text-text-2">
+            <span className="font-medium text-text">phpredis</span>: a fast Redis client from PECL, checked against Kiln's pin. Laravel then uses{" "}
+            <code className="font-mono text-xs">REDIS_CLIENT=phpredis</code>.
+          </span>
+          <Button size="sm" onClick={() => run(["php", "ext", "add", "redis", "--php", php], `phpredis is on in PHP ${php}.`)}>
+            Add phpredis
+          </Button>
+        </li>
+      )}
     </Section>
   );
 }

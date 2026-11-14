@@ -664,6 +664,28 @@ Check 'the dev processes are removed; the project stays' {
     if (-not (Test-Path (Join-Path $shop 'artisan'))) { throw 'the project lost its artisan' }
 }
 
+Say '== PECL extensions (ADR 0067)'
+Check 'every pinned PECL build matches its SHA-256 on downloads.php.net' {
+    $pins = Get-Content (Join-Path $PSScriptRoot '..\..\crates\kiln-php\src\pecl.rs') -Raw
+    $found = [regex]::Matches($pins, 'archive: "(php_redis-([0-9.]+)-[^"]+)",\s*sha256: "([0-9a-f]{64})"')
+    if ($found.Count -lt 4) { throw "found $($found.Count) pins" }
+    foreach ($pin in $found) {
+        $file = Join-Path $dir $pin.Groups[1].Value
+        curl.exe -fsSL --max-time 120 -o $file "https://downloads.php.net/~windows/pecl/releases/redis/$($pin.Groups[2].Value)/$($pin.Groups[1].Value)"
+        if ($LASTEXITCODE -ne 0) { throw "couldn't download $($pin.Groups[1].Value)" }
+        $sum = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+        if ($sum -ne $pin.Groups[3].Value) { throw "$($pin.Groups[1].Value): $sum, pinned $($pin.Groups[3].Value)" }
+    }
+}
+Check 'kiln php ext add redis: checked, placed, turned on; phpredis talks to Kiln''s Redis' {
+    Expect 'redis is now on' (Kiln php ext add redis)
+    $port = ((& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.name -eq 'redis-8.10' }).main_port
+    $script = Join-Path $dir 'phpredis.php'
+    Set-Content $script -Encoding ascii -Value "<?php `$r = new Redis(); `$r->connect('127.0.0.1', $port); `$r->set('kiln-phpredis', 'ok'); echo `$r->get('kiln-phpredis');"
+    Expect 'ok' (Php $script)
+    Expect 'redis' ((Php -m) -join "`n")
+}
+
 Say '== Xdebug on demand (ADR 0061)'
 Check 'every pinned Xdebug build matches its SHA-256 on xdebug.org' {
     $pins = Get-Content (Join-Path $PSScriptRoot '..\..\crates\kiln-php\src\xdebug.rs') -Raw

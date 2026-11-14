@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-19 built (ADRs 0058–0066); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) waits for the user's decision; the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1487,7 +1487,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-09 | Dev processes (queue, scheduler, Vite) | built | [ADR 0060](adr/0060-dev-processes.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-10 | Xdebug | built | [ADR 0061](adr/0061-xdebug.md); checked locally; the user's look comes with the rest of Phase 4 |
 | P4-11 | Dump capture | built | [ADR 0062](adr/0062-dump-capture.md); checked locally; the Scenario is the spike's evidence |
-| P4-12 | WhoDB | planned | spike first: its server binds every interface |
+| P4-12 | WhoDB | waiting | spike first: its server binds every interface |
 | P4-13 | Tests on CI | planned | |
 | P4-14 | Phase 4 exit run | planned | |
 | P4-15 | The screens | **done** 2026-11-12 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); every page in the gallery, checked with axe in light and dark |
@@ -1495,7 +1495,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-17 | Updates | built | [ADR 0064](adr/0064-updates.md); checked locally |
 | P4-18 | Request timing | built | [ADR 0065](adr/0065-request-timing.md); checked locally and against a real Caddy |
 | P4-19 | MCP server | built | [ADR 0066](adr/0066-mcp-server.md); checked locally with a piped session |
-| P4-20 | PECL extensions (phpredis first) | planned | spike first: verified Windows builds for PHP 8.4 and 8.5 |
+| P4-20 | PECL extensions (phpredis first) | built | [ADR 0067](adr/0067-pecl-extensions.md); pins computed on a runner, checked by the Scenario |
 
 ## Phase 3: services, Windows first (done)
 
@@ -1852,6 +1852,8 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4-17 built** ([ADR 0064](adr/0064-updates.md)): `kiln updates` (and `updates.check`) lists each installed PHP against windows.php.net's newest patch, and Kiln against its newest GitHub release only when `kiln updates check-kiln on` (off by default). The PHP page tags versions with a patch available; Settings has the GitHub switch and opens the releases page (a fixed address). |
 | 2026-11-14 | **P4-18 built** ([ADR 0065](adr/0065-request-timing.md)): Caddy writes an access log (JSON, `access.log`, rolled like `caddy.log`, which no longer gets those lines); `kiln requests [site]` (and `requests.get`, which takes a site's name only) gives each site's count, failures, median, slowest 5% and ten slowest requests. A site's page has a Requests tab; the Logs page lists "Web server (requests)". The real-Caddy test now checks a request lands in the access log with its host, status and duration. |
 | 2026-11-14 | **P4-19 built** ([ADR 0066](adr/0066-mcp-server.md)): `kiln mcp` is an MCP server on standard input and output (`initialize`, `ping`, `tools/list`, `tools/call`). Its tools read through `kiln --json`: sites, services, logs, request timing, history, the doctor. With `kiln mcp allow-changes on` (off by default) it also offers starting, stopping and restarting services and undoing an operation, each the same command the user would run, with its arguments checked so none becomes an option. It doesn't hold Kiln's change lock while it serves. Settings has an AI assistants section with the command to add and the switch. The Scenario drives a session: reads, a refused restart, then an allowed one. |
+| 2026-11-14 | **I-96 seen once**: in one of the two Scenario jobs for P4-18, Mailpit still answered after its supervisor was killed, and the services then didn't come back; the other job and every other run passed. The crash and reboot checks now print which process held the port and both logs, for the next time. |
+| 2026-11-14 | **P4-20 built** ([ADR 0067](adr/0067-pecl-extensions.md)): phpredis 6.3.0's Windows builds for PHP 8.2 to 8.5 come from downloads.php.net, which publishes no checksums, so a new manual workflow ("Pin downloads") computed their SHA-256 on a fresh runner, and the Scenario checks them again. `kiln php ext add redis` downloads and checks the build, puts `php_redis.dll` in that PHP's `ext` folder and turns it on (journaled, undoable); `php update` carries it over. The PHP page offers "Add phpredis". |
 
 ## How to update this file
 

@@ -519,6 +519,7 @@ pub fn update(minor: Option<&str>) -> Result<(), String> {
             installed.iter().find(|r| r.version == current),
             now.iter().find(|r| r.version == *newest),
         ) {
+            crate::pecl::carry_files(old, new);
             crate::ext::carry_over(old, new)?;
         }
         store

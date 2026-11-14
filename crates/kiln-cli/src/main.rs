@@ -26,6 +26,7 @@ mod logs;
 mod mcp;
 mod new;
 mod node;
+mod pecl;
 mod php;
 mod pool;
 mod project;
@@ -587,6 +588,13 @@ enum XdebugAction {
 
 #[derive(Debug, Subcommand)]
 enum ExtAction {
+    /// Add a PECL extension Kiln pins (redis), checked, and turn it on (ADR 0067).
+    Add {
+        name: String,
+        /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
+        #[arg(long)]
+        php: Option<String>,
+    },
     /// Show which extensions are on, off or built in.
     List {
         /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
@@ -1000,6 +1008,7 @@ fn run_php(action: PhpAction) -> Result<(), String> {
             ExtAction::List { php } => ext::list(php.as_deref()),
             ExtAction::On { names, php } => ext::toggle(&names, php.as_deref(), true),
             ExtAction::Off { names, php } => ext::toggle(&names, php.as_deref(), false),
+            ExtAction::Add { name, php } => pecl::add(&name, php.as_deref()),
         },
     }
 }
