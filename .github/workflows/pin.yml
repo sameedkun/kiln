@@ -1,0 +1,30 @@
+# Pinning a download (ADR 0067): run by hand with the URLs of a release that publishes no
+# checksums; prints each file's SHA-256 and size, computed on a fresh runner, for the pins in
+# the code. CI then downloads the pinned files again and checks them.
+name: Pin downloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: HTTPS URLs, separated by spaces
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  hashes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SHA-256 of each file
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          set -eu
+          for url in $URLS; do
+            case "$url" in https://*) ;; *) echo "::error::not HTTPS: $url"; exit 1 ;; esac
+            curl -fsSL --max-time 300 -o file "$url"
+            echo "$(sha256sum file | cut -d' ' -f1)  $(stat -c %s file)  $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            rm file
+          done
