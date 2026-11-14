@@ -88,6 +88,7 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
         const end = await runJob(args, "apply", (e) => {
           if (e.type === "progress") say(progressText(e));
           else if (e.type === "step" && e.text) say(`${e.text}…`);
+          else if (e.type === "note" && e.text?.trim()) say(e.text.trim().length > 90 ? `${e.text.trim().slice(0, 89)}…` : e.text.trim());
           onLine?.(e);
         });
         if (end.ok) {

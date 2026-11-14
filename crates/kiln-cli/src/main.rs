@@ -203,6 +203,10 @@ enum Command {
     New {
         /// Project and site name, e.g. shop (served as shop.test).
         name: String,
+        /// What to start from: laravel, react, vue, livewire (Laravel's starter kits), symfony,
+        /// bedrock (`WordPress`) or empty.
+        #[arg(long, default_value = "laravel")]
+        template: String,
         /// Folder to create it in (default: the current folder).
         #[arg(long)]
         path: Option<PathBuf>,
@@ -1203,11 +1207,19 @@ fn run(command: Command) -> Result<(), String> {
         Command::Web { action } => run_web(action),
         Command::New {
             name,
+            template,
             path,
             php,
             secure,
             db,
-        } => new::new(&name, path, php.as_deref(), secure, db.as_deref()),
+        } => new::new(
+            &name,
+            &template,
+            path,
+            php.as_deref(),
+            secure,
+            db.as_deref(),
+        ),
         Command::Import {
             from: ImportFrom::Herd { path, force },
         } => project::import_herd(path, force),

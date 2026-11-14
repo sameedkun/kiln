@@ -270,7 +270,7 @@ then new features.
 | P4C-03 | A site's dev processes in its own page: each process's log in a tab beside the app's logs; several queue workers per site | [ADR 0069](adr/0069-site-processes-and-logs.md), built |
 | P4C-04 | Frameworks on the sites list: Laravel, Symfony, WordPress, Drupal, Statamic, Craft, plain PHP, static HTML, with icons | built: Kiln's own monogram marks, not logos |
 | P4C-05 | A site's overview with everything about it: requests over time, response codes, timing, its services, processes, PHP, Git branch | built |
-| P4C-06 | New site from the app: a Laravel app with or without a starter kit (React, Vue, Livewire), Symfony, WordPress, an empty folder | through Composer and the Laravel installer Kiln already ships |
+| P4C-06 | New site from the app: a Laravel app with or without a starter kit (React, Vue, Livewire), Symfony, WordPress, an empty folder | through Composer; [ADR 0070](adr/0070-new-site-templates.md), built |
 | P4C-07 | pgAdmin on request ("Add pgAdmin?" on PostgreSQL's page), with Kiln's instances already connected; never by default | EDB's zip already holds pgAdmin 4, which Kiln skips today (ADR 0040) |
 | P4C-08 | phpredis with every new PHP by default, as Herd does; amends ADR 0067 | |
 | P4C-09 | Stripe: `stripe listen` as a site's process, forwarding to the site; the user logs in to Stripe themselves; the webhook secret stays out of logs and History | |

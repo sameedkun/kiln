@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-05 built (ADRs 0068, 0069); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-06 built (ADRs 0068 to 0070); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1509,7 +1509,7 @@ Plan: [plan.md, Phase 4c](plan.md#phase-4c-a-richer-app-windows). Asked for by t
 | P4C-03 | A site's dev processes and their logs in its page; several queue workers | built | [ADR 0069](adr/0069-site-processes-and-logs.md); the Scenario runs two queue workers for one site |
 | P4C-04 | Frameworks on the sites list | built | no ADR: an addition to ADR 0055 §1; marks checked with axe in the gallery, light and dark |
 | P4C-05 | A site's overview | built | additions to ADR 0065's figures; render-tested; the Scenario checks the hours against a real Caddy |
-| P4C-06 | New site from the app | planned | |
+| P4C-06 | New site from the app | built | [ADR 0070](adr/0070-new-site-templates.md); the Scenario makes and serves an empty site; the starter kits wait for the user's run (they download from Packagist and npm) |
 | P4C-07 | pgAdmin on request | planned | |
 | P4C-08 | phpredis with every new PHP | planned | |
 | P4C-09 | Stripe listener | planned | |
@@ -1884,6 +1884,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4C-03 built** ([ADR 0069](adr/0069-site-processes-and-logs.md)): a site's Logs tab chooses between "App" (its `storage/logs` files) and each of its processes ("Queue worker", "Queue worker 2", "Scheduler", "Vite", "Dumps"); a process's Log button opens that tab rather than the Logs page. The queue worker's row shows how many workers run, with − and + (up to 8): each extra worker is a queue instance of the same project named `queue-<site>-2`, `-3` and so on, its own program in the supervisor with its own log; Start and Stop act on all of them. |
 | 2026-11-14 | **P4C-04 built**: `kiln --json sites` names each site's framework (`framework`): the driver, refined where one serves several (a Laravel app built on Statamic is `statamic`, with Statamic's version); the app shows a mark beside each site and on its page: Kiln's own two letters on a tint per framework (Lv, St, Sf, Dr, Cr, Bd, Wp, Php, Ht for static HTML), never a framework's logo, which is its owner's mark. The Scenario's queue check now counts `queue:listen` processes as an array: one process came back as a single object, which made the earlier failure look like a lost worker. |
 | 2026-11-14 | **P4C-05 built**: a site's Overview opens with "At a glance": the last 24 hours' requests, median, slowest 5% and failures; a chart of requests by hour with failing hours in red; how many answered 2xx, 3xx, 4xx and 5xx; its Git branch; the services it uses and how many of its processes run. `kiln requests` now gives each site `hours`, `failing_hours` and `statuses`; `kiln --json sites` gives `git_branch`, read from `.git/HEAD` (a worktree's `.git` file is followed; a detached HEAD shows its commit) without running Git. |
+| 2026-11-14 | **P4C-06 built** ([ADR 0070](adr/0070-new-site-templates.md)): `kiln new <name> --template laravel|react|vue|livewire|symfony|bedrock|empty`; the packages are a fixed table, the starter kits' front end is built once with Kiln's Node (`npm install`, `npm run build` through `npm-cli.js`), `--db` is refused for non-Laravel templates before anything is made, and an empty site is a folder with a first page. The app's "Add a site" menu has "New site from a template…" (name, template with what each gives, folder defaulting to a parked one, PHP, database for Laravel, HTTPS); the working toast now also follows a command's own lines, such as Composer's. |
 
 ## How to update this file
 

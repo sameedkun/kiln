@@ -12,6 +12,7 @@ import { TextField } from "../components/TextField";
 import { openFolder, pickFolder, proxyTarget, siteName, type Proxy, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
+import { NewSiteDialog } from "./NewSiteDialog";
 
 const cols = "minmax(200px,1.4fr) 150px 80px 80px minmax(140px,1fr) 112px";
 
@@ -47,7 +48,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
   const sites = useRead<SitesList>("sites.list");
   const { run, ask, open } = useChanges();
   const [filter, setFilter] = useState("");
-  const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "proxy" }>(null);
+  const [adding, setAdding] = useState<null | { kind: "link"; folder: string } | { kind: "proxy" } | { kind: "new" }>(null);
 
   const match = (text: string) => text.toLowerCase().includes(filter.trim().toLowerCase());
   const shown = (sites.data?.sites ?? []).filter((s) => match(s.host) || match(framework(s)));
@@ -167,7 +168,8 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
             </Button>
           )}
           items={[
-            { label: "Link a folder…", icon: <Link16Regular />, onSelect: link },
+            { label: "New site from a template…", icon: <Add16Regular />, onSelect: () => setAdding({ kind: "new" }) },
+            { label: "Link a folder…", icon: <Link16Regular />, groupStart: true, onSelect: link },
             { label: "Park a folder of projects…", icon: <Folder16Regular />, onSelect: park },
             { label: "Proxy to a port…", icon: <Globe20Regular className="size-4" />, groupStart: true, onSelect: () => setAdding({ kind: "proxy" }) },
           ]}
@@ -215,6 +217,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
 
       {adding?.kind === "link" && <LinkDialog folder={adding.folder} onClose={() => setAdding(null)} />}
       {adding?.kind === "proxy" && <ProxyDialog onClose={() => setAdding(null)} />}
+      {adding?.kind === "new" && <NewSiteDialog folders={parked} onClose={() => setAdding(null)} />}
     </Page>
   );
 }

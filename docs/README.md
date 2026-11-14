@@ -85,6 +85,7 @@ working name). Start here.
 | [0067](adr/0067-pecl-extensions.md) | PECL extensions: phpredis 6.3.0's Windows builds pinned by SHA-256 computed on a runner (none are published) and checked again by CI; `kiln php ext add redis` places the DLL in a PHP's `ext` folder and turns it on (journaled); carried over by `php update` | accepted (Phase 4) |
 | [0068](adr/0068-service-pages.md) | A page per service: Overview, Databases (size, the sites using each, create, dump, delete with the name typed back), Logs, `.env`, Tools; `kiln db list|create|drop`, `services.databases` | accepted (Phase 4c) |
 | [0069](adr/0069-site-processes-and-logs.md) | A site's Logs tab chooses between its app's files and each of its processes; several queue workers as queue instances of one project (`queue-shop`, `queue-shop-2`, … up to 8) | accepted (Phase 4c) |
+| [0070](adr/0070-new-site-templates.md) | `kiln new --template`: Laravel, its React, Vue and Livewire starter kits (front end built once with Kiln's Node), Symfony, Bedrock, an empty site; "New site from a template" in the app | accepted (Phase 4c) |
 
 ## Conventions
 

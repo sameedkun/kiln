@@ -451,6 +451,17 @@ function ShopPage {
     if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
 }
 Check 'the app serves pages on MySQL 8.4' { ShopPage }
+Check 'kiln new hello --template empty (ADR 0070): a folder with a first page, served at once' {
+    $out = Kiln new hello --template empty --path $projects
+    Expect 'first page in public/index.php' $out
+    Expect 'It works.' (Page (SiteBase 'hello'))
+    $refused = (& $Kiln new other --template symfony --db mysql-8.4 --path $projects 2>&1 | Out-String)
+    $global:LASTEXITCODE = 0
+    Expect '--db is for Laravel projects' $refused
+    if (Test-Path (Join-Path $projects 'other')) { throw 'a refused new made a folder' }
+    Kiln unlink hello | Out-Null
+    Remove-Item -Recurse -Force (Join-Path $projects 'hello')
+}
 foreach ($database in 'mariadb-11.8', 'postgres-18') {
     Check "the app migrates and serves pages on $database" {
         Kiln env use $database --project $shop --yes | Out-Null

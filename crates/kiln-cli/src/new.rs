@@ -1,7 +1,9 @@
-//! `kiln new <name>` ([ADR 0031]): a Laravel project made with Kiln's PHP and Composer, served
+//! `kiln new <name>` ([ADR 0031], [ADR 0070]): a project made with Kiln's PHP and Composer from
+//! one of Kiln's templates (Laravel, its starter kits, Symfony, Bedrock, an empty site), served
 //! at once.
 //!
 //! [ADR 0031]: ../../../docs/adr/0031-kiln-new-laravel-projects.md
+//! [ADR 0070]: ../../../docs/adr/0070-new-site-templates.md
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -12,14 +14,91 @@ use kiln_runtime::{DirPhp, SitePhp};
 use kiln_sites::manifest;
 use kiln_state::PhpRecord;
 
-/// The Composer package `kiln new` creates projects from.
-const SKELETON: &str = "laravel/laravel";
+/// What `kiln new` can start a project from ([ADR 0070]).
+///
+/// [ADR 0070]: ../../../docs/adr/0070-new-site-templates.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Template {
+    /// The name `--template` takes.
+    pub id: &'static str,
+    /// What the app shows.
+    pub label: &'static str,
+    /// The Composer package created from; `None` for an empty folder.
+    pub package: Option<&'static str>,
+    /// A Laravel app: `--db` applies, and its migrations run.
+    pub laravel: bool,
+    /// Its front end is built once with Kiln's Node (`npm install`, `npm run build`), so the
+    /// first page loads without a Vite dev server.
+    pub builds_front_end: bool,
+}
 
-/// `create-project` arguments for `name`.
-fn create_args(name: &str) -> Vec<OsString> {
+/// Every template, the default first. Packages are fixed here; nothing from the command line
+/// reaches Composer but the project's name.
+pub const TEMPLATES: &[Template] = &[
+    Template {
+        id: "laravel",
+        label: "Laravel",
+        package: Some("laravel/laravel"),
+        laravel: true,
+        builds_front_end: false,
+    },
+    Template {
+        id: "react",
+        label: "Laravel with React (starter kit)",
+        package: Some("laravel/react-starter-kit"),
+        laravel: true,
+        builds_front_end: true,
+    },
+    Template {
+        id: "vue",
+        label: "Laravel with Vue (starter kit)",
+        package: Some("laravel/vue-starter-kit"),
+        laravel: true,
+        builds_front_end: true,
+    },
+    Template {
+        id: "livewire",
+        label: "Laravel with Livewire (starter kit)",
+        package: Some("laravel/livewire-starter-kit"),
+        laravel: true,
+        builds_front_end: true,
+    },
+    Template {
+        id: "symfony",
+        label: "Symfony",
+        package: Some("symfony/skeleton"),
+        laravel: false,
+        builds_front_end: false,
+    },
+    Template {
+        id: "bedrock",
+        label: "WordPress (Bedrock)",
+        package: Some("roots/bedrock"),
+        laravel: false,
+        builds_front_end: false,
+    },
+    Template {
+        id: "empty",
+        label: "An empty PHP site",
+        package: None,
+        laravel: false,
+        builds_front_end: false,
+    },
+];
+
+/// The template `id` names.
+pub fn template(id: &str) -> Result<&'static Template, String> {
+    TEMPLATES.iter().find(|t| t.id == id).ok_or_else(|| {
+        let ids: Vec<&str> = TEMPLATES.iter().map(|t| t.id).collect();
+        format!("there is no template `{id}`; Kiln has {}", ids.join(", "))
+    })
+}
+
+/// `create-project` arguments for `package` into `name`.
+fn create_args(package: &str, name: &str) -> Vec<OsString> {
     [
         "create-project",
-        SKELETON,
+        package,
         name,
         "--prefer-dist",
         "--no-interaction",
@@ -27,6 +106,76 @@ fn create_args(name: &str) -> Vec<OsString> {
     .into_iter()
     .map(OsString::from)
     .collect()
+}
+
+/// The page an empty site starts with.
+const EMPTY_INDEX: &str = "<?php\n// Served by Kiln. Replace this with your site.\n?>\n<!doctype html>\n<meta charset=\"utf-8\">\n<title><?= htmlspecialchars(basename(dirname(__DIR__))) ?></title>\n<h1>It works.</h1>\n<p>PHP <?= PHP_VERSION ?>, served by Kiln from <code><?= htmlspecialchars(__DIR__) ?></code>.</p>\n";
+
+/// Builds a starter kit's front end once with Kiln's Node: `npm install`, `npm run build`.
+/// Without Kiln's Node, or on failure, it says what to run instead: the project itself is
+/// made either way.
+fn build_front_end(project: &Path) {
+    let manual = || {
+        say!(
+            "Its front end isn't built yet: run `npm install` and `npm run build` (or `npm run dev`) in {}.",
+            project.display()
+        );
+    };
+    let Some(local) = kiln_state::default_local_dir() else {
+        return manual();
+    };
+    let nodes = kiln_node::installed(&local.join(kiln_runtime::node::NODE_DIR));
+    let default_spec = crate::web::open_store()
+        .ok()
+        .and_then(|s| s.setting(kiln_runtime::node::DEFAULT_KEY).ok().flatten());
+    let Some(node) =
+        kiln_runtime::node::node_for_dir(&nodes, default_spec.as_deref(), project).node
+    else {
+        say!("Kiln has no Node yet (`kiln node install lts`).");
+        return manual();
+    };
+    let exe = node.dir.join(if cfg!(windows) {
+        "node.exe"
+    } else {
+        "bin/node"
+    });
+    let npm = if cfg!(windows) {
+        node.dir.join("node_modules/npm/bin/npm-cli.js")
+    } else {
+        node.dir.join("lib/node_modules/npm/bin/npm-cli.js")
+    };
+    let Ok(path) = path_with(exe.parent().unwrap_or(&node.dir)) else {
+        return manual();
+    };
+    for args in [&["install"][..], &["run", "build"][..]] {
+        crate::out::step(&format!(
+            "Running npm {} with Node {}",
+            args.join(" "),
+            node.version
+        ));
+        let mut command = std::process::Command::new(&exe);
+        command
+            .arg(&npm)
+            .args(args)
+            .current_dir(project)
+            .env("PATH", &path);
+        match crate::out::run_shown(&mut command) {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                say!(
+                    "npm {} failed (exit code {}).",
+                    args.join(" "),
+                    status.code().unwrap_or(1)
+                );
+                return manual();
+            }
+            Err(e) => {
+                say!("cannot run npm: {e}");
+                return manual();
+            }
+        }
+    }
+    say!("Built its front end with Node {}.", node.version);
 }
 
 /// The site name `name` gives, which is also the folder's name: a single lowercase label.
@@ -107,14 +256,22 @@ fn db_instance(spec: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no running {kind} instance: `kiln service add {kind}` first"))
 }
 
-/// `kiln new <name> [--path <folder>] [--php <version>] [--secure] [--db <database>]`.
+/// `kiln new <name> [--template <id>] [--path <folder>] [--php <version>] [--secure] [--db <database>]`.
 pub fn new(
     name: &str,
+    template_id: &str,
     parent: Option<PathBuf>,
     php: Option<&str>,
     secure: bool,
     db: Option<&str>,
 ) -> Result<(), String> {
+    let template = template(template_id)?;
+    if db.is_some() && !template.laravel {
+        return Err(format!(
+            "--db is for Laravel projects; {} sets up its database itself",
+            template.label
+        ));
+    }
     let db = db.map(db_instance).transpose()?;
     let tld = crate::web::current_tld()?;
     let name = project_name(name, &tld)?;
@@ -133,6 +290,51 @@ pub fn new(
         ));
     }
     let record = chosen_php(php)?;
+    if let Some(package) = template.package {
+        create_with_composer(package, &name, &parent, &project, &record)?;
+    } else {
+        let public = project.join("public");
+        std::fs::create_dir_all(&public)
+            .map_err(|e| format!("cannot create {}: {e}", public.display()))?;
+        std::fs::write(public.join("index.php"), EMPTY_INDEX)
+            .map_err(|e| format!("cannot write {}: {e}", public.join("index.php").display()))?;
+        say!(
+            "Created {} with a first page in public/index.php.",
+            project.display()
+        );
+    }
+
+    if let Some(spec) = php {
+        let toml = project.join(manifest::FILE);
+        std::fs::write(&toml, manifest_for(spec))
+            .map_err(|e| format!("cannot write {}: {e}", toml.display()))?;
+        say!("Wrote {}: PHP {spec} for this project.", toml.display());
+    }
+
+    serve(&name, &tld, &project, secure)?;
+    if let Some(instance) = db {
+        wire_database(&instance, &project, &record)?;
+    }
+    if template.builds_front_end {
+        build_front_end(&project);
+    } else if template.id == "laravel" {
+        say!(
+            "Next: `cd {}`, then `npm install` and `npm run dev` for its front end.",
+            project.display()
+        );
+    }
+    Ok(())
+}
+
+/// Runs `composer create-project <package> <name>` in `parent` with `record`'s PHP, installing
+/// Composer first if Kiln has none yet.
+fn create_with_composer(
+    package: &str,
+    name: &str,
+    parent: &Path,
+    project: &Path,
+    record: &PhpRecord,
+) -> Result<(), String> {
     let local =
         kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
     if !local.join(COMPOSER_PHAR).is_file() {
@@ -141,7 +343,7 @@ pub fn new(
     }
 
     say!(
-        "Creating {} with PHP {} and Composer ({SKELETON})...",
+        "Creating {} with PHP {} and Composer ({package})...",
         project.display(),
         record.version
     );
@@ -158,10 +360,10 @@ pub fn new(
         Tool::Composer,
         &here,
         &local.join(COMPOSER_PHAR),
-        create_args(&name),
+        create_args(package, name),
     )?;
     command
-        .current_dir(&parent)
+        .current_dir(parent)
         .env("PATH", path_with(&record.dir)?);
     #[cfg(windows)]
     {
@@ -185,22 +387,6 @@ pub fn new(
             status.code().unwrap_or(1)
         ));
     }
-
-    if let Some(spec) = php {
-        let toml = project.join(manifest::FILE);
-        std::fs::write(&toml, manifest_for(spec))
-            .map_err(|e| format!("cannot write {}: {e}", toml.display()))?;
-        say!("Wrote {}: PHP {spec} for this project.", toml.display());
-    }
-
-    serve(&name, &tld, &project, secure)?;
-    if let Some(instance) = db {
-        wire_database(&instance, &project, &record)?;
-    }
-    say!(
-        "Next: `cd {}`, then `npm install` and `npm run dev` for its front end.",
-        project.display()
-    );
     Ok(())
 }
 
@@ -275,7 +461,7 @@ mod tests {
 
     #[test]
     fn composer_creates_the_skeleton_without_prompts() {
-        let args: Vec<String> = create_args("shop")
+        let args: Vec<String> = create_args("laravel/laravel", "shop")
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
@@ -289,6 +475,23 @@ mod tests {
                 "--no-interaction"
             ]
         );
+    }
+
+    #[test]
+    fn templates_name_fixed_packages_and_the_default_comes_first() {
+        assert_eq!(TEMPLATES[0].id, "laravel");
+        assert_eq!(
+            template("react").unwrap().package,
+            Some("laravel/react-starter-kit")
+        );
+        assert!(template("react").unwrap().builds_front_end);
+        assert_eq!(template("empty").unwrap().package, None);
+        assert!(!template("symfony").unwrap().laravel);
+        assert!(template("--evil").is_err());
+        let mut ids: Vec<&str> = TEMPLATES.iter().map(|t| t.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), TEMPLATES.len());
     }
 
     #[test]

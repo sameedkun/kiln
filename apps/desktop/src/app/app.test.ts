@@ -308,3 +308,28 @@ describe("a site's processes (ADR 0069)", async () => {
     expect(nextWorkerName(eight)).toBeNull();
   });
 });
+
+describe("a new site from a template (ADR 0070)", async () => {
+  const { newArgs, templates } = await import("./NewSiteDialog");
+
+  it("offers the CLI's templates, Laravel first", () => {
+    expect(templates.map((t) => t.id)).toEqual(["laravel", "react", "vue", "livewire", "symfony", "bedrock", "empty"]);
+  });
+
+  it("passes only what was chosen", () => {
+    expect(newArgs({ name: "shop", template: "laravel", folder: "D:\\Code", php: "", secure: false, db: "" })).toEqual(["new", "shop", "--template", "laravel", "--path", "D:\\Code"]);
+    expect(newArgs({ name: "shop", template: "react", folder: "D:\\Code", php: "8.4", secure: true, db: "mysql-8.4" })).toEqual([
+      "new",
+      "shop",
+      "--template",
+      "react",
+      "--path",
+      "D:\\Code",
+      "--php",
+      "8.4",
+      "--secure",
+      "--db",
+      "mysql-8.4",
+    ]);
+  });
+});
