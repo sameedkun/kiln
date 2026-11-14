@@ -249,18 +249,42 @@ impl WebConfig {
                 config: AdminConfig { persist: false },
             },
             logging: Logging {
-                logs: BTreeMap::from([(
-                    "default",
-                    Log {
-                        writer: LogWriter {
-                            output: "file",
-                            filename: utf8(&self.log_file)?,
-                            roll_size_mb: 10,
-                            roll_keep: 3,
+                logs: BTreeMap::from([
+                    (
+                        "default",
+                        Log {
+                            writer: LogWriter {
+                                output: "file",
+                                filename: utf8(&self.log_file)?,
+                                roll_size_mb: 10,
+                                roll_keep: 3,
+                            },
+                            encoder: None,
+                            level: "INFO",
+                            include: Vec::new(),
+                            exclude: vec![ACCESS_LOG],
                         },
-                        level: "INFO",
-                    },
-                )]),
+                    ),
+                    (
+                        "access",
+                        Log {
+                            writer: LogWriter {
+                                output: "file",
+                                filename: utf8(
+                                    &self
+                                        .log_file
+                                        .with_file_name(crate::process::ACCESS_LOG_FILE),
+                                )?,
+                                roll_size_mb: 10,
+                                roll_keep: 3,
+                            },
+                            encoder: Some(LogEncoder { format: "json" }),
+                            level: "INFO",
+                            include: vec![ACCESS_LOG],
+                            exclude: Vec::new(),
+                        },
+                    ),
+                ]),
             },
             storage: Storage {
                 module: "file_system",
@@ -326,7 +350,29 @@ struct Logging {
 #[derive(Debug, Serialize)]
 struct Log {
     writer: LogWriter,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoder: Option<LogEncoder>,
     level: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    include: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    exclude: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct LogEncoder {
+    format: &'static str,
+}
+
+/// The logger every server writes requests to ([ADR 0065]).
+///
+/// [ADR 0065]: ../../../docs/adr/0065-request-timing.md
+const ACCESS_LOGGER: &str = "kiln_access";
+const ACCESS_LOG: &str = "http.log.access.kiln_access";
+
+#[derive(Debug, Serialize)]
+struct ServerLogs {
+    default_logger_name: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -367,6 +413,7 @@ struct Server {
     /// HTTP/1.1 and HTTP/2 only: no UDP listener for HTTP/3 until it is tested (ADR 0005).
     protocols: Vec<&'static str>,
     routes: Vec<Route>,
+    logs: ServerLogs,
 }
 
 impl Server {
@@ -377,6 +424,9 @@ impl Server {
             tls_connection_policies: tls.then(|| vec![TlsConnectionPolicy {}]),
             protocols: vec!["h1", "h2"],
             routes,
+            logs: ServerLogs {
+                default_logger_name: ACCESS_LOGGER,
+            },
         }
     }
 }

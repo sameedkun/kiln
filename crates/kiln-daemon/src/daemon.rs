@@ -306,6 +306,7 @@ impl Daemon {
         "logs.tail",
         "footprint.get",
         "updates.check",
+        "requests.get",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -615,6 +616,26 @@ impl Daemon {
             Err(RpcError::kiln(
                 outcome.last["message"].as_str().unwrap_or("kiln failed"),
             ))
+        }
+    }
+
+    /// `requests.get` ([ADR 0065] §2): every site's request timing, or one site's. A site's
+    /// name only reaches the command line.
+    ///
+    /// [ADR 0065]: ../../../docs/adr/0065-request-timing.md
+    fn requests(&self, params: &Value) -> Result<Value, RpcError> {
+        match params["host"].as_str() {
+            Some(host)
+                if !host.is_empty()
+                    && !host.starts_with(['-', '.'])
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') =>
+            {
+                self.read(&["requests", host])
+            }
+            Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
+            None => self.read(&["requests"]),
         }
     }
 
@@ -932,6 +953,7 @@ impl Handler for Daemon {
             "logs.tail" => self.log_tail(params),
             "footprint.get" => self.read(&["footprint"]),
             "updates.check" => self.read(&["updates"]),
+            "requests.get" => self.requests(params),
             "services.logs" => self.service_logs(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),

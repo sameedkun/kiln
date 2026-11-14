@@ -9,7 +9,7 @@ import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
-import { call, openFolder, type EnvShow, type LogSources, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { call, openFolder, type EnvShow, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
@@ -92,6 +92,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       <Tabs
         tabs={[
           { id: "overview", label: "Overview" },
+          { id: "requests", label: "Requests" },
           { id: "logs", label: "Logs" },
           { id: "dumps", label: "Dumps" },
           { id: "env", label: ".env" },
@@ -101,6 +102,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       >
       {tab === "env" ? (
         <SiteEnv site={site} />
+      ) : tab === "requests" ? (
+        <SiteRequestsTab host={site.host} />
       ) : tab === "logs" ? (
         <SiteLog host={site.host} />
       ) : tab === "dumps" ? (
@@ -297,6 +300,53 @@ function SiteProcesses({ site, go }: { site: Site; go: (page: string) => void })
           </Row>
         );
       })}
+    </Section>
+  );
+}
+
+/** How fast the site answers, from the web server's access log (ADR 0065). */
+function SiteRequestsTab({ host }: { host: string }) {
+  const requests = useRead<RequestsList>("requests.get", { host });
+  const r = requests.data?.sites.find((s) => s.host === host);
+  const figure = (label: string, value: string, bad = false) => (
+    <div className="min-w-[120px]">
+      <div className="text-xs text-text-3">{label}</div>
+      <div className={`figures mt-1 text-xl font-semibold ${bad ? "text-bad" : ""}`}>{value}</div>
+    </div>
+  );
+  return (
+    <Section
+      title="Requests"
+      meta={r ? `since ${new Date(r.since * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : undefined}
+      action={
+        <Button variant="quiet" size="sm" onClick={requests.reload}>
+          Read again
+        </Button>
+      }
+    >
+      {requests.error && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">{requests.error}</li>}
+      {requests.data && !r && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">No requests to {host} recorded yet. Open it, then read again.</li>}
+      {r && (
+        <>
+          <li className="flex flex-wrap gap-x-10 gap-y-4 border-b border-line px-1 py-4">
+            {figure("Requests", String(r.count))}
+            {figure("Failed (5xx)", String(r.failures), r.failures > 0)}
+            {figure("Median", `${r.median_ms} ms`)}
+            {figure("Slowest 5% over", `${r.p95_ms} ms`)}
+          </li>
+          <li className="px-1 pb-1 pt-4 text-xs font-medium text-text-3">The slowest</li>
+          {r.slowest.map((q, i) => (
+            <Row key={`${q.at}-${i}`} columns="90px 56px minmax(160px,1fr) 70px">
+              <span className="figures text-right text-[12.5px] font-medium">{q.ms} ms</span>
+              <span className={`figures text-[12.5px] ${q.status >= 500 ? "text-bad font-medium" : "text-text-2"}`}>{q.status}</span>
+              <span className="truncate font-mono text-xs" title={`${q.method} ${q.uri}`}>
+                {q.method} {q.uri}
+              </span>
+              <span className="figures text-right text-xs text-text-3">{new Date(q.at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            </Row>
+          ))}
+        </>
+      )}
     </Section>
   );
 }

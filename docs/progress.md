@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11, P4-16 and P4-17 built (ADRs 0058–0064); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-18 built (ADRs 0058–0065); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1493,7 +1493,7 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-15 | The screens | **done** 2026-11-12 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); every page in the gallery, checked with axe in light and dark |
 | P4-16 | Footprint | built | [ADR 0063](adr/0063-footprint.md); checked locally |
 | P4-17 | Updates | built | [ADR 0064](adr/0064-updates.md); checked locally |
-| P4-18 | Request timing per site | planned | its own ADR first |
+| P4-18 | Request timing | built | [ADR 0065](adr/0065-request-timing.md); checked locally and against a real Caddy |
 | P4-19 | MCP server for AI assistants | planned | its own ADR first |
 | P4-20 | PECL extensions (phpredis first) | planned | spike first: verified Windows builds for PHP 8.4 and 8.5 |
 
@@ -1850,6 +1850,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4-09 to P4-11 on CI.** The routing of Xdebug worked first time (no trigger: plain workers; the cookie or the query: the debug worker), and so did the queue worker, the scheduler and dump capture. Fixed in the Scenario itself: the pin check now downloads with curl (Windows PowerShell rejects xdebug.org's response line), `php list`'s compact JSON is parsed, the editor-listener check quotes its Cookie header for Start-Process, and the queue process and a retired debug worker are polled for. WhoDB (P4-12) waits: its spike means running a third-party desktop app on the user's PC to watch its network use, which is the user's call. |
 | 2026-11-14 | **P4-16 built** ([ADR 0063](adr/0063-footprint.md)): `kiln footprint` (and `footprint.get`) groups Kiln's processes by what they are (found by where their program is) with memory and CPU, and sizes Kiln's folders; `kiln cache clear` empties the download cache. `kiln-sys` gains a process list with names and a process's memory and CPU time. Settings shows both, with "Clear the download cache" asking first. |
 | 2026-11-14 | **P4-17 built** ([ADR 0064](adr/0064-updates.md)): `kiln updates` (and `updates.check`) lists each installed PHP against windows.php.net's newest patch, and Kiln against its newest GitHub release only when `kiln updates check-kiln on` (off by default). The PHP page tags versions with a patch available; Settings has the GitHub switch and opens the releases page (a fixed address). |
+| 2026-11-14 | **P4-18 built** ([ADR 0065](adr/0065-request-timing.md)): Caddy writes an access log (JSON, `access.log`, rolled like `caddy.log`, which no longer gets those lines); `kiln requests [site]` (and `requests.get`, which takes a site's name only) gives each site's count, failures, median, slowest 5% and ten slowest requests. A site's page has a Requests tab; the Logs page lists "Web server (requests)". The real-Caddy test now checks a request lands in the access log with its host, status and duration. |
 
 ## How to update this file
 

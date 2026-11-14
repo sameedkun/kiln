@@ -179,6 +179,36 @@ fn serves_http_by_default_reloads_live_and_stops_gracefully() {
         let (code, body) = http_get(http_port, "shop.test");
         assert_eq!(code, 200, "{body}");
         assert!(body.ends_with("shop ok"), "{body}");
+        // Each request is a JSON line in the access log, with its host and duration
+        // (ADR 0065), and not in Caddy's own log.
+        let access = server.access_log_file();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let line = loop {
+            let text = std::fs::read_to_string(&access).unwrap_or_default();
+            if let Some(line) = text.lines().find(|l| l.contains("shop.test")) {
+                break line.to_owned();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no request in {}",
+                access.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let entry: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(
+            entry["request"]["host"]
+                .as_str()
+                .unwrap()
+                .starts_with("shop.test")
+        );
+        assert_eq!(entry["status"], 200);
+        assert!(entry["duration"].as_f64().is_some(), "{line}");
+        let own = std::fs::read_to_string(server.log_file()).unwrap_or_default();
+        assert!(
+            !own.contains("handled request"),
+            "access lines in caddy.log"
+        );
 
         // Keep requesting a site while the config is reloaded underneath it.
         let stop_load = Arc::new(std::sync::atomic::AtomicBool::new(false));

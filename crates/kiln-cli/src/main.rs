@@ -29,6 +29,7 @@ mod php;
 mod pool;
 mod project;
 mod proxy;
+mod requests;
 mod service;
 mod services_up;
 mod tool;
@@ -130,6 +131,12 @@ enum Command {
     Updates {
         #[command(subcommand)]
         action: Option<UpdatesAction>,
+    },
+    /// How fast each site answers, from the web server's access log: requests, failures,
+    /// median, slowest 5%, the slowest requests (ADR 0065). Changes nothing.
+    Requests {
+        /// One site, e.g. shop or shop.test.
+        site: Option<String>,
     },
     /// What Kiln uses on this PC: memory and CPU per kind of Kiln process, disk use per folder
     /// (ADR 0063). Changes nothing.
@@ -816,6 +823,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Settings
             | Command::Logs { .. }
             | Command::Footprint
+            | Command::Requests { .. }
             | Command::Updates { action: None }
             | Command::Env {
                 action: EnvAction::Show { .. }
@@ -1065,6 +1073,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
         Command::Footprint => footprint::footprint(),
+        Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {
             action: Some(UpdatesAction::CheckKiln { state }),

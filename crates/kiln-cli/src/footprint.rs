@@ -18,10 +18,12 @@ const SAMPLE: Duration = Duration::from_millis(500);
 pub fn label_of(image: &Path, local: &Path, kiln_dir: &Path) -> Option<String> {
     let lower = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
     let (image_l, local_l, kiln_l) = (lower(image), lower(local), lower(kiln_dir));
-    let stem = image
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+    // From the text, not `Path::file_stem`: Windows paths are read on any system in tests.
+    let file = image_l.rsplit('\\').next().unwrap_or_default();
+    let stem = file
+        .rsplit_once('.')
+        .map_or(file, |(stem, _)| stem)
+        .to_owned();
     if image_l.starts_with(&format!("{kiln_l}\\")) {
         return Some(
             match stem.as_str() {

@@ -185,5 +185,25 @@ describe("a site's dev processes (ADR 0060)", () => {
     expect(await screen.findByRole("button", { name: "Stop the queue worker" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Start the scheduler" }));
     await vi.waitFor(() => expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["service", "add", "scheduler", "--project", site.project] }));
+
+    // The Requests tab: the site's figures and its slowest requests (ADR 0065).
+    answers["requests.get"] = ({ host }) => ({
+      log: "C:/k/caddy/access.log",
+      sites: [
+        {
+          host,
+          count: 21,
+          failures: 1,
+          median_ms: 12.5,
+          p95_ms: 240,
+          since: 1794570330,
+          slowest: [{ at: 1794570400, method: "GET", uri: "/reports?year=2026", status: 500, ms: 300 }],
+        },
+      ],
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "Requests" }));
+    expect(await screen.findByText("12.5 ms")).toBeTruthy();
+    expect(screen.getByText("GET /reports?year=2026")).toBeTruthy();
+    expect(asked.find((a) => a.key === "requests.get")?.args).toMatchObject({ host: "shop.test" });
   });
 });

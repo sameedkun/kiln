@@ -32,6 +32,11 @@ pub const CONSOLE_LOG_FILE: &str = "caddy-console.log";
 /// Caddy's own (rolled) log.
 pub const LOG_FILE: &str = "caddy.log";
 
+/// Caddy's access log, one JSON line per request ([ADR 0065]), next to [`LOG_FILE`].
+///
+/// [ADR 0065]: ../../../docs/adr/0065-request-timing.md
+pub const ACCESS_LOG_FILE: &str = "access.log";
+
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -325,6 +330,14 @@ impl WebServer {
     #[must_use]
     pub fn log_file(&self) -> PathBuf {
         self.dir.join(LOG_FILE)
+    }
+
+    /// Caddy's access log ([ADR 0065]).
+    ///
+    /// [ADR 0065]: ../../../docs/adr/0065-request-timing.md
+    #[must_use]
+    pub fn access_log_file(&self) -> PathBuf {
+        self.dir.join(ACCESS_LOG_FILE)
     }
 
     /// For error messages: the last console lines plus Caddy's most recent logged errors

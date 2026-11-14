@@ -833,6 +833,18 @@ Check 'kiln footprint: Kiln''s processes with their memory, and its folders on d
     if ($data.cache_bytes -le 0) { throw 'the download cache is empty' }
     Expect '"memory_bytes"' (Kiln daemon call footprint.get)
 }
+Check 'kiln requests shop: the access log gives its count, median and slowest requests (ADR 0065)' {
+    ShopPage
+    $data = ((Kiln --json requests shop) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data
+    $site = $data.sites | Where-Object { $_.host -eq 'shop.test' }
+    if (-not $site -or $site.count -lt 1) { throw "no requests for shop.test: $($data | ConvertTo-Json -Depth 4)" }
+    if ($site.median_ms -le 0 -or -not $site.slowest[0].uri) { throw "figures: $($site | ConvertTo-Json -Depth 4)" }
+    if ($data.sites | Where-Object { $_.host -ne 'shop.test' }) { throw 'another site in a one-site answer' }
+    Expect '"median_ms"' (Kiln daemon call requests.get '{\"host\":\"shop.test\"}')
+    $refused = (& $Kiln daemon call requests.get '{\"host\":\"--all\"}' 2>&1 | Out-String)
+    if ($refused -notmatch "isn't a site's name") { throw "a flag reached the command line:`n$refused" }
+    $global:LASTEXITCODE = 0
+}
 Check 'kiln updates: PHP patches from windows.php.net; GitHub only once turned on (ADR 0064)' {
     $last = { param($out) ($out -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data }
     $data = & $last (Kiln --json updates)

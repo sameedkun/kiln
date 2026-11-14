@@ -46,7 +46,13 @@ pub fn sources() -> Result<Vec<Source>, String> {
     if let Some(paths) = kiln_daemon::Paths::for_user() {
         all.push(kiln("kiln", "Kiln's daemon", paths.log));
     }
-    all.push(kiln("web", "Web server", crate::web::server()?.log_file()));
+    let web = crate::web::server()?;
+    all.push(kiln("web", "Web server", web.log_file()));
+    all.push(kiln(
+        "web-requests",
+        "Web server (requests)",
+        web.access_log_file(),
+    ));
     let supervisor = crate::pool::supervisor()?;
     all.push(kiln("php", "PHP errors", supervisor.errors_path()));
     all.push(kiln("php-workers", "PHP workers", supervisor.log_path()));

@@ -123,6 +123,20 @@ export interface Updates {
   kiln: { version: string; checking: boolean; latest: string | null; update: boolean; error: string | null; page: string };
 }
 
+export interface SiteRequests {
+  host: string;
+  count: number;
+  failures: number;
+  median_ms: number;
+  p95_ms: number;
+  since: number;
+  slowest: { at: number; method: string; uri: string; status: number; ms: number }[];
+}
+export interface RequestsList {
+  log: string;
+  sites: SiteRequests[];
+}
+
 export interface ServiceKind {
   kind: string;
   name: string;

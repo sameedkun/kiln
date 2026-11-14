@@ -234,7 +234,7 @@ request (2026-11-12).
 | P4-15 | The screens: every page drawn in the design gallery from the base components, with sample data that drafts the API's shapes | P4-02 | [ADR 0052](adr/0052-phase-4-screens-and-scope.md); **Done** 2026-11-12 |
 | P4-16 | Kiln's footprint: memory and CPU per Kiln process, disk use by folder, clearing the download cache | P4-03 | ADR 0052; [ADR 0063](adr/0063-footprint.md); built |
 | P4-17 | Updates: PHP patch updates shown where they apply; checking GitHub for a new Kiln, off by default | P4-03 | ADR 0052; [ADR 0064](adr/0064-updates.md); built |
-| P4-18 | Request timing per site from Caddy's access log: median, slowest 5%, counts, failures, slowest requests; kept on the PC | P4-03 | ADR 0052; its own ADR first |
+| P4-18 | Request timing per site from Caddy's access log: median, slowest 5%, counts, failures, slowest requests; kept on the PC | P4-03 | ADR 0052; [ADR 0065](adr/0065-request-timing.md); built |
 | P4-19 | An MCP server for AI assistants (`kiln mcp`, from Phase 5): reads sites, services, logs and history; changes through the CLI, in History; off by default | P4-01 | ADR 0052; its own ADR first |
 | P4-20 | PECL extensions for Kiln's PHP on Windows (phpredis first, then imagick and others): a spike for builds of 8.4 and 8.5 Kiln can pin and verify, then turning them on per version like the bundled ones. Laravel needs none of them for Redis today (`REDIS_CLIENT=predis`) | P4-04 | Asked for by the user (2026-11-13); shares the DLL question with Xdebug (P4-10) |
 
