@@ -141,6 +141,17 @@ fn runtime_for(
                     )
                 })
         }
+        // Installed when it was added (ADR 0073).
+        kiln_services::Runtime::Own => {
+            let release = kiln_services::release_for_this_platform(provider, None)
+                .ok_or_else(|| format!("{} has no build for this PC", provider.display_name()))?;
+            Ok(provider.executable(
+                &services_dir()?
+                    .join("bin")
+                    .join(provider.kind())
+                    .join(release.version),
+            ))
+        }
     }
 }
 
@@ -788,6 +799,7 @@ fn say_added(
     let runtime = match provider.runtime() {
         kiln_services::Runtime::Php => "PHP",
         kiln_services::Runtime::Node => "Node",
+        kiln_services::Runtime::Own => "own program",
     };
     match project {
         Some(dir) if ports.is_empty() => say!(
@@ -865,7 +877,8 @@ pub fn add(
         &ports_of_others(&store, "")?,
     )?;
 
-    if project.is_none() {
+    // A project process with its own program (Stripe's CLI, ADR 0073) is downloaded too.
+    if project.is_none() || provider.runtime() == kiln_services::Runtime::Own {
         let release = release_of(provider, Some(&version))?;
         install_binaries(provider, release, &dirs.bin)?;
         // Runs on this system? (A missing VC++ runtime or Linux library, ADR 0038 §6.)

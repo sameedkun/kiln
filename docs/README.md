@@ -88,6 +88,7 @@ working name). Start here.
 | [0070](adr/0070-new-site-templates.md) | `kiln new --template`: Laravel, its React, Vue and Livewire starter kits (front end built once with Kiln's Node), Symfony, Bedrock, an empty site; "New site from a template" in the app | accepted (Phase 4c) |
 | [0071](adr/0071-pgadmin-on-request.md) | pgAdmin on request: a service kind from PostgreSQL 18.6's own zip (same pin), only its Python and web app unpacked, run by a Kiln launcher on loopback with its settings in its own folder and Kiln's servers listed, served as `pgadmin.test` | accepted (Phase 4c) |
 | [0072](adr/0072-phpredis-by-default.md) | phpredis added with every new PHP on Windows (as Herd does), journaled and undoable; `--without-redis` skips it; `php update` carries the old version's choice; amends ADR 0067 | accepted (Phase 4c) |
+| [0073](adr/0073-stripe-webhooks.md) | Stripe webhooks: the pinned Stripe CLI as a site's process (`Runtime::Own`), `stripe listen` forwarding to `APP_URL/stripe/webhook`, the key from the project's `STRIPE_SECRET` in its environment only | accepted (Phase 4c) |
 
 ## Conventions
 

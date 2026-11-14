@@ -253,6 +253,7 @@ export const processes: { kind: string; label: string; what: string; laravel: bo
   { kind: "scheduler", label: "Scheduler", what: "Runs the schedule every minute (php artisan schedule:work).", laravel: true },
   { kind: "vite", label: "Vite", what: "Serves scripts and styles with hot reload, from the project's node_modules.", laravel: false },
   { kind: "dumps", label: "Dumps", what: "Collects dump() output here instead of in the page (its .env sends it), shown in the Dumps tab.", laravel: true },
+  { kind: "stripe", label: "Stripe webhooks", what: "Forwards Stripe's test events to the site's /stripe/webhook (stripe listen), with the STRIPE_SECRET in its .env. Its signing secret is in its log.", laravel: true },
 ];
 
 /** The queue worker, scheduler and Vite for this site's project: started here, kept up by Kiln. */

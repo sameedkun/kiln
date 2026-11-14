@@ -20,6 +20,7 @@ mod postgres;
 mod redis;
 pub mod reverb;
 mod rustfs;
+pub mod stripe;
 pub mod tools;
 
 pub use install::{InstallError, install, install_into_folder};
@@ -185,6 +186,8 @@ pub enum Runtime {
     Php,
     /// The Node Kiln picks for the project's folder.
     Node,
+    /// Its own pinned program, downloaded like a service's (the Stripe CLI, ADR 0073).
+    Own,
 }
 
 /// One kind of service ([ADR 0035] §2). Implementations are compiled in and pass the
@@ -421,7 +424,7 @@ pub trait ServiceProvider: Sync {
 /// Every provider Kiln has.
 #[must_use]
 pub fn providers() -> &'static [&'static dyn ServiceProvider] {
-    static PROVIDERS: [&dyn ServiceProvider; 14] = [
+    static PROVIDERS: [&dyn ServiceProvider; 15] = [
         &mailpit::Mailpit,
         &mysql::MYSQL,
         &mysql::MARIADB,
@@ -436,6 +439,7 @@ pub fn providers() -> &'static [&'static dyn ServiceProvider] {
         &devprocs::Scheduler,
         &devprocs::Vite,
         &devprocs::Dumps,
+        &stripe::Stripe,
     ];
     &PROVIDERS
 }
@@ -528,10 +532,11 @@ mod contract {
     #[test]
     fn pins_are_well_formed() {
         for provider in providers() {
-            // Only a service that runs in a project has nothing to download.
+            // Only a service that runs in a project has nothing to download, unless it runs
+            // its own program (ADR 0073).
             assert_eq!(
                 provider.releases().is_empty(),
-                provider.runs_in_project(),
+                provider.runs_in_project() && provider.runtime() != Runtime::Own,
                 "{}",
                 provider.kind()
             );
@@ -683,6 +688,7 @@ mod contract {
         Path::new(match provider.runtime() {
             Runtime::Php => "/k/php/php",
             Runtime::Node => "/k/node/node",
+            Runtime::Own => "/k/services/bin/own/kiln-own",
         })
     }
 

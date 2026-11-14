@@ -738,6 +738,33 @@ Check 'kiln php ext add redis: checked, placed, turned on; phpredis talks to Kil
     Expect 'redis' ((Php -m) -join "`n")
 }
 
+Say '== Stripe webhooks (ADR 0073)'
+Check 'the Stripe CLI pin is the SHA-256 in Stripe''s own checksums file' {
+    $sums = curl.exe -sSL --max-time 60 'https://github.com/stripe/stripe-cli/releases/download/v1.55.11/stripe-windows-checksums.txt' 2>&1 | Out-String
+    Expect 'b869b8bb84d1ad4f7435a246ff83cca36337f9eb209264c9057675a99de6d31e  stripe_1.55.11_windows_x86_64.zip' $sums
+}
+Check 'service add stripe --project shop: refused without a key, then stripe listen with the key kept off its command line and log' {
+    $refused = (& $Kiln service add stripe --project $shop 2>&1 | Out-String)
+    $global:LASTEXITCODE = 0
+    Expect 'STRIPE_SECRET' $refused
+    $saved = [IO.File]::ReadAllText($envFile)
+    $fake = 'sk_test_kilnci0000notarealkey'
+    try {
+        [IO.File]::WriteAllText($envFile, $saved.TrimEnd() + "`nSTRIPE_SECRET=$fake`n")
+        Expect 'running as stripe-shop' (Kiln service add stripe --project $shop)
+        $deadline = (Get-Date).AddSeconds(30)
+        do { Start-Sleep -Seconds 1; $proc = @(Get-CimInstance Win32_Process -Filter "Name='kiln-stripe.exe'") } until ($proc.Length -or (Get-Date) -gt $deadline)
+        if (-not $proc.Length) { throw "no kiln-stripe.exe:`n$(Kiln service logs stripe-shop)" }
+        if ($proc.CommandLine -join ' ' -match [regex]::Escape($fake)) { throw "the key is on its command line: $($proc.CommandLine)" }
+        Expect '/stripe/webhook' ($proc.CommandLine -join ' ')
+        Start-Sleep -Seconds 3
+        if ((Kiln service logs stripe-shop) -match [regex]::Escape($fake)) { throw 'the key is in its log' }
+        Kiln service remove stripe-shop | Out-Null
+    } finally {
+        [IO.File]::WriteAllText($envFile, $saved)
+    }
+}
+
 Say '== Xdebug on demand (ADR 0061)'
 Check 'every pinned Xdebug build matches its SHA-256 on xdebug.org' {
     $pins = Get-Content (Join-Path $PSScriptRoot '..\..\crates\kiln-php\src\xdebug.rs') -Raw

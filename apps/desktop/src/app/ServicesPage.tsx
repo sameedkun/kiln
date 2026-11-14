@@ -36,7 +36,7 @@ const categories: { id: string; label: string; kinds: string[] }[] = [
   { id: "storage", label: "Storage", kinds: ["rustfs"] },
   { id: "tools", label: "Data tools", kinds: ["pgadmin"] },
   { id: "realtime", label: "Realtime", kinds: ["reverb"] },
-  { id: "dev", label: "Dev processes", kinds: ["queue", "scheduler", "vite", "dumps"] },
+  { id: "dev", label: "Dev processes", kinds: ["queue", "scheduler", "vite", "dumps", "stripe"] },
 ];
 export const categoryOf = (kind: string) => categories.find((c) => c.kinds.includes(kind))?.id ?? "other";
 
