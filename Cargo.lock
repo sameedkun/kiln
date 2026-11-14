@@ -749,6 +749,7 @@ dependencies = [
  "kiln-supervisor",
  "kiln-sys",
  "kiln-web",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

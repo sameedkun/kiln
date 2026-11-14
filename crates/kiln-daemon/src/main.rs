@@ -86,6 +86,28 @@ fn main() -> ExitCode {
         }
     });
 
+    // Names without the hosts file (ADR 0078): answered while the feature is on.
+    let resolver = Arc::clone(&daemon);
+    std::thread::spawn(move || {
+        loop {
+            if resolver.wildcard_dns_on() {
+                resolver.log(&format!("answering .{} on 127.0.0.1:53", resolver.tld()));
+                let result =
+                    kiln_daemon::dns::serve(&|| resolver.tld(), &|| resolver.wildcard_dns_on());
+                match result {
+                    Ok(()) => resolver.log("stopped answering names (turned off)"),
+                    Err(e) => {
+                        resolver.log(&format!(
+                            "cannot answer names on 127.0.0.1:53: {e}; trying again in a minute"
+                        ));
+                        std::thread::sleep(Duration::from_secs(60));
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    });
+
     let _ = stop.recv();
     // Let the answer to `daemon.shutdown` reach its client.
     std::thread::sleep(Duration::from_millis(200));

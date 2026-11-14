@@ -325,6 +325,31 @@ impl Daemon {
     /// The renewal timer: every [`CA_CHECK_EVERY`] (and on the first pass), renews the
     /// intermediate through `kiln ca renew` if it is due. A failure, such as a locked keyring,
     /// is logged and published, and tried again at the next check.
+    /// Kiln's TLD, as the CLI records it (`tld`), `test` by default.
+    #[must_use]
+    pub fn tld(&self) -> String {
+        kiln_state::StateStore::open_dir(&self.paths.state)
+            .ok()
+            .and_then(|(store, _)| store.setting("tld").ok().flatten())
+            .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            .unwrap_or_else(|| "test".to_owned())
+            .to_ascii_lowercase()
+    }
+
+    /// Whether kilnd answers the TLD's names itself (ADR 0078): Windows' rule is in place.
+    #[must_use]
+    pub fn wildcard_dns_on(&self) -> bool {
+        kiln_state::StateStore::open_dir(&self.paths.state)
+            .ok()
+            .and_then(|(store, _)| store.setting(crate::dns::ON_KEY).ok().flatten())
+            .is_some_and(|v| v == "on")
+    }
+
+    /// Writes a line to kilnd's log.
+    pub fn log(&self, line: &str) {
+        self.log.line(line);
+    }
+
     pub fn check_ca(&self, now: Instant) {
         {
             let mut checked = self
