@@ -752,15 +752,21 @@ Check 'service add stripe --project shop: refused without a key, then stripe lis
     try {
         [IO.File]::WriteAllText($envFile, $saved.TrimEnd() + "`nSTRIPE_SECRET=$fake`n")
         Expect 'running as stripe-shop' (Kiln service add stripe --project $shop)
-        $deadline = (Get-Date).AddSeconds(30)
-        do { Start-Sleep -Seconds 1; $proc = @(Get-CimInstance Win32_Process -Filter "Name='kiln-stripe.exe'") } until ($proc.Length -or (Get-Date) -gt $deadline)
-        if (-not $proc.Length) { throw "no kiln-stripe.exe:`n$(Kiln service logs stripe-shop)" }
-        if ($proc.CommandLine -join ' ' -match [regex]::Escape($fake)) { throw "the key is on its command line: $($proc.CommandLine)" }
-        Expect '/stripe/webhook' ($proc.CommandLine -join ' ')
-        Start-Sleep -Seconds 3
+        # A fake key makes it exit, and Kiln starts it again: catch one run's command line.
+        $line = ''
+        $deadline = (Get-Date).AddSeconds(45)
+        do {
+            Start-Sleep -Milliseconds 300
+            $line = (@(Get-CimInstance Win32_Process -Filter "Name='kiln-stripe.exe'") | Where-Object { $_.CommandLine } | Select-Object -First 1).CommandLine
+        } until ($line -or (Get-Date) -gt $deadline)
+        if (-not $line) { throw "never saw kiln-stripe.exe's command line:`n$(Kiln service logs stripe-shop)" }
+        if ($line -match [regex]::Escape($fake)) { throw "the key is on its command line: $line" }
+        Expect '/stripe/webhook' $line
         if ((Kiln service logs stripe-shop) -match [regex]::Escape($fake)) { throw 'the key is in its log' }
-        Kiln service remove stripe-shop | Out-Null
     } finally {
+        # Always: a listener left crash-looping on a fake key would fail the service counts later.
+        & $Kiln service remove stripe-shop 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
         [IO.File]::WriteAllText($envFile, $saved)
     }
 }
