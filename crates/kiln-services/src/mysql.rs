@@ -217,7 +217,45 @@ fn package_for(library: &str) -> String {
     }
 }
 
+/// Rows of a client's tab- or bar-separated output as (name, number); a row that doesn't
+/// read is skipped.
+pub(crate) fn parse_rows(text: &str, separator: char) -> Vec<(String, u64)> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, size) = line.trim_end_matches('\r').rsplit_once(separator)?;
+            let name = name.trim();
+            (!name.is_empty()).then(|| (name.to_owned(), size.trim().parse().unwrap_or(0)))
+        })
+        .collect()
+}
+
 impl Flavor {
+    /// One statement through the server's own client, its output as text (rows by tab).
+    fn query(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        sql: String,
+    ) -> Option<Result<String, String>> {
+        let client = self.client(dirs, ports, None)?;
+        let mut args = client.args.clone();
+        args.extend([
+            "--batch".into(),
+            "--skip-column-names".into(),
+            "-e".into(),
+            sql,
+        ]);
+        Some(match run(&client.program, &args, &client.env) {
+            Ok((0, output)) => Ok(output),
+            Ok((code, output)) => Err(format!(
+                "{} answered with exit code {code}:\n{}",
+                self.display,
+                tail(&output, 4)
+            )),
+            Err(e) => Err(e),
+        })
+    }
+
     fn tool(bin: &Path, name: &str) -> PathBuf {
         bin.join("bin").join(format!("{name}{EXE_SUFFIX}"))
     }
@@ -500,6 +538,36 @@ impl ServiceProvider for Flavor {
         })())
     }
 
+    fn list_databases(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+    ) -> Option<Result<Vec<(String, u64)>, String>> {
+        let output = self.query(
+            dirs,
+            ports,
+            "SELECT s.schema_name, COALESCE(SUM(t.data_length + t.index_length), 0) \
+             FROM information_schema.schemata s \
+             LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name \
+             WHERE s.schema_name NOT IN ('mysql', 'sys', 'information_schema', 'performance_schema') \
+             GROUP BY s.schema_name ORDER BY s.schema_name"
+                .to_owned(),
+        )?;
+        Some(output.map(|text| parse_rows(&text, '\t')))
+    }
+
+    fn drop_database(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        name: &str,
+    ) -> Option<Result<(), String>> {
+        Some(
+            self.query(dirs, ports, format!("DROP DATABASE IF EXISTS `{name}`"))?
+                .map(|_| ()),
+        )
+    }
+
     /// One database, without `CREATE DATABASE`, so it can be restored under another name; or
     /// every database. A consistent snapshot of the tables, with routines, events and
     /// triggers.
@@ -565,6 +633,18 @@ impl ServiceProvider for Flavor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn database_rows_read_from_either_client() {
+        assert_eq!(
+            parse_rows("shop\t16384\r\nempty\t0\n\nbad\n", '\t'),
+            [("shop".to_owned(), 16384), ("empty".to_owned(), 0)]
+        );
+        assert_eq!(
+            parse_rows("shop|7520771\n", '|'),
+            [("shop".to_owned(), 7_520_771)]
+        );
+    }
 
     fn dirs() -> InstanceDirs {
         InstanceDirs::new(Path::new("/k/services"), "mysql", "8.4.13", "mysql-8.4")

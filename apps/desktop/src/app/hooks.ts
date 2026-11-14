@@ -9,10 +9,12 @@ export interface Read<T> {
 }
 
 /** A read method's answer, read again whenever Kiln changes something or reconnects. */
-export function useRead<T>(method: string, params?: unknown): Read<T> {
+/** A read method's answer, kept fresh; `null` reads nothing (yet), such as a stopped service's databases. */
+export function useRead<T>(method: string | null, params?: unknown): Read<T> {
   const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
   const key = JSON.stringify(params ?? null);
   const load = useCallback(() => {
+    if (method === null) return;
     call<T>(method, JSON.parse(key))
       .then((data) => setState({ data, loading: false }))
       .catch((e) => setState((s) => ({ ...s, error: message(e), loading: false })));

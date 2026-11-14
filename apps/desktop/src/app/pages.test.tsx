@@ -25,6 +25,7 @@ const { HistoryPage, DoctorPage } = await import("./HistoryDoctor");
 const { LogsPage } = await import("./LogsPage");
 const { Settings } = await import("./Pages");
 const { SitePage } = await import("./SitePage");
+const { ServicePage, size } = await import("./ServicePage");
 
 const shell = (page: ReactNode) =>
   render(
@@ -205,5 +206,60 @@ describe("a site's dev processes (ADR 0060)", () => {
     expect(await screen.findByText("12.5 ms")).toBeTruthy();
     expect(screen.getByText("GET /reports?year=2026")).toBeTruthy();
     expect(asked.find((a) => a.key === "requests.get")?.args).toMatchObject({ host: "shop.test" });
+  });
+});
+
+describe("a service's page (ADR 0068)", () => {
+  it("lists its databases with their sites, and asks for the name before deleting one", async () => {
+    answers["services.list"] = () => ({
+      supervisor_running: true,
+      instances: [
+        {
+          name: "mysql-8.4",
+          kind: "mysql",
+          version: "8.4.13",
+          ports: { mysql: 3306 },
+          main_port: 3306,
+          used_by: ["shop.test"],
+          web: null,
+          databases: true,
+          enabled: true,
+          running: true,
+          project: null,
+          env: [["DB_CONNECTION", "mysql"], ["DB_PORT", "3306"]],
+        },
+      ],
+    });
+    answers["sites.list"] = () => ({ parked: [], sites: [], proxies: [], skipped: [], warnings: [] });
+    answers["services.databases"] = ({ name }) => {
+      expect(name).toBe("mysql-8.4");
+      return { databases: [{ name: "shop", bytes: 48_234_496, used_by: ["shop.test"] }, { name: "scratch", bytes: 0, used_by: [] }] };
+    };
+    answers["jobs.start"] = () => ({ job: 1 });
+    answers["jobs.get"] = () => ({ running: false, finished: { job: 1, ok: true, exit: 0, needs_confirmation: false, last: { type: "result" } }, events: [] });
+    shell(<ServicePage name="mysql-8.4" go={() => {}} />);
+
+    expect(await screen.findByRole("heading", { name: "mysql-8.4" })).toBeTruthy();
+    expect(screen.getByText("127.0.0.1:3306")).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    expect(await screen.findByText("46.0 MB")).toBeTruthy();
+    expect(screen.getByText("no site")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete shop" }));
+    const del = screen.getByRole("button", { name: "Delete" });
+    expect((del as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.type(screen.getByLabelText("Type shop to confirm"), "shop");
+    expect((del as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(del);
+    await vi.waitFor(() => expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["db", "drop", "mysql-8.4", "shop"], mode: "apply" }));
+
+    await userEvent.click(screen.getByRole("tab", { name: ".env" }));
+    expect(screen.getByText("DB_CONNECTION")).toBeTruthy();
+  });
+
+  it("reads sizes as people do", () => {
+    expect(size(0)).toBe("0 B");
+    expect(size(2048)).toBe("2.0 KB");
+    expect(size(48_234_496)).toBe("46.0 MB");
   });
 });

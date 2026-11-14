@@ -307,6 +307,7 @@ impl Daemon {
         "footprint.get",
         "updates.check",
         "requests.get",
+        "services.databases",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -688,6 +689,17 @@ impl Daemon {
 
     /// `services.logs` (ADR 0056 §2): an instance's last lines, for an instance Kiln has.
     fn service_logs(&self, params: &Value) -> Result<Value, RpcError> {
+        let name = self.instance_param(params)?;
+        let lines = params["lines"]
+            .as_u64()
+            .unwrap_or(200)
+            .clamp(1, 5000)
+            .to_string();
+        self.read(&["service", "logs", name, "--lines", &lines])
+    }
+
+    /// `params.name`, an instance Kiln has: only then does it reach the command line.
+    fn instance_param<'a>(&self, params: &'a Value) -> Result<&'a str, RpcError> {
         let name = params["name"]
             .as_str()
             .ok_or_else(|| RpcError::kiln("params.name (an instance) is missing"))?;
@@ -700,13 +712,16 @@ impl Daemon {
         {
             return Err(RpcError::kiln(format!("no service called {name}")));
         }
-        drop(store);
-        let lines = params["lines"]
-            .as_u64()
-            .unwrap_or(200)
-            .clamp(1, 5000)
-            .to_string();
-        self.read(&["service", "logs", name, "--lines", &lines])
+        Ok(name)
+    }
+
+    /// `services.databases` ([ADR 0068] §1): an instance's databases, their size and the sites
+    /// using each.
+    ///
+    /// [ADR 0068]: ../../../docs/adr/0068-service-pages.md
+    fn service_databases(&self, params: &Value) -> Result<Value, RpcError> {
+        let name = self.instance_param(params)?;
+        self.read(&["db", "list", name])
     }
 
     /// `env.show` (ADR 0056 §2): a project's `.env`, only for the folder of one of Kiln's
@@ -955,6 +970,7 @@ impl Handler for Daemon {
             "updates.check" => self.read(&["updates"]),
             "requests.get" => self.requests(params),
             "services.logs" => self.service_logs(params),
+            "services.databases" => self.service_databases(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.get" => {

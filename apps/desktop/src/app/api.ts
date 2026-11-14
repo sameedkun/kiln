@@ -53,6 +53,12 @@ export interface Instance {
   enabled: boolean;
   running: boolean;
   project: string | null;
+  /** What `kiln env use` writes into a site's .env (ADR 0068 §3). */
+  env: [string, string][];
+}
+/** `services.databases` (ADR 0068 §1). */
+export interface ServiceDatabases {
+  databases: { name: string; bytes: number; used_by: string[] }[];
 }
 export interface ServicesList {
   supervisor_running: boolean;

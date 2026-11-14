@@ -74,7 +74,7 @@ describe("runJob", () => {
 });
 
 describe("the tray icon", () => {
-  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, main_port: null, used_by: [], web: null, databases: false, enabled, running, project: null });
+  const instance = (name: string, enabled: boolean, running: boolean) => ({ name, kind: "x", version: "1", ports: {}, main_port: null, used_by: [], web: null, databases: false, enabled, running, project: null, env: [] as [string, string][] });
 
   it("is stopped without the daemon, and says why", () => {
     expect(trayState("unreachable")).toEqual({ state: "stopped", tooltip: "Kiln: not running" });
@@ -94,7 +94,7 @@ describe("the tray icon", () => {
 
 describe("a service's port", () => {
   it("is the one apps connect to, not the first by name", () => {
-    const mailpit = { name: "mailpit-1", kind: "mailpit", version: "1.31.6", ports: { http: 8025, smtp: 1025 }, main_port: 1025, used_by: [], web: null, databases: false, enabled: true, running: true, project: null };
+    const mailpit = { name: "mailpit-1", kind: "mailpit", version: "1.31.6", ports: { http: 8025, smtp: 1025 }, main_port: 1025, used_by: [], web: null, databases: false, enabled: true, running: true, project: null, env: [] as [string, string][] };
     expect(mainPort(mailpit)).toBe(1025);
   });
 });

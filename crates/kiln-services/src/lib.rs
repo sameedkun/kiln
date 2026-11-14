@@ -347,6 +347,31 @@ pub trait ServiceProvider: Sync {
         None
     }
 
+    /// The instance's databases and their size on disk in bytes, the server's own left out
+    /// ([ADR 0068] §1). None for kinds that have no databases.
+    ///
+    /// [ADR 0068]: ../../../docs/adr/0068-service-pages.md
+    fn list_databases(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+    ) -> Option<Result<Vec<(String, u64)>, String>> {
+        None
+    }
+
+    /// Deletes the database `name` ([ADR 0068] §2); the caller has checked the name and asked.
+    /// None for kinds that have no databases.
+    ///
+    /// [ADR 0068]: ../../../docs/adr/0068-service-pages.md
+    fn drop_database(
+        &self,
+        _dirs: &InstanceDirs,
+        _ports: &BTreeMap<String, u16>,
+        _name: &str,
+    ) -> Option<Result<(), String>> {
+        None
+    }
+
     /// A web UI to serve as a Kiln site ([ADR 0044]): the site's name (`mailpit` for
     /// `mailpit.test`) and the port role it listens on. None by default.
     ///

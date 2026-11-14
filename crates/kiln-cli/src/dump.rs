@@ -18,6 +18,101 @@ fn check_name(database: Option<&str>) -> Result<(), String> {
     }
 }
 
+/// A database name Kiln puts into SQL itself (create, drop): letters, digits, `_`, `$`, `-`,
+/// not starting with `$` or `-`, at most 64 (ADR 0068 §2). No quote can get in.
+fn strict_name(database: &str) -> Result<(), String> {
+    let ok = (1..=64).contains(&database.len())
+        && !database.starts_with(['$', '-'])
+        && database
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{database}` can't be a database name here: use letters, digits, '_', '$' and '-' (at most 64)"
+        ))
+    }
+}
+
+/// `kiln db list <instance>`: its databases, their size, and (with --json) the sites whose
+/// `.env` points at each (ADR 0068 §1).
+pub fn list(name: &str) -> Result<(), String> {
+    let (record, provider, dirs) = running(name)?;
+    let databases = provider
+        .list_databases(&dirs, &record.ports)
+        .ok_or_else(|| format!("{} has no databases to list", provider.display_name()))??;
+    let users = crate::service::database_users(&record);
+    if crate::out::json() {
+        crate::out::data(serde_json::json!({
+            "databases": databases.iter().map(|(db, bytes)| serde_json::json!({
+                "name": db,
+                "bytes": bytes,
+                "used_by": users.get(db).cloned().unwrap_or_default(),
+            })).collect::<Vec<_>>(),
+        }));
+        return Ok(());
+    }
+    if databases.is_empty() {
+        say!("{name} has no databases of its own yet.");
+    }
+    for (db, bytes) in &databases {
+        let sites = users.get(db).map(|s| format!("  used by {}", s.join(", ")));
+        say!(
+            "{db}  {}{}",
+            crate::uninstall::mb(*bytes),
+            sites.unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+/// `kiln db create <instance> <database>`.
+pub fn create(name: &str, database: &str) -> Result<(), String> {
+    strict_name(database)?;
+    let (record, provider, dirs) = running(name)?;
+    match provider.create_database(&dirs, &record.ports, database) {
+        Some(Ok(true)) => {
+            say!("Created the database {database} on {name}.");
+            Ok(())
+        }
+        Some(Ok(false)) => Err(format!("{name} already has a database called {database}")),
+        Some(Err(e)) => Err(format!("cannot make the database {database}: {e}")),
+        None => Err(format!("{} has no databases", provider.display_name())),
+    }
+}
+
+/// `kiln db drop <instance> <database>`: after asking, as it can't be undone.
+pub fn drop(name: &str, database: &str) -> Result<(), String> {
+    strict_name(database)?;
+    let (record, provider, dirs) = running(name)?;
+    let found = provider
+        .list_databases(&dirs, &record.ports)
+        .ok_or_else(|| format!("{} has no databases", provider.display_name()))??;
+    let Some((_, bytes)) = found.iter().find(|(db, _)| db == database) else {
+        return Err(format!("{name} has no database called {database}"));
+    };
+    let users = crate::service::database_users(&record);
+    if let Some(sites) = users.get(database) {
+        say!("{database} is used by {}.", sites.join(", "));
+    }
+    say!(
+        "This deletes {database} on {name} ({}) and everything in it. It can't be undone; \
+         `kiln db dump {name} {database}` keeps a copy first.",
+        crate::uninstall::mb(*bytes)
+    );
+    if !crate::out::confirm(&format!("Delete the database {database}?")) {
+        say!("Nothing was changed.");
+        return Ok(());
+    }
+    provider
+        .drop_database(&dirs, &record.ports, database)
+        .ok_or_else(|| format!("{} has no databases", provider.display_name()))?
+        .map_err(|e| format!("cannot delete {database}: {e}"))?;
+    say!("Deleted the database {database} on {name}.");
+    Ok(())
+}
+
 /// `<instance>-<database or all>-<date and time>.sql`, in the current folder.
 fn default_output(instance: &str, database: Option<&str>) -> Result<PathBuf, String> {
     let now = time::OffsetDateTime::now_utc();
@@ -162,6 +257,17 @@ pub fn restore(name: &str, file: &Path, database: Option<&str>) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_put_into_sql_are_strict() {
+        assert!(strict_name("shop").is_ok());
+        assert!(strict_name("shop_test-2").is_ok());
+        assert!(strict_name("").is_err());
+        assert!(strict_name("-x").is_err());
+        assert!(strict_name("a`; DROP").is_err());
+        assert!(strict_name("a\"b").is_err());
+        assert!(strict_name(&"a".repeat(65)).is_err());
+    }
 
     #[test]
     fn names_that_look_like_options_are_refused() {

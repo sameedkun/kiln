@@ -24,12 +24,14 @@ import { DoctorPage, HistoryPage } from "./HistoryDoctor";
 import { LogsPage } from "./LogsPage";
 import { Settings } from "./Pages";
 import { NodePage, PhpPage } from "./RuntimePages";
+import { ServicePage } from "./ServicePage";
 import { SitePage } from "./SitePage";
 import { ServicesPage } from "./ServicesPage";
 import { SitesPage } from "./SitesPage";
 
 function Screen({ page, go, setUp }: { page: string; go: (page: string) => void; setUp: () => void }) {
   if (page.startsWith("site:")) return <SitePage host={page.slice(5)} go={go} />;
+  if (page.startsWith("service:")) return <ServicePage name={page.slice(8)} go={go} />;
   // A log chosen elsewhere, such as a site's queue worker: logs:<source>.
   if (page.startsWith("logs:")) return <LogsPage first={page.slice(5)} />;
   switch (page) {
@@ -38,7 +40,7 @@ function Screen({ page, go, setUp }: { page: string; go: (page: string) => void;
     case "sites":
       return <SitesPage go={go} />;
     case "services":
-      return <ServicesPage />;
+      return <ServicesPage go={go} />;
     case "php":
       return <PhpPage />;
     case "node":
@@ -124,7 +126,7 @@ export function MainApp() {
         <Sidebar
           items={pages}
           footer={[{ id: "settings", label: "Settings", icon: <Settings20Regular /> }]}
-          current={page.startsWith("site:") ? "sites" : page.startsWith("logs:") ? "logs" : page}
+          current={page.startsWith("site:") ? "sites" : page.startsWith("service:") ? "services" : page.startsWith("logs:") ? "logs" : page}
           onSelect={setPage}
           status={
             <>

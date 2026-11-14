@@ -940,6 +940,26 @@ fn used_by(record: &ServiceRecord, projects: &[(String, String)]) -> Vec<String>
     uses(&keys, projects)
 }
 
+/// For an instance's page (ADR 0068 §1): each database name, and the sites whose `.env` points
+/// at this instance with that `DB_DATABASE`.
+pub(crate) fn database_users(record: &ServiceRecord) -> BTreeMap<String, Vec<String>> {
+    let Ok(store) = crate::web::open_store() else {
+        return BTreeMap::new();
+    };
+    let projects = site_projects(&store);
+    let mut users: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for host in used_by(record, &projects) {
+        let database = projects
+            .iter()
+            .find(|(h, _)| *h == host)
+            .and_then(|(_, text)| kiln_platform::env_file::value_of(text, "DB_DATABASE"));
+        if let Some(database) = database {
+            users.entry(database).or_default().push(host);
+        }
+    }
+    users
+}
+
 /// The hosts of `projects` whose `.env` text has every one of `keys`.
 fn uses(keys: &[(&str, String)], projects: &[(String, String)]) -> Vec<String> {
     if keys.is_empty() {
@@ -1044,6 +1064,10 @@ pub fn list() -> Result<(), String> {
                 "version": r.version,
                 "ports": r.ports,
                 "used_by": used_by(r, &projects),
+                // What `kiln env use` writes, for the page's .env tab (ADR 0068 §3).
+                "env": kiln_services::provider(&r.kind)
+                    .map(|p| p.env_keys(&r.ports))
+                    .unwrap_or_default(),
                 "web": web_host(r, &proxies),
                 "databases": kiln_services::provider(&r.kind)
                     .is_some_and(kiln_services::ServiceProvider::has_databases),

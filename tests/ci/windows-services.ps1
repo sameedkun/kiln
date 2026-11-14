@@ -941,6 +941,8 @@ Check 'API v2: kiln.hello says 2; sites, services and the catalog are read throu
     Expect '"shop.test"' (Kiln daemon call sites.list)
     Expect '"mailpit-1"' (Kiln daemon call services.list)
     Expect '"mailpit"' (Kiln daemon call services.catalog)
+    # A service's databases for its page (ADR 0068).
+    Expect '"shop"' (Kiln daemon call services.databases '{\"name\":\"mysql-8.4\"}')
 }
 Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
     $before = Kiln history
@@ -1075,6 +1077,24 @@ Check 'PostgreSQL: pg_dump kiln_ci, restored as kiln_copy' {
 Check 'kiln db dump postgres-18: every database (pg_dumpall)' {
     Kiln db dump postgres-18 --output "$dumps\postgres-all.sql" | Out-Null
     Expect 'kiln_copy' (Get-Content "$dumps\postgres-all.sql" -Raw)
+}
+Say '== A service''s databases (ADR 0068)'
+Check 'kiln db create, list and drop: made, listed with its size, kept when the drop is declined, then gone' {
+    Expect 'Created the database kiln_scratch' (Kiln db create mysql-8.4 kiln_scratch)
+    $list = JsonLines @(& $Kiln --json db list mysql-8.4)
+    $names = $list[-1].data.databases.name
+    if ($names -notcontains 'kiln_scratch' -or $names -notcontains 'shop' -or $names -contains 'mysql') { throw "databases: $($names -join ', ')" }
+    $declined = @(& $Kiln --json db drop mysql-8.4 kiln_scratch)
+    $code = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($code -ne 3) { throw "a drop without --confirmed ended with $code`n$($declined -join "`n")" }
+    if ((Client 'mysql-8.4' 'kiln_scratch' 'SELECT 1;') -notmatch '1') { throw 'the declined drop deleted it' }
+    Expect 'Deleted the database kiln_scratch' (Kiln --json --confirmed db drop mysql-8.4 kiln_scratch)
+    $after = (JsonLines @(& $Kiln --json db list mysql-8.4))[-1].data.databases.name
+    if ($after -contains 'kiln_scratch') { throw 'still listed after the drop' }
+    $refused = (& $Kiln db create mysql-8.4 'a`;b' 2>&1 | Out-String)
+    $global:LASTEXITCODE = 0
+    Expect "can't be a database name" $refused
 }
 Check 'a service without a dump tool says where its data is and what keeps it' {
     $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)

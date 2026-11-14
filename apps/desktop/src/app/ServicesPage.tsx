@@ -54,7 +54,7 @@ type Open =
   | { kind: "remove"; instance: Instance };
 
 // Every service instance, by kind, and the catalog to add more from (ADR 0056 §4).
-export function ServicesPage() {
+export function ServicesPage({ go }: { go: (page: string) => void }) {
   const services = useRead<ServicesList>("services.list");
   const sites = useRead<SitesList>("sites.list");
   const { run, open: visit } = useChanges();
@@ -116,7 +116,10 @@ export function ServicesPage() {
         }
       >
         <RowName sub={i.project ? `runs in ${i.project}` : i.kind}>
-          {i.name} <span className="figures text-[12.5px] font-normal text-text-2">{i.version}</span>
+          <button type="button" className="hover:underline" onClick={() => go(`service:${i.name}`)}>
+            {i.name}
+          </button>{" "}
+          <span className="figures text-[12.5px] font-normal text-text-2">{i.version}</span>
         </RowName>
         <Detail mono>{mainPort(i) ? `:${mainPort(i)}` : ""}</Detail>
         <Detail title={i.used_by.join(", ")}>{i.used_by.length ? `used by ${fewNames(i.used_by)}` : i.project ? "for its project" : "no site uses it"}</Detail>
@@ -174,7 +177,7 @@ export function ServicesPage() {
 }
 
 /** A dialog whose main button runs one job, then closes. */
-function JobDialog({
+export function JobDialog({
   title,
   action,
   ready,
@@ -318,7 +321,7 @@ function LogsDialog({ instance, onClose }: { instance: Instance; onClose: () => 
   );
 }
 
-function PortsDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
+export function PortsDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
   const { run } = useChanges();
   const [ports, setPorts] = useState<Record<string, string>>(Object.fromEntries(Object.entries(instance.ports).map(([r, p]) => [r, String(p)])));
   const valid = Object.values(ports).every((p) => /^\d{1,5}$/.test(p) && Number(p) > 0 && Number(p) < 65536);
@@ -348,7 +351,7 @@ function PortsDialog({ instance, onClose }: { instance: Instance; onClose: () =>
   );
 }
 
-function WireDialog({ instance, sites, onClose }: { instance: Instance; sites?: SitesList; onClose: () => void }) {
+export function WireDialog({ instance, sites, onClose }: { instance: Instance; sites?: SitesList; onClose: () => void }) {
   const { confirm } = useChanges();
   const [project, setProject] = useState("");
   const [database, setDatabase] = useState("");
@@ -403,9 +406,9 @@ function WireDialog({ instance, sites, onClose }: { instance: Instance; sites?: 
   );
 }
 
-function DumpDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
+export function DumpDialog({ instance, database: chosen = "", onClose }: { instance: Instance; database?: string; onClose: () => void }) {
   const { run } = useChanges();
-  const [database, setDatabase] = useState("");
+  const [database, setDatabase] = useState(chosen);
   const db = database ? databaseName(database) : null;
   return (
     <JobDialog
@@ -425,7 +428,7 @@ function DumpDialog({ instance, onClose }: { instance: Instance; onClose: () => 
   );
 }
 
-function RestoreDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
+export function RestoreDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
   const { run } = useChanges();
   const [database, setDatabase] = useState("");
   const db = database ? databaseName(database) : null;
@@ -446,7 +449,7 @@ function RestoreDialog({ instance, onClose }: { instance: Instance; onClose: () 
   );
 }
 
-function RemoveDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
+export function RemoveDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
   const { run } = useChanges();
   const [deleteData, setDeleteData] = useState(false);
   return (

@@ -87,6 +87,33 @@ fn pid_file(dirs: &InstanceDirs) -> PathBuf {
     dirs.data.join("postmaster.pid")
 }
 
+impl Postgres {
+    /// One statement through `psql` as `postgres`, its rows by `|`.
+    fn query(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        sql: String,
+    ) -> Option<Result<String, String>> {
+        let client = self.client(dirs, ports, Some("postgres"))?;
+        let mut args = client.args.clone();
+        args.extend([
+            "--tuples-only".into(),
+            "--no-align".into(),
+            "--command".into(),
+            sql,
+        ]);
+        Some(match run(&client.program, &args, &client.env) {
+            Ok((0, output)) => Ok(output),
+            Ok((code, output)) => Err(format!(
+                "PostgreSQL answered with exit code {code}:\n{}",
+                tail(&output, 4)
+            )),
+            Err(e) => Err(e),
+        })
+    }
+}
+
 impl ServiceProvider for Postgres {
     fn kind(&self) -> &'static str {
         "postgres"
@@ -269,6 +296,39 @@ impl ServiceProvider for Postgres {
             query(format!("CREATE DATABASE \"{name}\""))?;
             Ok(true)
         })())
+    }
+
+    fn list_databases(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+    ) -> Option<Result<Vec<(String, u64)>, String>> {
+        let output = self.query(
+            dirs,
+            ports,
+            "SELECT datname, pg_database_size(datname) FROM pg_database \
+             WHERE NOT datistemplate AND datname <> 'postgres' ORDER BY datname"
+                .to_owned(),
+        )?;
+        Some(output.map(|text| crate::mysql::parse_rows(&text, '|')))
+    }
+
+    /// With `FORCE` (PostgreSQL 13 and later): a site's open connections would otherwise
+    /// refuse the drop.
+    fn drop_database(
+        &self,
+        dirs: &InstanceDirs,
+        ports: &BTreeMap<String, u16>,
+        name: &str,
+    ) -> Option<Result<(), String>> {
+        Some(
+            self.query(
+                dirs,
+                ports,
+                format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"),
+            )?
+            .map(|_| ()),
+        )
     }
 
     /// `pg_dump` for one database, without owners or grants so it restores as `postgres`

@@ -315,6 +315,26 @@ enum DbAction {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+    /// The instance's databases and their size (MySQL, MariaDB, PostgreSQL).
+    List {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+    },
+    /// Make an empty database.
+    Create {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The database.
+        database: String,
+    },
+    /// Delete a database and everything in it, after asking. It can't be undone: dump it
+    /// first (`kiln db dump`) to keep a copy.
+    Drop {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The database.
+        database: String,
+    },
     /// Load a .sql file into an instance: into a database (made if missing), or the whole
     /// server for a dump of every database.
     Restore {
@@ -852,6 +872,10 @@ fn changes_state(command: &Command) -> bool {
             | Command::Mcp { action: None }
             | Command::Requests { .. }
             | Command::Updates { action: None }
+            | Command::Db {
+                action: Some(DbAction::List { .. }),
+                ..
+            }
             | Command::Env {
                 action: EnvAction::Show { .. }
             }
@@ -1035,6 +1059,9 @@ fn run_db(
             }),
             _,
         ) => dump::restore(&name, &file, database.as_deref()),
+        (Some(DbAction::List { name }), _) => dump::list(&name),
+        (Some(DbAction::Create { name, database }), _) => dump::create(&name, &database),
+        (Some(DbAction::Drop { name, database }), _) => dump::drop(&name, &database),
         (None, Some(name)) => service::db(&name, database),
         (None, None) => {
             Err("give an instance, e.g. `kiln db mysql-8.4` (see `kiln service list`)".into())
