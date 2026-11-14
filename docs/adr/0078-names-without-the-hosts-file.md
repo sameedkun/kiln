@@ -3,7 +3,7 @@
 - **Status:** proposed: the spike passed on CI (2026-11-14); building it waits for the user's
   approval, as it changes a Windows setting once
 - **Date:** 2026-11-14
-- **Task:** P4C-14 (from Phase 6's "Windows wildcard DNS") · Builds on [ADR 0015](0015-dns-and-sites.md) §9
+- **Task:** P4C-14 (from Phase 6's "Windows wildcard DNS") · Builds on [ADR 0015](0015-parked-folders-and-drivers.md) §9
 
 ## Context
 
