@@ -845,6 +845,27 @@ Check 'kiln requests shop: the access log gives its count, median and slowest re
     if ($refused -notmatch "isn't a site's name") { throw "a flag reached the command line:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+function McpSession([string[]] $messages) {
+    @($messages | & $Kiln mcp 2>$null | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+Check 'kiln mcp: an MCP session reads sites; changes refused until allowed, then made (ADR 0066)' {
+    $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
+    $restart = '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"kiln_service_restart","arguments":{"name":"mailpit-1"}}}'
+    $replies = McpSession @($init, '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+        '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"kiln_sites","arguments":{}}}', $restart)
+    if ($replies.Count -ne 4) { throw "expected 4 replies, got $($replies.Count)" }
+    if ($replies[0].result.serverInfo.name -ne 'kiln') { throw "initialize: $($replies[0] | ConvertTo-Json -Depth 5)" }
+    if ($replies[1].result.tools.name -contains 'kiln_service_restart') { throw 'change tools listed while changes are off' }
+    if ($replies[2].result.content[0].text -notmatch 'shop\.test') { throw "kiln_sites: $($replies[2].result.content[0].text)" }
+    if (-not $replies[3].result.isError) { throw 'a restart went through with changes off' }
+    Kiln mcp allow-changes on | Out-Null
+    try {
+        $replies = McpSession @($init, $restart)
+        if ($replies[1].result.isError) { throw "restart with changes allowed: $($replies[1].result.content[0].text)" }
+        if ((MailTotal) -lt 0) { throw "Mailpit isn't answering after the restart" }
+    } finally { Kiln mcp allow-changes off | Out-Null }
+}
 Check 'kiln updates: PHP patches from windows.php.net; GitHub only once turned on (ADR 0064)' {
     $last = { param($out) ($out -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data }
     $data = & $last (Kiln --json updates)
@@ -933,10 +954,17 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
     if (-not $supervisor -or -not (Get-Process -Id $supervisor -ErrorAction SilentlyContinue)) {
         throw "no services supervisor running (PID file: $(Get-Content $pidFile -Raw -ErrorAction SilentlyContinue))"
     }
+    # Which process serves Mailpit before the crash: it must be gone after it (I-96).
+    $owner = (Get-NetTCPConnection -LocalPort $script:http -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
     Stop-Process -Id $supervisor -Force
-    Start-Sleep -Seconds 2
-    if (Test-NetConnection 127.0.0.1 -Port $script:http -InformationLevel Quiet -WarningAction SilentlyContinue) {
-        throw 'Mailpit still answers: the crash took nothing down'
+    $deadline = (Get-Date).AddSeconds(5)
+    while ($owner -and (Get-Process -Id $owner -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    if ($owner -and (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$owner"
+        Say "     Mailpit (PID $owner, parent $($p.ParentProcessId)) outlived its supervisor: $($p.CommandLine)"
+        Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+        Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+        throw 'Mailpit still runs: the crash took nothing down'
     }
     $deadline = (Get-Date).AddSeconds(90)
     do {
@@ -956,6 +984,10 @@ Check 'the services supervisor crashes: the daemon brings every service back' {
         Start-Sleep -Seconds 3
         $status = Kiln daemon status
     } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    if ($status -notmatch 'Services restarted by the daemon: 1') {
+        Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+        Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    }
     Expect 'Services restarted by the daemon: 1' $status
     Expect 'Services: 12 of 12 running' $status
 }
@@ -975,6 +1007,10 @@ Check 'after a reboot (daemon and supervisor gone, daemon started as at login): 
         Start-Sleep -Seconds 3
         $status = Kiln daemon status
     } until ($status -match 'Services restarted by the daemon: 1' -or (Get-Date) -gt $deadline)
+    if ($status -notmatch 'Services restarted by the daemon: 1') {
+        Get-Content "$env:LOCALAPPDATA\Kiln\logs\kilnd.log" -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Say "     kilnd: $_" }
+        Get-Content "$env:LOCALAPPDATA\Kiln\services\supervisor\supervisor.log" -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Say "     supervisor: $_" }
+    }
     Expect 'Services restarted by the daemon: 1' $status
     Expect 'Services: 12 of 12 running' $status
     if ((MailTotal) -ne 2) { throw "Mailpit is back with $(MailTotal) message(s)" }

@@ -82,6 +82,7 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["undo"], true),
     (&["cache", "clear"], false),
     (&["updates", "check-kiln"], false),
+    (&["mcp", "allow-changes"], false),
     (&["web", "install"], false),
     (&["web", "start"], false),
     (&["web", "stop"], false),

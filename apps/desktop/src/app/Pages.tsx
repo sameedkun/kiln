@@ -80,6 +80,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
         </SettingRow>
       </Section>
       <KilnSection />
+      <AssistantsSection />
       <UpdatesSection />
       <FootprintSection />
     </Page>
@@ -291,6 +292,37 @@ function UpdatesSection() {
         }
       >
         Kiln asks GitHub for its newest release, sending nothing about you or this PC. {status}
+      </SettingRow>
+    </Section>
+  );
+}
+
+// AI assistants (ADR 0066): the command an assistant runs, and whether it may change anything.
+function AssistantsSection() {
+  const settings = useRead<KilnSettings>("settings.get");
+  const { run } = useChanges();
+  const s = settings.data;
+  return (
+    <Section title="AI assistants">
+      <SettingRow title="Kiln's MCP server" control={<code className="rounded-md bg-hover px-2 py-1 font-mono text-[12.5px]">kiln mcp</code>}>
+        Add an MCP server that runs <code className="font-mono text-xs text-text">kiln mcp</code> in your assistant's settings (Claude Code, Cursor, VS Code). It reads your
+        sites, services, logs, request timing, history and the doctor's checks. Kiln adds itself to no assistant.
+      </SettingRow>
+      <SettingRow
+        title="Let assistants make changes"
+        control={
+          s && (
+            <Switch
+              hideLabel
+              label="Let assistants make changes"
+              checked={s.mcp_allow_changes ?? false}
+              onChange={(on) => run(["mcp", "allow-changes", on ? "on" : "off"], on ? "Assistants may start, stop and restart services and undo changes." : "Assistants can only read now.")}
+            />
+          )
+        }
+      >
+        Start, stop and restart services, and undo changes from History: the same commands you could run in a terminal. Restart the assistant's connection to Kiln after
+        switching.
       </SettingRow>
     </Section>
   );

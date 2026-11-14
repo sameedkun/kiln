@@ -834,6 +834,8 @@ pub fn settings() -> Result<(), String> {
             "http": http,
             "https": https,
             "php_workers": workers,
+            "mcp_allow_changes": crate::mcp::changes_allowed(),
+            "check_kiln_updates": crate::updates::check_kiln(&store),
         }));
         return Ok(());
     }

@@ -1366,3 +1366,17 @@ commits and PRs.
   `tests/ci` and `tests/vm` script, so a syntax error shows in a minute rather than after a
   ten-minute Scenario. Edits with `$` in them go through a function replacement or the Edit
   tool.
+
+### I-96: Once, Mailpit outlived its killed supervisor on CI (open)
+
+- **Seen:** 2026-11-14, in one of the two Scenario jobs for P4-18 (the other passed, as did
+  the twelve job runs since P4-09). After the services supervisor was killed, Mailpit's port
+  still answered two seconds later; the reboot check that followed found the services
+  stopped and not restarted, and the MySQL dumps after it couldn't connect.
+- **What should happen:** every program the supervisor runs is in its kill-on-close job, and
+  since P4-09 also in a job of its own nested in it (ADR 0060 §3), so the supervisor's death
+  ends them all; the daemon's watchdog then starts the services again.
+- **Next:** the crash check now records which process held Mailpit's port before the kill and
+  waits for that process to end, printing its parent, command line and both logs if it
+  doesn't; the reboot check prints the logs when the services don't come back. The fix
+  follows from what they show.

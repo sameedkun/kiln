@@ -81,6 +81,7 @@ working name). Start here.
 | [0063](adr/0063-footprint.md) | Kiln's footprint: `kiln footprint` (a read, `footprint.get`) groups Kiln's processes (found by where their program is) with memory and CPU, and sizes its folders; `kiln cache clear` empties the download cache, the only thing it offers to remove; both in Settings | accepted (Phase 4) |
 | [0064](adr/0064-updates.md) | Updates: `kiln updates` (a read, `updates.check`) compares installed PHP with windows.php.net's newest patches, and Kiln with its newest GitHub release only when `kiln updates check-kiln on` (off by default); no self-update, the releases page opens | accepted (Phase 4) |
 | [0065](adr/0065-request-timing.md) | Request timing: Caddy writes a JSON access log of its own (credentials redacted by Caddy, kept on the PC); `kiln requests [site]` (a read, `requests.get`) gives count, failures, median, slowest 5% and the slowest requests per site; a site's Requests tab | accepted (Phase 4) |
+| [0066](adr/0066-mcp-server.md) | An MCP server for AI assistants: `kiln mcp` on standard input and output; read tools through `kiln --json` (sites, services, logs, requests, history, doctor); service start/stop/restart and undo only after `kiln mcp allow-changes on`; arguments checked; registered with no assistant | accepted (Phase 4) |
 
 ## Conventions
 

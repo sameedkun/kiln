@@ -23,6 +23,7 @@ mod ext;
 mod footprint;
 mod history;
 mod logs;
+mod mcp;
 mod new;
 mod node;
 mod php;
@@ -131,6 +132,12 @@ enum Command {
     Updates {
         #[command(subcommand)]
         action: Option<UpdatesAction>,
+    },
+    /// A Model Context Protocol server on standard input and output, for AI assistants: reads
+    /// sites, services, logs and history; changes only when allowed (ADR 0066).
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
     },
     /// How fast each site answers, from the web server's access log: requests, failures,
     /// median, slowest 5%, the slowest requests (ADR 0065). Changes nothing.
@@ -450,6 +457,16 @@ enum AppAction {
     Disable {
         #[arg(long, short)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum McpAction {
+    /// Let assistants start, stop and restart services and undo changes (`on`), or only read
+    /// (`off`, the default).
+    AllowChanges {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
     },
 }
 
@@ -823,6 +840,8 @@ fn changes_state(command: &Command) -> bool {
             | Command::Settings
             | Command::Logs { .. }
             | Command::Footprint
+            // It serves for hours; each tool runs its own `kiln`, which locks as it needs.
+            | Command::Mcp { action: None }
             | Command::Requests { .. }
             | Command::Updates { action: None }
             | Command::Env {
@@ -1073,6 +1092,10 @@ fn run(command: Command) -> Result<(), String> {
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
         Command::Footprint => footprint::footprint(),
+        Command::Mcp { action: None } => mcp::serve(),
+        Command::Mcp {
+            action: Some(McpAction::AllowChanges { state }),
+        } => mcp::set_allow_changes(state == "on"),
         Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Updates { action: None } => updates::updates(),
         Command::Updates {

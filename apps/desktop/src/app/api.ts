@@ -88,6 +88,8 @@ export interface KilnSettings {
   http: PortSetting;
   https: PortSetting;
   php_workers: number;
+  mcp_allow_changes?: boolean;
+  check_kiln_updates?: boolean;
 }
 
 export interface LogSource {
