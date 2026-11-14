@@ -263,6 +263,8 @@ Say '== pgAdmin, on request (ADR 0071)'
 Check 'service add pgadmin: from PostgreSQL 18''s zip, on loopback, its own settings, Kiln''s servers listed' {
     $out = Kiln service add pgadmin
     Expect 'running as pgadmin-9' $out
+    # Its own libpq, not the runner's system PostgreSQL on PATH (P4D-01: a PC without one).
+    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln\services\bin\pgadmin\9.18\pgAdmin 4\runtime\libpq.dll")) { throw 'its libpq.dll was not unpacked' }
     $port = PortOf $out 'http'
     $deadline = (Get-Date).AddSeconds(150)
     do { Start-Sleep -Seconds 3; $page = Page (SiteBase 'pgadmin') } until ($page -match 'pgAdmin' -or (Get-Date) -gt $deadline)

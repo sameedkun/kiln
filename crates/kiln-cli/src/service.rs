@@ -242,6 +242,12 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
                 }
             }
         } else {
+            // A version unpacked by an older Kiln without what it now needs is unpacked again
+            // (from the download cache when it's there).
+            if !provider.installed(&dirs.bin) {
+                let release = release_of(provider, Some(&record.version))?;
+                install_binaries(provider, release, &dirs.bin)?;
+            }
             // Rewritten before every start, so a changed port takes effect.
             write_config(provider, &dirs, &record.ports)?;
             if record.kind == "pgadmin" {
@@ -732,7 +738,7 @@ fn install_binaries(
     release: &kiln_services::Release,
     bin: &Path,
 ) -> Result<(), String> {
-    if provider.executable(bin).is_file() {
+    if provider.installed(bin) {
         say!(
             "{} {} is already installed.",
             provider.display_name(),
@@ -949,6 +955,11 @@ pub fn add(
         project: project.clone(),
     };
     store.put_service(&record).map_err(|e| e.to_string())?;
+    // Its web UI as a site, before the start: a first start that fails still leaves it its page
+    // for when it runs. A convenience, so a failure is reported, not fatal.
+    if let Err(e) = attach_ui(provider, &record) {
+        say!("Note: its web UI wasn't served as a site: {e}");
+    }
     crate::out::step(&format!("Starting {name}"));
     if let Err(e) = apply(&store) {
         return Err(format!(
@@ -956,10 +967,6 @@ pub fn add(
         ));
     }
     say_added(provider, &record, project.as_deref(), &dirs);
-    // Its web UI as a site: a convenience, so a failure is reported, not fatal.
-    if let Err(e) = attach_ui(provider, &record) {
-        say!("Note: its web UI wasn't served as a site: {e}");
-    }
     Ok(name)
 }
 
@@ -1229,6 +1236,20 @@ fn set_enabled(names: &[String], enabled: bool) -> Result<(), String> {
     apply(&store)?;
     let verb = if enabled { "Running" } else { "Stopped" };
     say!("{verb}: {}.", targets.join(", "));
+    if enabled {
+        // A web UI an instance doesn't have yet (its first start failed before P4D-01).
+        let proxies = crate::web::proxy_specs(&store).unwrap_or_default();
+        for name in &targets {
+            if let Ok(record) = record_of(&store, name)
+                && let Ok(provider) = provider_of(&record.kind)
+                && provider.web_ui().is_some()
+                && web_host(&record, &proxies).is_none()
+                && let Err(e) = attach_ui(provider, &record)
+            {
+                say!("Note: {name}'s web UI wasn't served as a site: {e}");
+            }
+        }
+    }
     Ok(())
 }
 

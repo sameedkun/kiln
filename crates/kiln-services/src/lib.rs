@@ -218,6 +218,12 @@ pub trait ServiceProvider: Sync {
     /// How to run an instance with these `ports` (role → port), listening on loopback only.
     fn launch(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Launch;
 
+    /// Whether a version in `bin` is installed whole: its executable by default. A provider
+    /// that needs more of the archive says so, and Kiln unpacks it again (P4D-01).
+    fn installed(&self, bin: &Path) -> bool {
+        self.executable(bin).is_file()
+    }
+
     /// The installed executable in `bin`.
     fn executable(&self, bin: &Path) -> PathBuf {
         bin.join(format!("{}{EXE_SUFFIX}", self.executable_name()))

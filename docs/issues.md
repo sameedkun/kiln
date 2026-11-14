@@ -1402,3 +1402,18 @@ commits and PRs.
 - **Why:** the app asked `setup.status` and `settings.get` once, as soon as kilnd answered,
   and dropped any failure silently; right after kilnd starts, a first read can fail.
 - **Fix:** it asks again every 2 seconds, up to five more times, before giving up.
+
+### I-99: pgAdmin crash-looped on a PC without PostgreSQL on its PATH (fixed)
+
+- **Seen:** 2026-11-15, in the user's run: pgAdmin never answered, and "Open pgAdmin" said
+  there was no site called `pgadmin.test`.
+- **Why:** pgAdmin's PostgreSQL driver (psycopg) needs `libpq.dll`, which EDB ships in
+  pgAdmin's `runtime/` folder, which Kiln left out with the desktop shell. CI's runner has a
+  system PostgreSQL on its PATH, so `libpq` was found there and the Scenario passed. The
+  web page was attached only after a successful first start, so it was missing too.
+- **Fix:** `libpq` and the libraries it loads, and the backup tools, are kept from
+  `runtime/` (about 10 MB); the launcher puts that folder on the DLL path. A provider now says
+  when a version is installed whole (`installed`), and Kiln unpacks an incomplete one again
+  before starting it, from the download cache. The web page is attached before the first
+  start, and `service start` attaches a missing one. The Scenario checks pgAdmin's own
+  `libpq.dll` is there.

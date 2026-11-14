@@ -32,8 +32,28 @@ const RELEASES: &[Release] = &[Release {
     tree: Some("pgsql"),
 }];
 
-/// The PostgreSQL whose tools (`pg_dump`, `psql`) pgAdmin's backup and restore use.
+/// The PostgreSQL release pgAdmin comes in (a test keeps their pins equal).
+#[cfg(test)]
 const POSTGRES_VERSION: &str = "18.6";
+
+/// What pgAdmin needs from `runtime/`, whose desktop shell (384 MB) Kiln leaves out: `libpq`
+/// and the libraries it loads, without which its PostgreSQL driver (psycopg) can't start on a
+/// PC with no PostgreSQL on its PATH (P4D-01), and the tools its backup and restore run.
+const RUNTIME_KEPT: &[&str] = &[
+    "libpq.dll",
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll",
+    "libiconv-2.dll",
+    "libintl-9.dll",
+    "liblz4.dll",
+    "libwinpthread-1.dll",
+    "libzstd.dll",
+    "zlib1.dll",
+    "pg_dump.exe",
+    "pg_dumpall.exe",
+    "pg_restore.exe",
+    "psql.exe",
+];
 
 /// The folder of pgAdmin's web app in `bin`.
 fn web(bin: &Path) -> PathBuf {
@@ -111,11 +131,22 @@ impl ServiceProvider for Pgadmin {
             .join(format!("{}{EXE_SUFFIX}", self.executable_name()))
     }
 
+    /// Its program, and `libpq` from `runtime/`: a version unpacked before P4D-01 lacks it.
+    fn installed(&self, bin: &Path) -> bool {
+        self.executable(bin).is_file()
+            && bin
+                .join("pgAdmin 4")
+                .join("runtime")
+                .join("libpq.dll")
+                .is_file()
+    }
+
     /// pgAdmin's Python and web app only.
     fn keep(&self, path: &str) -> bool {
-        path.starts_with("pgAdmin 4/")
-            && !path.starts_with("pgAdmin 4/runtime/")
-            && !path.starts_with("pgAdmin 4/docs/")
+        if let Some(file) = path.strip_prefix("pgAdmin 4/runtime/") {
+            return RUNTIME_KEPT.contains(&file);
+        }
+        path.starts_with("pgAdmin 4/") && !path.starts_with("pgAdmin 4/docs/")
     }
 
     /// Its page, as `pgadmin.test` (ADR 0044).
@@ -138,12 +169,7 @@ impl ServiceProvider for Pgadmin {
     /// Kiln's PostgreSQL tools; then Kiln's servers loaded, then pgAdmin started.
     fn config(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Option<String> {
         let port = ports.get(HTTP.role).copied().unwrap_or(HTTP.usual);
-        let postgres_bin = dirs
-            .bin
-            .parent()
-            .and_then(Path::parent)
-            .map(|bins| bins.join("postgres").join(POSTGRES_VERSION).join("bin"))
-            .unwrap_or_default();
+        let runtime = dirs.bin.join("pgAdmin 4").join("runtime");
         Some(format!(
             "# Kiln's pgAdmin launcher (ADR 0071), rewritten before every start.\n\
              bind = '127.0.0.1'\n\
@@ -151,9 +177,12 @@ impl ServiceProvider for Pgadmin {
              data = {data}\n\
              servers = {servers}\n\
              web = {web}\n\
-             pg_bin = {pg_bin}\n\
+             runtime = {runtime}\n\
              \n\
              import os, sys, subprocess, runpy\n\
+             # libpq and its libraries, for psycopg: on PATH and as a DLL folder (P4D-01).\n\
+             os.environ['PATH'] = runtime + os.pathsep + os.environ.get('PATH', '')\n\
+             os.add_dll_directory(runtime)\n\
              os.makedirs(data, exist_ok=True)\n\
              sys.path.insert(0, web)\n\
              os.chdir(web)\n\
@@ -170,7 +199,7 @@ impl ServiceProvider for Pgadmin {
              config.KERBEROS_CCACHE_DIR = os.path.join(data, 'kerberoscache')\n\
              config.UPGRADE_CHECK_ENABLED = False\n\
              config.MASTER_PASSWORD_REQUIRED = False\n\
-             config.DEFAULT_BINARY_PATHS = {{'pg': pg_bin, 'ppas': ''}}\n\
+             config.DEFAULT_BINARY_PATHS = {{'pg': runtime, 'ppas': ''}}\n\
              if sys.argv[1:] == ['--load-servers']:\n\
              \x20   sys.argv = ['setup.py', 'load-servers', servers, '--replace']\n\
              \x20   runpy.run_path(os.path.join(web, 'setup.py'), run_name='__main__')\n\
@@ -183,7 +212,7 @@ impl ServiceProvider for Pgadmin {
             data = py(&dirs.data),
             servers = py(&servers_file(dirs)),
             web = py(&web(&dirs.bin)),
-            pg_bin = py(&postgres_bin),
+            runtime = py(&runtime),
         ))
     }
 
@@ -234,6 +263,11 @@ mod tests {
         assert!(Pgadmin.keep("pgAdmin 4/python/python.exe"));
         assert!(Pgadmin.keep("pgAdmin 4/web/pgAdmin4.py"));
         assert!(!Pgadmin.keep("pgAdmin 4/runtime/pgAdmin4.exe"));
+        assert!(!Pgadmin.keep("pgAdmin 4/runtime/ffmpeg.dll"));
+        // Its PostgreSQL driver can't start without libpq (P4D-01).
+        assert!(Pgadmin.keep("pgAdmin 4/runtime/libpq.dll"));
+        assert!(Pgadmin.keep("pgAdmin 4/runtime/libssl-3-x64.dll"));
+        assert!(Pgadmin.keep("pgAdmin 4/runtime/pg_dump.exe"));
         assert!(!Pgadmin.keep("pgAdmin 4/docs/en_US/html/index.html"));
         assert!(!Pgadmin.keep("bin/postgres.exe"));
     }
@@ -247,7 +281,7 @@ mod tests {
         assert!(text.contains("bind = '127.0.0.1'\nport = 5051\n"), "{text}");
         assert!(text.contains("config.UPGRADE_CHECK_ENABLED = False"));
         assert!(text.contains("pgadmin-9"));
-        assert!(text.contains("postgres"));
+        assert!(text.contains("os.add_dll_directory(runtime)"));
         // Indented blocks are real Python indentation.
         assert!(text.contains("else:\n    if os.path.isfile(servers):\n        done = "));
         let launch = Pgadmin.launch(&dirs, &BTreeMap::new());
