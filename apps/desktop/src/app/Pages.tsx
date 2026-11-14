@@ -80,6 +80,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
         </SettingRow>
       </Section>
       <KilnSection />
+      <NamesSection />
       <AssistantsSection />
       <UpdatesSection />
       <FootprintSection />
@@ -298,6 +299,37 @@ function UpdatesSection() {
 }
 
 // AI assistants (ADR 0066): the command an assistant runs, and whether it may change anything.
+/** Site names (ADR 0078): the hosts file, or Kiln answering every name under its TLD. */
+function NamesSection() {
+  const settings = useRead<KilnSettings>("settings.get");
+  const { confirm } = useChanges();
+  const on = settings.data?.wildcard_dns ?? false;
+  return (
+    <Section title="Site names">
+      <SettingRow
+        title={on ? "Kiln answers every .test name" : "Names come from the hosts file"}
+        control={
+          settings.data && (
+            <Button
+              onClick={() =>
+                on
+                  ? confirm("Use the hosts file again?", ["dns", "off"], "Names come from the hosts file again.")
+                  : confirm("Answer every .test name?", ["dns", "on"], "Every .test name reaches this PC now: new sites need no hosts-file change.")
+              }
+            >
+              {on ? "Use the hosts file again…" : "Answer every name…"}
+            </Button>
+          )
+        }
+      >
+        {on
+          ? "One rule in Windows' name resolution policy sends .test names to Kiln on this PC; new sites work at once, with no administrator prompt. Kiln's daemon has to be running for names to resolve."
+          : "Each site's name is written to the hosts file, which needs Windows' administrator prompt each time. Kiln can instead answer every .test name itself: one rule in Windows' name resolution policy, added once with your approval, and undone from History."}
+      </SettingRow>
+    </Section>
+  );
+}
+
 function AssistantsSection() {
   const settings = useRead<KilnSettings>("settings.get");
   const { run } = useChanges();

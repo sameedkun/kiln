@@ -51,6 +51,12 @@ pub enum Request {
     UntrustSystemCa {
         sha256: String,
     },
+    /// Windows: Kiln's one Name Resolution Policy rule for the TLD, sending it to 127.0.0.1,
+    /// on or off (ADR 0078). Only the rule with Kiln's marker is ever touched.
+    NrptRule {
+        tld: String,
+        on: bool,
+    },
     Shutdown,
 }
 
@@ -77,6 +83,10 @@ pub enum Response {
         unchanged: bool,
         bytes_before: u64,
         bytes_after: u64,
+    },
+    NrptChanged {
+        /// Whether anything changed (false: already as requested).
+        changed: bool,
     },
     SystemTrustChanged {
         /// The anchor file written or removed.

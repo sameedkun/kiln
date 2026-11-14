@@ -13,6 +13,11 @@ $text = if (Test-Path $hosts) { [IO.File]::ReadAllText($hosts) } else { '' }
 $herdBlock = [regex]::Match($text, '(?s)# Herd generated Hosts.*?# End Herd generated Hosts').Value
 "herd hosts block $([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($herdBlock))).Replace('-', '')) ($($herdBlock.Length) chars)"
 
+# Name resolution policy rules (ADR 0078): Kiln's `.test` rule must be gone after uninstall.
+$nrpt = @(Get-DnsClientNrptRule -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Namespace -join ',') -> $($_.NameServers -join ',') [$($_.Comment)]" } | Sort-Object)
+"nrpt rules: $($nrpt.Count)"
+foreach ($r in $nrpt) { "  nrpt $r" }
+
 $env_key = Get-Item 'HKCU:\Environment'
 "user PATH ($($env_key.GetValueKind('Path'))): $($env_key.GetValue('Path', '', 'DoNotExpandEnvironmentNames'))"
 

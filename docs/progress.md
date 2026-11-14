@@ -1504,7 +1504,7 @@ Plan: [plan.md, Phase 4d](plan.md#phase-4d-from-the-users-second-run-windows).
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | P4D-01 | pgAdmin without PostgreSQL on PATH | built | [I-99](issues.md#i-99) |
-| P4D-02 | Names without the hosts file | planned | ADR 0078, approved |
+| P4D-02 | Names without the hosts file | built | [ADR 0078](adr/0078-names-without-the-hosts-file.md); the spike and a Scenario check on CI |
 | P4D-03 | Forms and notices | built | toasts above dialogs, labels above selects, new-site dialog, snapshots tab |
 | P4D-04 | Framework icons | built | Simple Icons (CC0) |
 | P4D-05 | RustFS console as `rustfs.test` | built | |

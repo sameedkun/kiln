@@ -102,6 +102,8 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["ca", "init"], false),
     (&["ca", "trust"], true),
     (&["hosts", "sync"], true),
+    (&["dns", "on"], true),
+    (&["dns", "off"], true),
     (&["shims", "install"], true),
     (&["app", "enable"], true),
     (&["app", "disable"], true),

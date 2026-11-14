@@ -1,7 +1,6 @@
 # 0078. Names without the hosts file
 
-- **Status:** proposed: the spike passed on CI (2026-11-14); building it waits for the user's
-  approval, as it changes a Windows setting once
+- **Status:** accepted: approved by the user 2026-11-15; built in P4D-02
 - **Date:** 2026-11-14
 - **Task:** P4C-14 (from Phase 6's "Windows wildcard DNS") · Builds on [ADR 0015](0015-parked-folders-and-drivers.md) §9
 
@@ -47,3 +46,35 @@ A minimal DNS responder on UDP 127.0.0.1:53 answered any `*.test` A question wit
   the app starts kilnd at sign-in, and the doctor says so.
 - Port 53 on loopback may be taken by another local DNS tool; Kiln then says which, and stays
   on the hosts file.
+
+## As built (P4D-02, 2026-11-15)
+
+**More from the spike**, on a runner with a wildcard listener on UDP 0.0.0.0:53 beside Kiln's
+(as Internet Connection Sharing has on the user's PC, where binding 127.0.0.1:53 beside it
+was checked to work): Edge opened a `.test` name through the rule; AAAA questions got an
+empty answer; with the rule on and the responder down, a name in the hosts file still
+resolved, and any other `.test` name failed only after about 12 s. So kilnd must be running
+while the rule is on; the app starts it at sign-in, and `kiln setup` says which mode is on.
+
+**The helper's operation** (`NrptRule { tld, on }`): the TLD is validated again as a
+`Tld`; 127.0.0.1 and the marker (`Kiln (ADR 0078)`) are constants in the helper. It runs
+Windows PowerShell by its full System32 path, `-NoProfile -NonInteractive`, with a fixed
+script: add the rule only if no rule exists for the namespace (a rule without Kiln's marker
+is another program's, and the add is refused), remove only the marked rule, then clear the
+DNS client's cache.
+
+**The operation** (`nrpt_rule`): previewed (before and after), journaled, verified by
+reading the rules back, and undone from History; uninstall removes it with the rest of the
+journal, and the Scenario's snapshots list NRPT rules to prove it.
+
+**`kiln dns on|off|status`**: `on` applies the operation, sets `dns.wildcard`, starts kilnd,
+and waits up to 20 s for `kiln-check.<tld>` to resolve to loopback; if it doesn't, the rule
+is undone and Kiln stays on the hosts file. kilnd answers on UDP 127.0.0.1:53 only while
+`dns.wildcard` is on (a pure, bounds-checked parser with property tests: any bytes are
+answered or dropped, never a panic).
+
+**Everything that said "not in the hosts file"** now asks whether the name resolves: the sites'
+`in_hosts`, `kiln sites`, the notes after link and park, `kiln setup`, the doctor's count, and
+the app's "add the new names to the hosts file?" offer, which isn't made while the rule is on.
+The app's Settings has "Site names", to turn it on (previewed, one administrator prompt) or
+back to the hosts file.

@@ -123,6 +123,11 @@ mod system {
         }
         #[cfg(windows)]
         {
+            kiln_platform::nrpt_op::register_nrpt_rule(
+                &mut registry,
+                session.clone(),
+                Rc::new(kiln_platform::nrpt_op::SystemNrpt),
+            );
             register_trust_ca(&mut registry);
             register_user_path(&mut registry, Rc::new(RegistryPath));
         }
@@ -187,6 +192,68 @@ mod system {
             report.entry_ids[0],
             report.entry_ids[0]
         );
+        report_elevation(&ctx.session);
+        Ok(())
+    }
+
+    /// `kiln dns on|off` ([ADR 0078]): Kiln's name resolution rule for its TLD, previewed and
+    /// journaled like the hosts block; then kilnd answers the TLD (on), and a name under it
+    /// must resolve to this PC or the change is undone.
+    ///
+    /// [ADR 0078]: ../../../docs/adr/0078-names-without-the-hosts-file.md
+    #[cfg(windows)]
+    pub fn dns_set(on: bool, yes: bool) -> Result<(), String> {
+        use kiln_platform::nrpt_op::{NrptRuleOp, PrivilegedNrpt, SystemNrpt};
+        let mut ctx = open()?;
+        let mut store = crate::web::open_store()?;
+        let tld = kiln_runtime::tld(&store).map_err(|e| e.to_string())?;
+        let writer: Rc<dyn PrivilegedNrpt> = ctx.session.clone();
+        let op: Box<dyn Operation> = Box::new(NrptRuleOp::new(
+            tld.clone(),
+            on,
+            writer,
+            Rc::new(SystemNrpt),
+        ));
+        print_preview(&op.preview().map_err(|e| e.to_string())?, "(no rule)");
+        if !yes && !confirm(&format!("Apply this change? {APPROVAL}")) {
+            say!("Nothing was changed.");
+            return Ok(());
+        }
+        let report = ctx.engine.apply(&[op]).map_err(|e| e.to_string())?;
+        ctx.session.finish().map_err(|e| e.to_string())?;
+        let id = report.entry_ids[0];
+        store
+            .set_setting(kiln_daemon::dns::ON_KEY, if on { "on" } else { "off" })
+            .map_err(|e| e.to_string())?;
+        if on {
+            // kilnd answers once it sees the setting; a name under the TLD must reach this PC.
+            if let Err(e) = crate::daemon::start() {
+                say!("Note: {e}");
+            }
+            let probe = format!("kiln-check.{tld}");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let resolved = loop {
+                let ok = std::net::ToSocketAddrs::to_socket_addrs(&(probe.as_str(), 80))
+                    .is_ok_and(|mut a| a.any(|a| a.ip().is_loopback()));
+                if ok || std::time::Instant::now() > deadline {
+                    break ok;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            };
+            if !resolved {
+                let _ = store.set_setting(kiln_daemon::dns::ON_KEY, "off");
+                let _ = undo(Some(id), false, true);
+                return Err(format!(
+                    "{probe} didn't resolve to this PC within 20 s, so the rule was taken back out; Kiln stays on the hosts file. See `kiln doctor`."
+                ));
+            }
+            say!(
+                "Every name under .{tld} now reaches this PC: new sites need no hosts-file change."
+            );
+        } else {
+            say!("Names under .{tld} come from the hosts file again (`kiln hosts sync`).");
+        }
+        say!("Recorded as operation #{id} (undo with `kiln undo {id}`).");
         report_elevation(&ctx.session);
         Ok(())
     }
@@ -803,6 +870,8 @@ pub fn ca_info() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub use system::dns_set;
 pub use system::{
     LoginWords, apply_quietly, autostart_disable, autostart_enable, ca_trust, hosts_set,
     login_item_enable, revert_quietly, shims_install, undo,

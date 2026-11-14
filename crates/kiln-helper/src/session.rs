@@ -156,6 +156,12 @@ impl PrivilegedHosts for HelperSession {
     }
 }
 
+impl kiln_platform::nrpt_op::PrivilegedNrpt for HelperSession {
+    fn set_rule(&self, tld: &Tld, on: bool) -> Result<(), OpError> {
+        self.with_client(|client| client.nrpt_rule(tld.as_str(), on).map(drop))
+    }
+}
+
 impl PrivilegedTrust for HelperSession {
     fn trust_system_ca(&self, pem: &str) -> Result<(), OpError> {
         self.with_client(|client| client.trust_system_ca(pem).map(drop))

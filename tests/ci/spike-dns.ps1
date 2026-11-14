@@ -64,8 +64,8 @@ try {
         $ips = [Net.Dns]::GetHostAddresses('shop.kiln-spike.test') | ForEach-Object { $_.ToString() }
         if ($ips -notcontains '127.0.0.1') { throw "addresses: $($ips -join ', ')" }
     }
-    Check 'AAAA and HTTPS (type 65) questions get an empty answer, not "no such name"' {
-        foreach ($type in 'AAAA', 'HTTPS') {
+    Check 'AAAA questions get an empty answer, not "no such name" (type 65 is covered by unit tests: Resolve-DnsName has no HTTPS type)' {
+        foreach ($type in 'AAAA') {
             $err = $null
             $null = Resolve-DnsName 'kiln-spike.test' -Type $type -DnsOnly -ErrorAction SilentlyContinue -ErrorVariable err
             if ($err -and "$err" -match 'does not exist|DNS name does not exist|NXDOMAIN') { throw "${type}: $err" }
@@ -106,7 +106,7 @@ try {
     Check 'other names still go to the usual DNS' {
         if (-not [Net.Dns]::GetHostAddresses('github.com')) { throw 'github.com did not resolve' }
     }
-    Check 'with the rule and the responder down: a hosts-file name still resolves; others under .test fail fast' {
+    Check 'with the rule and the responder down: a hosts-file name still resolves; others under .test fail (timed)' {
         Stop-Job $responder
         Clear-DnsClientCache
         $ips = [Net.Dns]::GetHostAddresses('kiln-hosts.test') | ForEach-Object { $_.ToString() }

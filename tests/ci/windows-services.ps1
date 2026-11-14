@@ -1154,6 +1154,21 @@ Check 'API v2: kiln.hello says 2; sites, services and the catalog are read throu
     # A service's databases for its page (ADR 0068).
     Expect '"shop"' (Kiln daemon call services.databases '{\"name\":\"mysql-8.4\"}')
 }
+Say '== Names without the hosts file (ADR 0078)'
+# Left on: the uninstall at the end must take the rule out again (the snapshots compare it).
+Check 'kiln dns on: Kiln''s rule added through the helper, kilnd answers, any .test name reaches this PC' {
+    $out = Kiln dns on --yes
+    Expect 'Every name under .test now reaches this PC' $out
+    $rule = Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.test' }
+    if (-not $rule -or $rule.Comment -ne 'Kiln (ADR 0078)' -or ($rule.NameServers -join ',') -ne '127.0.0.1') { throw "rule: $($rule | Out-String)" }
+    Clear-DnsClientCache
+    $ips = [Net.Dns]::GetHostAddresses('any-name-at-all.test') | ForEach-Object { $_.ToString() }
+    if ($ips -notcontains '127.0.0.1') { throw "any-name-at-all.test: $($ips -join ', ')" }
+    $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })
+    if (-not $site.in_hosts) { throw 'shop.test still reported as missing from the hosts file' }
+    Expect 'Kiln answers names under its TLD' (Kiln dns status)
+    Expect '.test' (Kiln history)
+}
 Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is refused' {
     $before = Kiln history
     $id = ((Kiln daemon call jobs.start '{\"args\":[\"undo\"],\"mode\":\"preview\"}') | ConvertFrom-Json).job

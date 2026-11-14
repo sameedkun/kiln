@@ -65,6 +65,13 @@ fn handle(
         Request::UntrustSystemCa { sha256 } => {
             trust_result(system_trust::untrust(anchors, &sha256))
         }
+        Request::NrptRule { tld, on } => match crate::nrpt::set(&tld, on) {
+            Ok(changed) => Response::NrptChanged { changed },
+            Err(f) => Response::Error {
+                code: f.code,
+                message: f.message,
+            },
+        },
         Request::Shutdown => Response::Bye,
     }
 }

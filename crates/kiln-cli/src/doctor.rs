@@ -107,8 +107,13 @@ pub fn setup() -> Result<(), String> {
             .iter()
             .map(|p| p.host.to_string()),
     );
+    // Nothing is missing while Kiln answers its TLD (ADR 0078).
+    let wildcard = web::wildcard_dns(&store);
     let listed = web::hosts_names();
-    let missing: Vec<&String> = hosts.iter().filter(|h| !listed.contains(h)).collect();
+    let missing: Vec<&String> = hosts
+        .iter()
+        .filter(|h| !wildcard && !listed.contains(h))
+        .collect();
     let applied: Vec<String> = kiln_ops::Journal::entries(&store)
         .unwrap_or_default()
         .into_iter()
@@ -156,7 +161,9 @@ pub fn setup() -> Result<(), String> {
     );
     say!(
         "Hosts file:        {}",
-        if missing.is_empty() {
+        if wildcard {
+            "not needed: Kiln answers every name under its TLD (`kiln dns status`)".to_owned()
+        } else if missing.is_empty() {
             "every site is in it".to_owned()
         } else {
             format!("{} site(s) missing (`kiln hosts sync`)", missing.len())

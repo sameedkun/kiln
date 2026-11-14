@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useRef, useState, type ReactNod
 import { Button } from "../components/Button";
 import { Dialog } from "../components/Dialog";
 import { useDismissToast, useToast } from "../components/Toast";
-import { message, openSite, runJob, type JobEvent } from "./api";
+import { call, message, openSite, runJob, type JobEvent, type KilnSettings } from "./api";
 
 // Making a change from the app (ADR 0053 §4): commands that ask before changing anything
 // show their preview in a dialog first, and run only when the user confirms; the others
@@ -56,7 +56,10 @@ export function ChangeProvider({ children }: { children: ReactNode }) {
   // After a change that adds site names: the hosts file, if it lacks any of them. Writing it
   // needs Windows' administrator prompt, so it's offered, not done; nothing shows when every
   // name is already there.
-  const offerHosts = useCallback(() => {
+  const offerHosts = useCallback(async () => {
+    // Not needed while Kiln answers every name itself (ADR 0078).
+    const settings = await call<KilnSettings>("settings.get").catch(() => null);
+    if (settings?.wildcard_dns) return;
     const args = ["hosts", "sync"];
     const events: JobEvent[] = [];
     runJob(args, "preview", (e) => events.push(e))

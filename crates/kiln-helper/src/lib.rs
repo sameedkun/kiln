@@ -10,6 +10,7 @@
 //!   `kiln_platform::hosts_op::PrivilegedHosts` (one prompt per batch).
 
 pub mod hosts;
+pub mod nrpt;
 pub mod proto;
 pub mod validate;
 

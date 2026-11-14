@@ -478,9 +478,15 @@ pub fn restart_php(store: &StateStore, version: &str) -> Result<(), String> {
 }
 
 pub(crate) fn hosts_hint(host: &str) {
-    if !hosts_names().iter().any(|n| n == host) {
+    if !resolves(host) {
         say!("Note: {host} isn't in the hosts file yet; run `kiln hosts sync`.");
     }
+}
+
+/// Whether `host` reaches this PC: every name does while Kiln answers its TLD (ADR 0078),
+/// else the ones in Kiln's hosts-file block.
+pub(crate) fn resolves(host: &str) -> bool {
+    open_store().is_ok_and(|store| wildcard_dns(&store)) || hosts_names().iter().any(|n| n == host)
 }
 
 /// Names currently in Kiln's hosts-file block (empty if it can't be read).
@@ -605,10 +611,7 @@ pub fn park(path: Option<PathBuf>) -> Result<(), String> {
     {
         say!("  skipped {}: {}", skipped.folder.display(), skipped.reason);
     }
-    let missing = here
-        .iter()
-        .filter(|s| !hosts_names().iter().any(|n| n == s.host.as_str()))
-        .count();
+    let missing = here.iter().filter(|s| !resolves(s.host.as_str())).count();
     if missing > 0 {
         say!("{missing} of them aren't in the hosts file yet; run `kiln hosts sync`.");
     }
@@ -821,8 +824,9 @@ pub fn sites() -> Result<(), String> {
     }
     let config = url_config(&store);
     let in_hosts = hosts_names();
+    let wildcard = wildcard_dns(&store);
     let dns_note = |host: &HostName| {
-        if in_hosts.iter().any(|n| n == host.as_str()) {
+        if wildcard || in_hosts.iter().any(|n| n == host.as_str()) {
             ""
         } else {
             "  (not in hosts file)"
@@ -922,6 +926,8 @@ pub fn settings() -> Result<(), String> {
             "php_workers": workers,
             "mcp_allow_changes": crate::mcp::changes_allowed(),
             "check_kiln_updates": crate::updates::check_kiln(&store),
+            // Names without the hosts file (ADR 0078).
+            "wildcard_dns": wildcard_dns(&store),
         }));
         return Ok(());
     }
@@ -1022,8 +1028,11 @@ fn sites_data(
 ) -> Result<serde_json::Value, String> {
     use serde_json::json;
     let config = url_config(store);
+    // A name "is in the hosts file" for the app when it resolves: always while Kiln answers
+    // its TLD (ADR 0078).
+    let wildcard = wildcard_dns(store);
     let in_hosts = hosts_names();
-    let listed = |host: &str| in_hosts.iter().any(|n| n == host);
+    let listed = |host: &str| wildcard || in_hosts.iter().any(|n| n == host);
     let installed = kiln_runtime::installed(store).map_err(|e| e.to_string())?;
     let versions =
         kiln_runtime::site_versions(store, &all.sites, &installed).map_err(|e| e.to_string())?;
@@ -1325,6 +1334,49 @@ pub fn print_config() -> Result<(), String> {
     let json = web_config(&store)?.render().map_err(|e| e.to_string())?;
     say!("{json}");
     Ok(())
+}
+
+/// Whether names under Kiln's TLD come from kilnd (ADR 0078): Kiln's rule is on.
+#[must_use]
+pub fn wildcard_dns(store: &StateStore) -> bool {
+    store
+        .setting(kiln_daemon::dns::ON_KEY)
+        .ok()
+        .flatten()
+        .is_some_and(|v| v == "on")
+}
+
+/// `kiln dns on|off|status` (ADR 0078).
+pub fn dns(state: &str, yes: bool) -> Result<(), String> {
+    match state {
+        "status" => {
+            let on = wildcard_dns(&open_store()?);
+            if crate::out::json() {
+                crate::out::data(serde_json::json!({ "on": on }));
+            }
+            say!(
+                "{}",
+                if on {
+                    "Kiln answers names under its TLD (no hosts-file changes needed)."
+                } else {
+                    "Names come from the hosts file (`kiln dns on` answers every name under the TLD instead)."
+                }
+            );
+            Ok(())
+        }
+        "on" | "off" => {
+            #[cfg(windows)]
+            {
+                apply::dns_set(state == "on", yes)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = yes;
+                Err("names without the hosts file are Windows' for now (ADR 0078)".into())
+            }
+        }
+        other => Err(format!("`{other}`: use on, off or status")),
+    }
 }
 
 pub fn hosts_sync(yes: bool) -> Result<(), String> {

@@ -119,6 +119,8 @@ export interface KilnSettings {
   php_workers: number;
   mcp_allow_changes?: boolean;
   check_kiln_updates?: boolean;
+  /** Kiln answers every name under its TLD; the hosts file isn't needed (ADR 0078). */
+  wildcard_dns?: boolean;
 }
 
 export interface LogSource {

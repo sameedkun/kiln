@@ -172,6 +172,16 @@ enum Command {
         #[arg(long)]
         lan: bool,
     },
+    /// Names without the hosts file (Windows, ADR 0078): `on` adds one rule to Windows' name
+    /// resolution policy (an administrator prompt) so every name under Kiln's TLD reaches
+    /// this PC through Kiln; `off` takes it out. Previewed, and in History.
+    Dns {
+        /// on, off or status.
+        state: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Put a site in a group (sites that belong together, shown together), or with no group
     /// given, take it out of its group (ADR 0074).
     Group {
@@ -1259,6 +1269,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Footprint => footprint::footprint(),
         Command::Mcp { action } => run_mcp(action),
         Command::Requests { site } => requests::requests(site.as_deref()),
+        Command::Dns { state, yes } => web::dns(&state, yes),
         command @ (Command::Group { .. }
         | Command::Git { .. }
         | Command::Share { .. }

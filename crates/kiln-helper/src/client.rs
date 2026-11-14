@@ -145,6 +145,17 @@ impl HelperClient {
         }
     }
 
+    /// Kiln's name resolution rule for `tld` on or off (ADR 0078); whether anything changed.
+    pub fn nrpt_rule(&mut self, tld: &str, on: bool) -> Result<bool, ClientError> {
+        match self.call(&Request::NrptRule {
+            tld: tld.to_owned(),
+            on,
+        })? {
+            Response::NrptChanged { changed } => Ok(changed),
+            other => Err(ClientError::Unexpected(Box::new(other))),
+        }
+    }
+
     /// Ends the session; the helper exits afterwards.
     pub fn shutdown(mut self) -> Result<(), ClientError> {
         match self.call(&Request::Shutdown)? {
