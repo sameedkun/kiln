@@ -600,7 +600,9 @@ Say '== Dev processes (ADR 0060)'
 function QueueProcesses { @(Get-CimInstance Win32_Process -Filter "Name='php.exe'" | Where-Object { $_.CommandLine -match 'queue:(listen|work)' }) }
 Check 'kiln service add queue --project shop: php artisan queue:listen, kept up by Kiln' {
     Expect 'running as queue-shop' (Kiln service add queue --project $shop)
-    if ((QueueProcesses).Count -lt 1) { throw 'no queue:listen process' }
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((QueueProcesses).Count -lt 1 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if ((QueueProcesses).Count -lt 1) { throw "no queue:listen process:`n$(Kiln service logs queue-shop)" }
 }
 Check 'a job dispatched by Laravel runs on it (the queue is Kiln''s Redis)' {
     $done = Join-Path $shop 'storage\kiln-queued.txt'
@@ -669,7 +671,9 @@ Check 'every pinned Xdebug build matches its SHA-256 on xdebug.org' {
     if ($found.Count -lt 4) { throw "found $($found.Count) pins" }
     foreach ($pin in $found) {
         $file = Join-Path $dir $pin.Groups[1].Value
-        Invoke-WebRequest "https://xdebug.org/files/$($pin.Groups[1].Value)" -OutFile $file -UseBasicParsing
+        # curl: Windows PowerShell's web client rejects xdebug.org's response line.
+        curl.exe -fsSL --max-time 120 -o $file "https://xdebug.org/files/$($pin.Groups[1].Value)"
+        if ($LASTEXITCODE -ne 0) { throw "couldn't download $($pin.Groups[1].Value)" }
         $sum = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
         if ($sum -ne $pin.Groups[2].Value) { throw "$($pin.Groups[1].Value): $sum, pinned $($pin.Groups[2].Value)" }
     }
@@ -682,7 +686,8 @@ function XdebugPage([string[]] $more = @()) {
 }
 Check 'kiln php xdebug on: fetched, checked, loaded by a debug worker of its own' {
     Expect 'is on for PHP' (Kiln php xdebug on)
-    Expect '"xdebug": true' (Kiln --json php list)
+    $list = (Kiln --json php list) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+    if (-not ($list.data.versions | Where-Object { $_.xdebug })) { throw "no version has xdebug on: $($list | ConvertTo-Json -Depth 4)" }
 }
 Check 'a request without a trigger stays on the plain workers' {
     $page = XdebugPage
@@ -705,7 +710,7 @@ Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet
         $out = Join-Path $dir 'xdebug-page.txt'
         $uri = [Uri] $xdebugUrl
         $curl = Start-Process curl.exe -NoNewWindow -PassThru -RedirectStandardOutput $out `
-            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', 'Cookie: XDEBUG_SESSION=kiln', $xdebugUrl)
+            -ArgumentList @('-sS', '--max-time', '30', '--resolve', "$($uri.Host):$($uri.Port):127.0.0.1", '-H', '"Cookie: XDEBUG_SESSION=kiln"', $xdebugUrl)
         $accept = $listener.AcceptTcpClientAsync()
         if (-not $accept.Wait(20000)) { throw 'Xdebug never connected' }
         $client = $accept.Result
@@ -723,7 +728,12 @@ Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain 
     Expect 'is off for PHP' (Kiln php xdebug off)
     $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')
     if ($page -ne 'plain') { throw "with the cookie after off: $page" }
-    $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+    # The retired worker stops in the background, after Caddy has moved off it.
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $debug = @(Get-CimInstance Win32_Process -Filter "Name='php-cgi.exe'" | Where-Object { $_.CommandLine -match 'xdebug' })
+        if ($debug.Count) { Start-Sleep -Milliseconds 250 }
+    } while ($debug.Count -and (Get-Date) -lt $deadline)
     if ($debug.Count) { throw "a debug worker is left:`n$($debug.CommandLine -join "`n")" }
 }
 
