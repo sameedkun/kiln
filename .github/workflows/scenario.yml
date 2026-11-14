@@ -48,7 +48,7 @@ jobs:
         run: tests\ci\windows-services.ps1 -Kiln "$pwd\target\debug\kiln.exe" -Uninstall ${{ matrix.uninstall }}
       - name: keep the scenario's log and snapshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-scenario-${{ matrix.uninstall }}
           path: ${{ runner.temp }}/kiln-ci
