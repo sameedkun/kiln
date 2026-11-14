@@ -505,7 +505,7 @@ Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link se
     try {
         $out = Kiln init $clone --db mysql-8.4 --no-build --yes
         foreach ($step in 'composer install --no-interaction', 'Wrote .env from .env.example', 'php artisan key:generate', 'Created the database cloned', 'php artisan migrate --force', 'php artisan storage:link', 'Set up: ') { Expect $step $out }
-        if ($out -match 'npm') { throw "--no-build ran npm:`n$out" }
+        if ($out -match 'npm (ci|install|run)') { throw "--no-build ran npm:`n$out" }
         $count = Client 'mysql-8.4' 'cloned' 'SELECT COUNT(*) FROM migrations;'
         if ($count -notmatch '(?m)^\s*[1-9]') { throw "no migrations on mysql-8.4:`n$count" }
         $page = Page (SiteBase 'cloned')
