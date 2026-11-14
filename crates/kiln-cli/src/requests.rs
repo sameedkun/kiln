@@ -51,9 +51,47 @@ pub fn percentile(sorted: &[f64], percent: usize) -> f64 {
     sorted[rank.min(sorted.len()) - 1]
 }
 
-/// Each site's figures, by host.
+/// Requests and failures (5xx) in each of the 24 hours up to `now` (seconds since 1970),
+/// oldest first; older requests are left out (P4C-05).
+#[must_use]
+pub fn hourly(requests: &[&Request], now: f64) -> (Vec<u64>, Vec<u64>) {
+    let mut counts = vec![0_u64; 24];
+    let mut failures = vec![0_u64; 24];
+    for r in requests {
+        let ago = (now - r.at) / 3600.0;
+        if !(0.0..24.0).contains(&ago) {
+            continue;
+        }
+        // 0 to 23 hours ago, as a bucket from the oldest (0) to the newest (23).
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // in 0..24
+        let bucket = 23 - ago.floor() as usize;
+        counts[bucket] += 1;
+        if r.status >= 500 {
+            failures[bucket] += 1;
+        }
+    }
+    (counts, failures)
+}
+
+/// How many requests answered with each class of status: 2xx, 3xx, 4xx, 5xx.
+#[must_use]
+pub fn statuses(requests: &[&Request]) -> Value {
+    let class = |c: u64| requests.iter().filter(|r| r.status / 100 == c).count();
+    json!({"2xx": class(2), "3xx": class(3), "4xx": class(4), "5xx": class(5)})
+}
+
+/// Each site's figures, by host, with the last 24 hours counted up to now.
 #[must_use]
 pub fn summarize(requests: &[Request]) -> BTreeMap<String, Value> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64());
+    summarize_at(requests, now)
+}
+
+/// [`summarize`] as of `now` (seconds since 1970).
+#[must_use]
+pub fn summarize_at(requests: &[Request], now: f64) -> BTreeMap<String, Value> {
     let mut by_host: BTreeMap<&str, Vec<&Request>> = BTreeMap::new();
     for r in requests {
         by_host.entry(r.host.as_str()).or_default().push(r);
@@ -67,6 +105,7 @@ pub fn summarize(requests: &[Request]) -> BTreeMap<String, Value> {
             slowest.sort_by(|a, b| b.ms.total_cmp(&a.ms));
             slowest.truncate(SLOWEST);
             let round = |ms: f64| (ms * 10.0).round() / 10.0;
+            let (hours, failing_hours) = hourly(&all, now);
             (
                 host.to_owned(),
                 json!({
@@ -76,6 +115,9 @@ pub fn summarize(requests: &[Request]) -> BTreeMap<String, Value> {
                     "median_ms": round(percentile(&times, 50)),
                     "p95_ms": round(percentile(&times, 95)),
                     "since": all.iter().map(|r| r.at).fold(f64::INFINITY, f64::min),
+                    "hours": hours,
+                    "failing_hours": failing_hours,
+                    "statuses": statuses(&all),
                     "slowest": slowest.iter().map(|r| json!({
                         "at": r.at,
                         "method": r.method,
@@ -188,6 +230,33 @@ mod tests {
         assert_eq!(shop["slowest"][0]["uri"], "/boom");
         assert_eq!(shop["slowest"].as_array().unwrap().len(), SLOWEST);
         assert_eq!(sites["blog.test"]["count"], 1);
+    }
+
+    #[test]
+    fn the_last_day_by_hour_and_status() {
+        let mut lines = vec![
+            line("shop.test", "/", 200, 0.01),
+            line("shop.test", "/x", 404, 0.01),
+            line("shop.test", "/boom", 500, 0.01),
+        ];
+        lines.push(line("shop.test", "/old", 302, 0.01));
+        let mut all: Vec<Request> = lines.iter().filter_map(|l| parse(l)).collect();
+        let now = 1_794_600_000.0;
+        all[0].at = now - 10.0;
+        all[1].at = now - 10.0;
+        all[2].at = now - 3600.0 * 2.5;
+        all[3].at = now - 3600.0 * 30.0;
+        let shop = &summarize_at(&all, now)["shop.test"];
+        let hours: Vec<u64> = serde_json::from_value(shop["hours"].clone()).unwrap();
+        assert_eq!(hours.len(), 24);
+        assert_eq!(hours[23], 2);
+        assert_eq!(hours[21], 1);
+        assert_eq!(hours.iter().sum::<u64>(), 3);
+        assert_eq!(shop["failing_hours"][21], 1);
+        assert_eq!(
+            shop["statuses"],
+            json!({"2xx": 1, "3xx": 1, "4xx": 1, "5xx": 1})
+        );
     }
 
     #[test]

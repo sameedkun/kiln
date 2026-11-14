@@ -889,6 +889,33 @@ fn framework_version(driver: kiln_sites::Driver, project: &Path) -> Option<Strin
     framework_of(driver, project).1
 }
 
+/// The project's Git branch from `.git/HEAD` (P4C-05), without running Git: a worktree's
+/// `.git` file points at its own folder. A detached HEAD shows as its commit, shortened.
+fn git_branch(project: &Path) -> Option<String> {
+    let dot = project.join(".git");
+    let dir = if dot.is_file() {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+        project.join(target)
+    } else {
+        dot
+    };
+    let head = std::fs::read_to_string(dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    match head.strip_prefix("ref: ") {
+        Some(reference) => Some(
+            reference
+                .strip_prefix("refs/heads/")
+                .unwrap_or(reference)
+                .to_owned(),
+        ),
+        None if head.len() >= 7 && head.chars().all(|c| c.is_ascii_hexdigit()) => {
+            Some(head[..7].to_owned())
+        }
+        None => None,
+    }
+}
+
 /// `$wp_version = '6.6.2';` in `wp-includes/version.php`.
 fn wordpress_version(project: &Path) -> Option<String> {
     let text = std::fs::read_to_string(project.join("wp-includes").join("version.php")).ok()?;
@@ -955,6 +982,7 @@ fn sites_data(
                 "in_hosts": listed(host),
                 "project": site.project,
                 "framework": framework_of(site.driver, &site.project).0,
+                "git_branch": git_branch(&site.project),
                 "framework_version": framework_version(site.driver, &site.project),
                 "node": node_json(&kiln_runtime::node::node_for_dir(&nodes, default_node.as_deref(), &site.project)),
             })
@@ -1279,6 +1307,23 @@ mod framework_tests {
             framework_version(kiln_sites::Driver::Static, dir.path()),
             None
         );
+    }
+
+    #[test]
+    fn the_git_branch_is_read_from_head_in_a_clone_or_a_worktree() {
+        let clone = project(&[(".git/HEAD", "ref: refs/heads/feature/checkout\n")]);
+        assert_eq!(
+            git_branch(clone.path()).as_deref(),
+            Some("feature/checkout")
+        );
+        let detached = project(&[(".git/HEAD", "4c8048757bd1e0a7d4f1d1e2a3b4c5d6e7f80910\n")]);
+        assert_eq!(git_branch(detached.path()).as_deref(), Some("4c80487"));
+        let worktree = project(&[
+            (".git", "gitdir: meta/wt\n"),
+            ("meta/wt/HEAD", "ref: refs/heads/hotfix\n"),
+        ]);
+        assert_eq!(git_branch(worktree.path()).as_deref(), Some("hotfix"));
+        assert_eq!(git_branch(project(&[]).path()), None);
     }
 
     #[test]

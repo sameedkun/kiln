@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ArrowLeft16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
+import { BarChart } from "../components/BarChart";
 import { Button } from "../components/Button";
 import { Chips } from "../components/Chips";
 import { Notice } from "../components/Notice";
@@ -119,6 +120,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         <SiteDumps site={site} />
       ) : (
       <>
+      <SiteGlance site={site} />
       <Section title="How it runs">
         <li className="flex flex-wrap items-start gap-x-10 gap-y-4 border-b border-line px-1 py-4">
           {site.php ? (
@@ -381,6 +383,76 @@ function SiteProcesses({ site, onLog }: { site: Site; onLog: (source: string) =>
           </Row>
         );
       })}
+    </Section>
+  );
+}
+
+/** The hour labels under the day's chart: every sixth hour, as a clock time. */
+export function hourLabels(now: Date): string[] {
+  return Array.from({ length: 24 }, (_, i) => {
+    const at = new Date(now.getTime() - (23 - i) * 3_600_000);
+    return i % 6 === 5 ? `${String(at.getHours()).padStart(2, "0")}:00` : "";
+  });
+}
+
+/**
+ * The site at a glance (P4C-05): its last day of requests by hour, how they answered, its
+ * timing, and what it runs on.
+ */
+function SiteGlance({ site }: { site: Site }) {
+  const requests = useRead<RequestsList>("requests.get", { host: site.host });
+  const services = useRead<ServicesList>("services.list");
+  const r = requests.data?.sites.find((s) => s.host === site.host);
+  const used = (services.data?.instances ?? []).filter((i) => i.used_by.includes(site.host));
+  const procs = siteInstances(services.data?.instances ?? [], site.project);
+  const running = procs.filter((p) => p.instance.running).length;
+  const figure = (label: string, value: string, bad = false) => (
+    <div className="min-w-[110px]">
+      <div className="text-xs text-text-3">{label}</div>
+      <div className={`figures mt-1 text-xl font-semibold ${bad ? "text-bad" : ""}`}>{value}</div>
+    </div>
+  );
+  const day = r?.hours?.reduce((n, h) => n + h, 0) ?? 0;
+  const labels = hourLabels(new Date());
+  const statuses = r?.statuses;
+  return (
+    <Section title="At a glance" meta={r ? "the last 24 hours, from the web server's log" : undefined}>
+      <li className="flex flex-wrap gap-x-10 gap-y-4 border-b border-line px-1 py-4">
+        {figure("Requests today", r ? String(day) : "—")}
+        {figure("Median", r ? `${r.median_ms} ms` : "—")}
+        {figure("Slowest 5% over", r ? `${r.p95_ms} ms` : "—")}
+        {figure("Failed (5xx)", r ? String(r.failures) : "—", (r?.failures ?? 0) > 0)}
+        {figure("Branch", site.git_branch ?? "—")}
+        {figure("Services", used.length ? String(used.length) : "none")}
+        {figure("Processes", procs.length ? `${running} of ${procs.length} running` : "none")}
+      </li>
+      {r?.hours && day > 0 && (
+        <li className="border-b border-line px-1 py-4">
+          <BarChart
+            label="Requests by hour"
+            bars={r.hours.map((value, i) => ({
+              label: labels[i],
+              title: `${i === 23 ? "This hour" : `${23 - i} h ago`}: ${value} request${value === 1 ? "" : "s"}${r.failing_hours?.[i] ? `, ${r.failing_hours[i]} failed` : ""}`,
+              value,
+              tone: (r.failing_hours?.[i] ?? 0) > 0 ? ("bad" as const) : undefined,
+            }))}
+          />
+          {statuses && (
+            <p className="figures m-0 mt-3 text-xs text-text-2">
+              {(["2xx", "3xx", "4xx", "5xx"] as const)
+                .filter((k) => statuses[k] > 0)
+                .map((k) => `${statuses[k]} × ${k}`)
+                .join(" · ")}
+            </p>
+          )}
+        </li>
+      )}
+      {requests.data && !r && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">No requests to {site.host} recorded yet: open it and its figures show here.</li>}
+      {used.length > 0 && (
+        <li className="border-b border-line px-1 py-3 text-[12.5px] text-text-2">
+          Uses {used.map((i) => `${i.name} (${i.kind})`).join(", ")}.
+        </li>
+      )}
     </Section>
   );
 }

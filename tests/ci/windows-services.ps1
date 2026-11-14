@@ -882,6 +882,9 @@ Check 'kiln requests shop: the access log gives its count, median and slowest re
     $data = ((Kiln --json requests shop) -split "`n" | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json).data
     $site = $data.sites | Where-Object { $_.host -eq 'shop.test' }
     if (-not $site -or $site.count -lt 1) { throw "no requests for shop.test: $($data | ConvertTo-Json -Depth 4)" }
+    # The last day by hour, for the site's overview (P4C-05): this run's requests are this hour's.
+    if (@($site.hours).Length -ne 24 -or $site.hours[23] -lt 1) { throw "hours: $($site.hours -join ',')" }
+    if ($site.statuses.'2xx' -lt 1) { throw "statuses: $($site.statuses | ConvertTo-Json -Compress)" }
     if ($site.median_ms -le 0 -or -not $site.slowest[0].uri) { throw "figures: $($site | ConvertTo-Json -Depth 4)" }
     if ($data.sites | Where-Object { $_.host -ne 'shop.test' }) { throw 'another site in a one-site answer' }
     Expect '"median_ms"' (Kiln daemon call requests.get '{\"host\":\"shop.test\"}')

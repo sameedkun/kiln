@@ -263,3 +263,60 @@ describe("a service's page (ADR 0068)", () => {
     expect(size(48_234_496)).toBe("46.0 MB");
   });
 });
+
+describe("a site at a glance (P4C-05)", () => {
+  it("shows the day's requests by hour, the branch, and what it uses", async () => {
+    const site = {
+      host: "shop.test",
+      url: "https://shop.test:8443",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: true,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      git_branch: "feature/checkout",
+      node: { version: "22.11.0", asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [{ version: "8.4.27", installed: true }], default: "8.4.27" });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({
+      supervisor_running: true,
+      instances: [
+        { name: "mysql-8.4", kind: "mysql", version: "8.4.13", ports: { mysql: 3306 }, used_by: ["shop.test"], web: null, databases: true, main_port: 3306, enabled: true, running: true, project: null, env: [] },
+        { name: "queue-shop", kind: "queue", version: "12.38.1", ports: {}, used_by: [], web: null, databases: false, main_port: null, enabled: true, running: true, project: site.project, env: [] },
+      ],
+    });
+    const hours = Array.from({ length: 24 }, (_, i) => (i === 23 ? 5 : i === 20 ? 2 : 0));
+    answers["requests.get"] = ({ host }) => ({
+      log: "C:/k/caddy/access.log",
+      sites: [
+        {
+          host,
+          count: 7,
+          failures: 1,
+          median_ms: 12.5,
+          p95_ms: 240,
+          since: 1794570330,
+          slowest: [],
+          hours,
+          failing_hours: hours.map((_, i) => (i === 20 ? 1 : 0)),
+          statuses: { "2xx": 5, "3xx": 0, "4xx": 1, "5xx": 1 },
+        },
+      ],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    const glance = await screen.findByRole("region", { name: "At a glance" });
+    await vi.waitFor(() => expect(glance.textContent).toContain("feature/checkout"));
+    expect(glance.textContent).toContain("Requests today7");
+    expect(glance.textContent).toContain("1 of 1 running");
+    expect(glance.textContent).toContain("5 × 2xx · 1 × 4xx · 1 × 5xx");
+    expect(glance.textContent).toContain("Uses mysql-8.4 (mysql).");
+    expect(screen.getByText("3 h ago: 2 requests, 1 failed")).toBeTruthy();
+  });
+});

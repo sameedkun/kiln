@@ -23,6 +23,8 @@ export interface Site {
   project: string;
   /** What it's built on (P4C-04): `laravel`, `statamic`, `symfony`, … `php`, `static`. */
   framework?: string;
+  /** The Git branch checked out in its folder, or the commit when detached (P4C-05). */
+  git_branch?: string | null;
   framework_version: string | null;
   node: { version: string | null; asked_by: string | null; asks_for: string | null; fell_back: boolean };
 }
@@ -141,6 +143,11 @@ export interface SiteRequests {
   p95_ms: number;
   since: number;
   slowest: { at: number; method: string; uri: string; status: number; ms: number }[];
+  /** Requests in each of the last 24 hours, oldest first (P4C-05). */
+  hours?: number[];
+  /** Of those, the ones that failed (5xx). */
+  failing_hours?: number[];
+  statuses?: { "2xx": number; "3xx": number; "4xx": number; "5xx": number };
 }
 export interface RequestsList {
   log: string;
