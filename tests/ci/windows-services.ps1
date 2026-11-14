@@ -264,7 +264,22 @@ Check 'service add pgadmin: from PostgreSQL 18''s zip, on loopback, its own sett
     $out = Kiln service add pgadmin
     Expect 'running as pgadmin-9' $out
     # Its own libpq, not the runner's system PostgreSQL on PATH (P4D-01: a PC without one).
-    if (-not (Test-Path "$env:LOCALAPPDATA\Kiln\services\bin\pgadmin\9.18\pgAdmin 4\runtime\libpq.dll")) { throw 'its libpq.dll was not unpacked' }
+    $pgHome = "$env:LOCALAPPDATA\Kiln\services\bin\pgadmin\9.18\pgAdmin 4"
+    if (-not (Test-Path "$pgHome\runtime\libpq.dll")) { throw 'its libpq.dll was not unpacked' }
+    # And it loads with nothing of the runner's on PATH: its PostgreSQL driver imported as the
+    # launcher does it, with PATH cut to System32 (the runner's own PostgreSQL hid I-99).
+    $probe = Join-Path $dir 'psycopg-probe.py'
+    Set-Content $probe -Encoding ascii -Value @"
+import os
+runtime = r'$pgHome\runtime'
+os.environ['PATH'] = runtime + os.pathsep + r'C:\Windows\System32'
+os.add_dll_directory(runtime)
+import psycopg
+print('psycopg', psycopg.pq.__impl__, psycopg.pq.version())
+"@
+    $saved = $env:PATH
+    try { $env:PATH = 'C:\Windows\System32'; $loaded = & "$pgHome\python\kiln-pgadmin.exe" $probe 2>&1 | Out-String } finally { $env:PATH = $saved }
+    if ($loaded -notmatch 'psycopg (c|python|binary) \d+') { throw "its PostgreSQL driver didn't load on its own:`n$loaded" }
     $port = PortOf $out 'http'
     $deadline = (Get-Date).AddSeconds(150)
     do { Start-Sleep -Seconds 3; $page = Page (SiteBase 'pgadmin') } until ($page -match 'pgAdmin' -or (Get-Date) -gt $deadline)

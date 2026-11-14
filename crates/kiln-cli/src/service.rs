@@ -244,9 +244,17 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
         } else {
             // A version unpacked by an older Kiln without what it now needs is unpacked again
             // (from the download cache when it's there).
-            if !provider.installed(&dirs.bin) {
-                let release = release_of(provider, Some(&record.version))?;
-                install_binaries(provider, release, &dirs.bin)?;
+            // A failure (offline, no cache, files in use) skips only that instance, as a
+            // project that can't run does.
+            if !provider.installed(&dirs.bin)
+                && let Err(why) = release_of(provider, Some(&record.version))
+                    .and_then(|release| install_binaries(provider, release, &dirs.bin))
+            {
+                say!(
+                    "Note: {} isn't started: its files are incomplete and couldn't be unpacked again: {why}.",
+                    record.name
+                );
+                continue;
             }
             // Rewritten before every start, so a changed port takes effect.
             write_config(provider, &dirs, &record.ports)?;

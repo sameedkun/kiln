@@ -237,13 +237,14 @@ function SiteServices({ site, go }: { site: Site; go: (page: string) => void }) 
   const used = (services.data?.instances ?? []).filter((i) => i.used_by.includes(site.host));
   // What a site's .env can point at: Kiln's services, not other projects' processes.
   const usable = (services.data?.instances ?? []).filter((i) => !i.project && i.env.length > 0);
-  const wordpress = site.driver === "wordpress";
+  // A .env with Laravel's keys: Laravel sites only (WordPress and Bedrock keep theirs elsewhere).
+  const laravel = site.driver === "laravel";
   return (
     <Section
       title="Services"
-      meta={wordpress ? "WordPress keeps its database in wp-config.php" : "from its .env"}
+      meta={laravel ? "from its .env" : "Kiln wires Laravel sites; this one keeps its own settings"}
       action={
-        !wordpress && (
+        laravel && (
           <Button variant="quiet" size="sm" onClick={() => setPicking(true)} disabled={usable.length === 0} title={usable.length ? undefined : "Add a service on the Services page first"}>
             Use a service…
           </Button>
