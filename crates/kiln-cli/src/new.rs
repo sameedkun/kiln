@@ -78,6 +78,13 @@ pub const TEMPLATES: &[Template] = &[
         builds_front_end: false,
     },
     Template {
+        id: "wordpress",
+        label: "WordPress",
+        package: None,
+        laravel: false,
+        builds_front_end: false,
+    },
+    Template {
         id: "empty",
         label: "An empty PHP site",
         package: None,
@@ -266,9 +273,16 @@ pub fn new(
     db: Option<&str>,
 ) -> Result<(), String> {
     let template = template(template_id)?;
-    if db.is_some() && !template.laravel {
+    // WordPress needs a database of Kiln's (P4D-07); Laravel may have one; the rest set up
+    // their own.
+    if template.id == "wordpress" && db.is_none() {
+        return Err(
+            "WordPress needs a database: --db mysql, mariadb or an instance's name (add one with `kiln service add mysql`)".into(),
+        );
+    }
+    if db.is_some() && !template.laravel && template.id != "wordpress" {
         return Err(format!(
-            "--db is for Laravel projects; {} sets up its database itself",
+            "--db is for Laravel and WordPress projects; {} sets up its database itself",
             template.label
         ));
     }
@@ -292,6 +306,8 @@ pub fn new(
     let record = chosen_php(php)?;
     if let Some(package) = template.package {
         create_with_composer(package, &name, &parent, &project, &record)?;
+    } else if template.id == "wordpress" {
+        crate::wordpress::create(&project, db.as_deref().unwrap_or_default())?;
     } else {
         let public = project.join("public");
         std::fs::create_dir_all(&public)
@@ -312,8 +328,13 @@ pub fn new(
     }
 
     serve(&name, &tld, &project, secure)?;
-    if let Some(instance) = db {
+    if let Some(instance) = db.filter(|_| template.laravel) {
         wire_database(&instance, &project, &record)?;
+    }
+    if template.id == "wordpress" {
+        say!(
+            "Open {name}.{tld} to finish WordPress's installation: its title and your admin account."
+        );
     }
     if template.builds_front_end {
         build_front_end(&project);
@@ -487,6 +508,7 @@ mod tests {
         assert!(template("react").unwrap().builds_front_end);
         assert_eq!(template("empty").unwrap().package, None);
         assert!(!template("symfony").unwrap().laravel);
+        assert_eq!(template("wordpress").unwrap().package, None);
         assert!(template("--evil").is_err());
         let mut ids: Vec<&str> = TEMPLATES.iter().map(|t| t.id).collect();
         ids.sort_unstable();

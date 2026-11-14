@@ -43,6 +43,7 @@ mod tool;
 mod uninstall;
 mod updates;
 mod web;
+mod wordpress;
 mod xdebug;
 
 #[derive(Debug, Parser)]
@@ -243,7 +244,7 @@ enum Command {
         /// Project and site name, e.g. shop (served as shop.test).
         name: String,
         /// What to start from: laravel, react, vue, livewire (Laravel's starter kits), symfony,
-        /// bedrock (`WordPress`) or empty.
+        /// wordpress (from wordpress.org, with --db), bedrock or empty.
         #[arg(long, default_value = "laravel")]
         template: String,
         /// Folder to create it in (default: the current folder).

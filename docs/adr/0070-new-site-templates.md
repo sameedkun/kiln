@@ -39,3 +39,15 @@ in the app with a framework to choose, Laravel's starter kits among them (2026-1
 - Composer and npm download from Packagist and npm's registry, as `composer` and `npm` do;
   Kiln pins neither (they are the project's dependencies, not Kiln's).
 - Plain WordPress (not Bedrock) and other CMSs can come as templates later, each a row.
+
+## Amendment (P4D-07, 2026-11-15)
+
+The user asked for WordPress as wordpress.org installs it, set up to run. **`--template
+wordpress --db <MySQL or MariaDB instance>`** downloads WordPress 7.1.4 from
+downloads.wordpress.org (pinned by SHA-256 computed on a runner; CI also checks
+wordpress.org's SHA-1), unpacks it into the project folder, makes its database (the project's
+name, `-` as `_`) on that instance, and writes `wp-config.php` from WordPress's own sample:
+the database, its login and address, and fresh random keys and salts. The site then opens on
+WordPress's installer (title and admin account). `--db` is required for it, and refused for
+PostgreSQL. Bedrock stays a CLI template. The app chooses a framework, then (for Laravel
+only) a starter kit, and for WordPress a MySQL or MariaDB instance.

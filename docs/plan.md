@@ -288,7 +288,7 @@ source (MIT, cloned by the user) may be read for ideas; no code is copied.
 
 | ID | Task | Notes |
 |---|---|---|
-| P4D-01 | pgAdmin on a PC without PostgreSQL on PATH: its libpq and tools kept from `runtime/` | CI's runner had a system PostgreSQL, which hid it |
+| P4D-01 | pgAdmin on a PC without PostgreSQL on PATH: its libpq and tools kept from `runtime/` | CI's runner had a system PostgreSQL, which hid it; built ([I-99](issues.md#i-99)) |
 | P4D-02 | Names without the hosts file, built (ADR 0078): kilnd answers `.test`, one NRPT rule with consent | approved by the user 2026-11-15 |
 | P4D-03 | The app's forms and notices: labels above every select, the new-site dialog in order with starter kits only for Laravel, progress shown above a dialog's backdrop, toasts aligned, snapshots in a tab of their own | |
 | P4D-04 | Framework icons instead of letters | from Simple Icons (CC0) |

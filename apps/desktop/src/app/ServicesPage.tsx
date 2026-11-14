@@ -352,9 +352,10 @@ export function PortsDialog({ instance, onClose }: { instance: Instance; onClose
   );
 }
 
-export function WireDialog({ instance, sites, onClose }: { instance: Instance; sites?: SitesList; onClose: () => void }) {
+export function WireDialog({ instance, sites, project: fixed, onClose }: { instance: Instance; sites?: SitesList; project?: string; onClose: () => void }) {
   const { confirm } = useChanges();
-  const [project, setProject] = useState("");
+  // From a site's own page the site is known (P4D-08).
+  const [project, setProject] = useState(fixed ?? "");
   const [database, setDatabase] = useState("");
   const [redis, setRedis] = useState({ cache: true, session: false, queue: true });
   const list = (sites?.sites ?? []).filter((s) => s.source !== "alias");
@@ -384,7 +385,9 @@ export function WireDialog({ instance, sites, onClose }: { instance: Instance; s
       }
     >
       <p className="mt-0">Kiln sets the keys in the site's .env, and shows them before changing anything. History can undo it.</p>
-      <Select label="Site" value={project} onChange={(e) => setProject(e.target.value)} options={[{ value: "", label: "Choose a site" }, ...list.map((s) => ({ value: s.project, label: s.host }))]} />
+      {!fixed && (
+        <Select label="Site" className="w-full" value={project} onChange={(e) => setProject(e.target.value)} options={[{ value: "", label: "Choose a site" }, ...list.map((s) => ({ value: s.project, label: s.host }))]} />
+      )}
       {instance.databases && (
         <TextField
           className="mt-4"

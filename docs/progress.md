@@ -1497,6 +1497,22 @@ Plan: [plan.md, Phase 4](plan.md#phase-4-the-desktop-app-windows); design: [ADR 
 | P4-19 | MCP server | built | [ADR 0066](adr/0066-mcp-server.md); checked locally with a piped session |
 | P4-20 | PECL extensions (phpredis first) | built | [ADR 0067](adr/0067-pecl-extensions.md); pins computed on a runner, checked by the Scenario |
 
+## Phase 4d: from the user's second run, Windows (in progress)
+
+Plan: [plan.md, Phase 4d](plan.md#phase-4d-from-the-users-second-run-windows).
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| P4D-01 | pgAdmin without PostgreSQL on PATH | built | [I-99](issues.md#i-99) |
+| P4D-02 | Names without the hosts file | planned | ADR 0078, approved |
+| P4D-03 | Forms and notices | built | toasts above dialogs, labels above selects, new-site dialog, snapshots tab |
+| P4D-04 | Framework icons | built | Simple Icons (CC0) |
+| P4D-05 | RustFS console as `rustfs.test` | built | |
+| P4D-06 | Git's dubious ownership | built | `kiln git trust` |
+| P4D-07 | WordPress from wordpress.org, set up | built | ADR 0070 amended |
+| P4D-08 | Using a service from the site's page | built | |
+| P4D-09 | Features from Lerd's source | planned | |
+
 ## Phase 4c: a richer app, Windows (in progress)
 
 Plan: [plan.md, Phase 4c](plan.md#phase-4c-a-richer-app-windows). Asked for by the user on
@@ -1896,6 +1912,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **P4C-13 on CI:** both engines pass their own workflow: OpenSearch (needed its temp folder made with the instance) healthy in about 2 minutes, Elasticsearch in about 1.5, each on loopback only, a document indexed and found, removed with no JVM left; the workflow sends request bodies through a file, as Windows PowerShell strips quotes from native arguments. **P4C-14, the spike** begins, on a throwaway runner only (`spike-dns.yml`): a resolver on 127.0.0.1:53 for `.test` and one Name Resolution Policy rule, checked with `Resolve-DnsName`, getaddrinfo and curl, then removed. |
 | 2026-11-14 | **P4C-14 spike passed** ([ADR 0078](adr/0078-names-without-the-hosts-file.md), proposed): on a throwaway runner, a resolver on 127.0.0.1:53 and one NRPT rule for `.test` made `Resolve-DnsName`, getaddrinfo and curl reach any `.test` name, other names still used the usual DNS, and removing the rule undid it. Building it into Kiln (kilnd answering `.test`, the rule through the helper, journaled) waits for the user's approval. |
 | 2026-11-14 | **P4C-15 built** ([ADR 0079](adr/0079-snapshots-and-tinker.md)): `kiln db snapshot` keeps a dump in the instance's `snapshots` folder, `kiln db snapshots` lists them (`services.snapshots`), `kiln db rollback` empties the database and loads one after asking, keeping the state before as a snapshot too, and takes only a name from the list. `kiln tinker <site> <code>` runs `php artisan tinker --execute` in a Laravel site with its PHP. The app has a camera button and a Snapshots list on a service's Databases tab, and a Tinker tab on Laravel sites. |
+| 2026-11-15 | **The user's second run, and Phase 4d.** Found and fixed: pgAdmin crash-looped without `libpq` ([I-99](issues.md#i-99); CI's system PostgreSQL hid it), and had no page after its failed first start; progress toasts showed under a dialog's backdrop (dialogs are the browser's top layer: toasts now join it while a dialog is open); select labels sat beside their fields; the new-site dialog listed starter kits as frameworks; snapshots had a camera button on each row; Git's "dubious ownership" showed raw (now explained, with `kiln git trust`, asked first); a WordPress site got Laravel's `key:generate` advice. Built: framework icons (Simple Icons, CC0); RustFS's console as `rustfs.test`; WordPress from wordpress.org with its database and `wp-config.php` (ADR 0070 amended); "Use a service…" on a site's page. The user approved ADR 0078 (names without the hosts file) and shared Lerd's source (MIT) for ideas. |
 
 ## How to update this file
 

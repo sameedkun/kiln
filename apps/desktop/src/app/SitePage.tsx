@@ -16,6 +16,7 @@ import { useToast } from "../components/Toast";
 import { TextField } from "../components/TextField";
 import { call, message, openFolder, runJob, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
+import { WireDialog } from "./ServicesPage";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
 import { framework, frameworkId } from "./SitesPage";
@@ -230,17 +231,37 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
 /** The services this site's .env points at (ADR 0056 §5). */
 function SiteServices({ site, go }: { site: Site; go: (page: string) => void }) {
   const services = useRead<ServicesList>("services.list");
+  const sites = useRead<SitesList>("sites.list");
+  const [picking, setPicking] = useState(false);
+  const [chosen, setChosen] = useState<Instance | null>(null);
   const used = (services.data?.instances ?? []).filter((i) => i.used_by.includes(site.host));
+  // What a site's .env can point at: Kiln's services, not other projects' processes.
+  const usable = (services.data?.instances ?? []).filter((i) => !i.project && i.env.length > 0);
+  const wordpress = site.driver === "wordpress";
   return (
     <Section
       title="Services"
-      meta="from its .env"
+      meta={wordpress ? "WordPress keeps its database in wp-config.php" : "from its .env"}
       action={
-        <Button variant="quiet" size="sm" onClick={() => go("services")}>
-          Wire one on the Services page
-        </Button>
+        !wordpress && (
+          <Button variant="quiet" size="sm" onClick={() => setPicking(true)} disabled={usable.length === 0} title={usable.length ? undefined : "Add a service on the Services page first"}>
+            Use a service…
+          </Button>
+        )
       }
     >
+      {picking && (
+        <PickService
+          instances={usable}
+          onPick={(i) => {
+            setPicking(false);
+            setChosen(i);
+          }}
+          onClose={() => setPicking(false)}
+          onAdd={() => go("services")}
+        />
+      )}
+      {chosen && <WireDialog instance={chosen} sites={sites.data} project={site.project} onClose={() => setChosen(null)} />}
       {services.data && used.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">Its .env doesn't point at any of Kiln's services.</li>}
       {used.map((i) => (
         <Row key={i.name} columns="minmax(160px,1fr) 1fr 140px">
@@ -755,6 +776,31 @@ function SiteTinker({ site }: { site: Site }) {
         </pre>
       )}
     </div>
+  );
+}
+
+/** Which of Kiln's services a site should use (P4D-08), then the same .env preview as from the service's side. */
+function PickService({ instances, onPick, onClose, onAdd }: { instances: Instance[]; onPick: (i: Instance) => void; onClose: () => void; onAdd: () => void }) {
+  const [name, setName] = useState(instances[0]?.name ?? "");
+  const chosen = instances.find((i) => i.name === name);
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Use a service"
+      footer={
+        <>
+          <Button onClick={onAdd}>Add a service…</Button>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="ink" disabled={!chosen} onClick={() => chosen && onPick(chosen)}>
+            Next
+          </Button>
+        </>
+      }
+    >
+      <p className="mt-0">Kiln points the site's .env at it, showing the old and new values first.</p>
+      <Select label="Service" className="w-full" value={name} onChange={(e) => setName(e.target.value)} options={instances.map((i) => ({ value: i.name, label: `${i.name} (${i.kind} ${i.version})` }))} />
+    </Dialog>
   );
 }
 

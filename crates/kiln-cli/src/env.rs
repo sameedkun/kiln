@@ -154,9 +154,21 @@ fn project_env(project: Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
     if env.is_file() {
         return Ok((project, env));
     }
-    Err(if project.join(".env.example").is_file() {
+    // What to do depends on what the project is (P4D-07): Laravel's advice only for Laravel.
+    let wordpress = project.join("wp-config.php").is_file() || project.join("wp-includes").is_dir();
+    Err(if wordpress {
+        format!(
+            "{} is a WordPress site: it keeps its database settings in wp-config.php, not a .env (Kiln writes them when it makes a WordPress site)",
+            project.display()
+        )
+    } else if project.join(".env.example").is_file() && project.join("artisan").is_file() {
         format!(
             "{} has no .env yet: copy .env.example to .env (then `php artisan key:generate`) first",
+            project.display()
+        )
+    } else if project.join(".env.example").is_file() {
+        format!(
+            "{} has no .env yet: copy .env.example to .env first",
             project.display()
         )
     } else {

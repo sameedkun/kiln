@@ -557,6 +557,30 @@ Check 'kiln git (ADR 0075): branches read, no switch over changes, a worktree se
         Remove-Item -Recurse -Force $repo, "$repo-feature-checkout" -ErrorAction SilentlyContinue
     }
 }
+Check 'kiln new blog --template wordpress --db mysql-8.4 (P4D-07): from wordpress.org, its database made, wp-config.php written, its installer served' {
+    $refused = (& $Kiln new nodb --template wordpress --path $projects 2>&1 | Out-String)
+    $global:LASTEXITCODE = 0
+    Expect 'WordPress needs a database' $refused
+    $blog = Join-Path $projects 'blog'
+    try {
+        $out = Kiln new blog --template wordpress --db mysql-8.4 --path $projects
+        Expect 'Created the database blog on mysql-8.4' $out
+        $config = Get-Content (Join-Path $blog 'wp-config.php') -Raw
+        if ($config -notmatch "'DB_NAME', 'blog'" -or $config -match 'put your unique phrase here') { throw "wp-config.php:`n$($config.Substring(0, [Math]::Min(600, $config.Length)))" }
+        if ((Client 'mysql-8.4' 'blog' 'SELECT 1;') -notmatch '1') { throw 'no database blog' }
+        $page = Page (SiteBase 'blog')
+        if ($page -notmatch 'WordPress') { throw "no WordPress installer:`n$($page.Substring(0, [Math]::Min(400, $page.Length)))" }
+        # The pinned download is the one wordpress.org's own SHA-1 names.
+        $zip = Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Filter 'wordpress-7.1.4.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $published = (curl.exe -sSL --max-time 30 'https://downloads.wordpress.org/release/wordpress-7.1.4.zip.sha1' | Out-String).Trim()
+        if ($zip -and (Get-FileHash $zip.FullName -Algorithm SHA1).Hash.ToLower() -ne $published) { throw "SHA-1 differs from wordpress.org's $published" }
+    } finally {
+        & $Kiln unlink blog 2>&1 | Out-Null
+        & $Kiln --json --confirmed db drop mysql-8.4 blog 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        Remove-Item -Recurse -Force $blog -ErrorAction SilentlyContinue
+    }
+}
 Check 'kiln new hello --template empty (ADR 0070): a folder with a first page, served at once' {
     $out = Kiln new hello --template empty --path $projects
     Expect 'first page in public/index.php' $out
