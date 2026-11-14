@@ -403,3 +403,39 @@ describe("a site's Git (ADR 0075)", () => {
     expect((screen.getByRole("button", { name: "Switch" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("Tinker (ADR 0079)", () => {
+  it("runs the code in the site's app and shows what it printed", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["jobs.start"] = () => ({ job: 7 });
+    answers["jobs.get"] = () => ({
+      running: false,
+      finished: { job: 7, ok: true, exit: 0, needs_confirmation: false, last: { type: "result", data: { host: "shop.test", output: "= 42\n", exit: 0 } } },
+      events: [],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    await userEvent.click(await screen.findByRole("tab", { name: "Tinker" }));
+    await userEvent.type(screen.getByLabelText("PHP to run in shop.test's app"), "User::count()");
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText("= 42")).toBeTruthy();
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["tinker", "shop.test", "User::count()"], mode: "apply" });
+  });
+});

@@ -1257,6 +1257,30 @@ Check 'kiln db create, list and drop: made, listed with its size, kept when the 
     $global:LASTEXITCODE = 0
     Expect "can't be a database name" $refused
 }
+Check 'kiln db snapshot and rollback (ADR 0079): a table deleted after the snapshot is back, and the state before is kept too' {
+    Kiln db create mysql-8.4 kiln_snap | Out-Null
+    try {
+        Client 'mysql-8.4' 'kiln_snap' 'CREATE TABLE t (v VARCHAR(20)); INSERT INTO t VALUES (''kept'');' | Out-Null
+        Expect 'Snapshot of kiln_snap kept' (Kiln db snapshot mysql-8.4 kiln_snap)
+        Client 'mysql-8.4' 'kiln_snap' 'DROP TABLE t;' | Out-Null
+        $snaps = (JsonLines @(& $Kiln --json db snapshots mysql-8.4))[-1].data.snapshots | Where-Object { $_.database -eq 'kiln_snap' }
+        $file = @($snaps)[0].file
+        if (-not $file) { throw 'no snapshot listed' }
+        Expect 'is back as of' (Kiln --json --confirmed db rollback mysql-8.4 $file)
+        Expect 'kept' (Client 'mysql-8.4' 'kiln_snap' 'SELECT v FROM t;')
+        $after = @((JsonLines @(& $Kiln --json db snapshots mysql-8.4))[-1].data.snapshots | Where-Object { $_.database -eq 'kiln_snap' })
+        if ($after.Length -lt 2) { throw "the state before the rollback wasn't kept: $($after.file -join ', ')" }
+        $refused = (& $Kiln --json --confirmed db rollback mysql-8.4 '..\..\x--20261114-101500.sql' 2>&1 | Out-String)
+        $global:LASTEXITCODE = 0
+        Expect "isn't one of Kiln's snapshots" $refused
+    } finally {
+        & $Kiln --json --confirmed db drop mysql-8.4 kiln_snap 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+}
+Check 'kiln tinker shop (ADR 0079): PHP run in the app with its PHP' {
+    Expect '42' (Kiln tinker shop 'echo 6*7;')
+}
 Check 'a service without a dump tool says where its data is and what keeps it' {
     $out = (& $Kiln db dump redis-8.10 2>&1 | Out-String)
     Expect 'has no dump tool' $out

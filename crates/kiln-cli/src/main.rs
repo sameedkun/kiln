@@ -37,6 +37,8 @@ mod requests;
 mod service;
 mod services_up;
 mod share;
+mod snapshot;
+mod tinker;
 mod tool;
 mod uninstall;
 mod updates;
@@ -148,6 +150,14 @@ enum Command {
     Git {
         #[command(subcommand)]
         action: GitAction,
+    },
+    /// Run PHP in a Laravel site's app (`php artisan tinker --execute`), with its PHP
+    /// (ADR 0079).
+    Tinker {
+        /// The site, e.g. shop.
+        site: String,
+        /// The PHP to run, e.g. `User::count()`.
+        code: String,
     },
     /// Share a site through a Cloudflare quick tunnel: a public https://….trycloudflare.com
     /// address that reaches it while it's shared (ADR 0076). Anyone with the address can open it.
@@ -412,6 +422,26 @@ enum DbAction {
         name: String,
         /// The database.
         database: String,
+    },
+    /// Keep a snapshot of a database in Kiln, to roll back to (ADR 0079).
+    Snapshot {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The database.
+        database: String,
+    },
+    /// The instance's snapshots, newest first.
+    Snapshots {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+    },
+    /// Put a database back as a snapshot has it, after asking (a snapshot of it as it is now
+    /// is kept first).
+    Rollback {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The snapshot's file name, from `kiln db snapshots`.
+        snapshot: String,
     },
     /// Load a .sql file into an instance: into a database (made if missing), or the whole
     /// server for a dump of every database.
@@ -954,9 +984,10 @@ fn changes_state(command: &Command) -> bool {
             | Command::Requests { .. }
             | Command::Updates { action: None }
             | Command::Db {
-                action: Some(DbAction::List { .. }),
+                action: Some(DbAction::List { .. } | DbAction::Snapshots { .. }),
                 ..
             }
+            | Command::Tinker { .. }
             | Command::Git {
                 action: GitAction::Branches { .. }
             }
@@ -1148,6 +1179,9 @@ fn run_db(
             _,
         ) => dump::restore(&name, &file, database.as_deref()),
         (Some(DbAction::List { name }), _) => dump::list(&name),
+        (Some(DbAction::Snapshot { name, database }), _) => snapshot::snapshot(&name, &database),
+        (Some(DbAction::Snapshots { name }), _) => snapshot::list(&name),
+        (Some(DbAction::Rollback { name, snapshot }), _) => snapshot::rollback(&name, &snapshot),
         (Some(DbAction::Create { name, database }), _) => dump::create(&name, &database),
         (Some(DbAction::Drop { name, database }), _) => dump::drop(&name, &database),
         (None, Some(name)) => service::db(&name, database),
@@ -1218,13 +1252,11 @@ fn run(command: Command) -> Result<(), String> {
         Command::Footprint => footprint::footprint(),
         Command::Mcp { action } => run_mcp(action),
         Command::Requests { site } => requests::requests(site.as_deref()),
-        Command::Group { site, group } => groups::set(&site, group.as_deref()),
-        Command::Git { action } => run_git(action),
-        Command::Share { site, stop, lan } => share::run(&site, stop, lan),
-        Command::Updates { action: None } => updates::updates(),
-        Command::Updates {
-            action: Some(UpdatesAction::CheckKiln { state }),
-        } => updates::set_check_kiln(state == "on"),
+        command @ (Command::Group { .. }
+        | Command::Git { .. }
+        | Command::Share { .. }
+        | Command::Tinker { .. }) => run_site_tools(command),
+        Command::Updates { action } => run_updates(action),
         Command::Cache {
             action: CacheAction::Clear,
         } => footprint::clear_cache(),
@@ -1323,6 +1355,17 @@ fn run_node(action: NodeAction) -> Result<(), String> {
     }
 }
 
+/// A site's tools: its group, Git, sharing, Tinker.
+fn run_site_tools(command: Command) -> Result<(), String> {
+    match command {
+        Command::Group { site, group } => groups::set(&site, group.as_deref()),
+        Command::Git { action } => run_git(action),
+        Command::Share { site, stop, lan } => share::run(&site, stop, lan),
+        Command::Tinker { site, code } => tinker::run(&site, &code),
+        _ => unreachable!("run passes only a site's tools here"),
+    }
+}
+
 fn run_git(action: GitAction) -> Result<(), String> {
     match action {
         GitAction::Branches { site } => git::branches(&site),
@@ -1333,6 +1376,13 @@ fn run_git(action: GitAction) -> Result<(), String> {
         GitAction::Worktree {
             action: WorktreeAction::Remove { site, branch },
         } => git::worktree_remove(&site, &branch),
+    }
+}
+
+fn run_updates(action: Option<UpdatesAction>) -> Result<(), String> {
+    match action {
+        None => updates::updates(),
+        Some(UpdatesAction::CheckKiln { state }) => updates::set_check_kiln(state == "on"),
     }
 }
 

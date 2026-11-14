@@ -229,6 +229,18 @@ pub fn dump(name: &str, database: Option<&str>, output: Option<PathBuf>) -> Resu
     Ok(())
 }
 
+/// A database replaced by `file` (a snapshot rolled back, ADR 0079): dropped, made empty,
+/// then loaded. The caller has asked.
+pub(crate) fn replace(name: &str, database: &str, file: &Path) -> Result<(), String> {
+    strict_name(database)?;
+    let (record, provider, dirs) = running(name)?;
+    provider
+        .drop_database(&dirs, &record.ports, database)
+        .ok_or_else(|| format!("{} has no databases", provider.display_name()))?
+        .map_err(|e| format!("cannot empty {database}: {e}"))?;
+    restore(name, file, Some(database))
+}
+
 /// `kiln db restore <instance> <file> [database]`: into `database` (made if missing), or
 /// into the server for a dump of every database.
 pub fn restore(name: &str, file: &Path, database: Option<&str>) -> Result<(), String> {

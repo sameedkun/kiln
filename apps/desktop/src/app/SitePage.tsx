@@ -14,7 +14,7 @@ import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
 import { useToast } from "../components/Toast";
 import { TextField } from "../components/TextField";
-import { call, openFolder, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { call, message, openFolder, runJob, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
@@ -109,11 +109,14 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
           { id: "logs", label: "Logs" },
           { id: "dumps", label: "Dumps" },
           { id: "env", label: ".env" },
+          ...(site.driver === "laravel" ? [{ id: "tinker", label: "Tinker" }] : []),
         ]}
         current={tab}
         onSelect={setTab}
       >
-      {tab === "env" ? (
+      {tab === "tinker" ? (
+        <SiteTinker site={site} />
+      ) : tab === "env" ? (
         <SiteEnv site={site} />
       ) : tab === "requests" ? (
         <SiteRequestsTab host={site.host} />
@@ -678,6 +681,54 @@ function SiteShare({ site }: { site: Site }) {
         )}
       </li>
     </Section>
+  );
+}
+
+/** Tinker (ADR 0079): PHP run in the site's app with its PHP, its output shown. */
+function SiteTinker({ site }: { site: Site }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const go = async () => {
+    setBusy(true);
+    try {
+      const end = await runJob(["tinker", site.host, code], "apply");
+      const data = end.last.data as { output?: string } | undefined;
+      setResult({ ok: end.ok, text: data?.output ?? end.last.message ?? "" });
+    } catch (e) {
+      setResult({ ok: false, text: message(e) });
+    }
+    setBusy(false);
+  };
+  return (
+    <div>
+      <label htmlFor="tinker-code" className="mb-1.5 block text-[13px] font-medium">
+        PHP to run in {site.host}'s app
+      </label>
+      <textarea
+        id="tinker-code"
+        value={code}
+        onChange={(e) => setCode(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && code.trim() && !busy) void go();
+        }}
+        rows={5}
+        spellCheck={false}
+        placeholder="User::count()"
+        className="w-full rounded-lg border border-line bg-transparent p-2.5 font-mono text-xs text-text outline-none focus:border-ember"
+      />
+      <div className="mt-2 flex items-center gap-3">
+        <Button variant="ink" disabled={!code.trim() || busy} onClick={go}>
+          {busy ? "Running…" : "Run"}
+        </Button>
+        <span className="text-xs text-text-3">Ctrl+Enter runs it, with php artisan tinker and the site's PHP. It runs in your app: changes it makes are real.</span>
+      </div>
+      {result && (
+        <pre className={`mt-4 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-lg border p-3 font-mono text-xs ${result.ok ? "border-line text-text" : "border-bad text-bad"}`}>
+          {result.text || "(no output)"}
+        </pre>
+      )}
+    </div>
   );
 }
 

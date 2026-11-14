@@ -74,6 +74,11 @@ export interface GitBranches {
   dirty: boolean;
   worktrees: { path: string; branch: string | null; host: string | null }[];
 }
+/** `services.snapshots` (ADR 0079). */
+export interface ServiceSnapshotsList {
+  folder: string;
+  snapshots: { file: string; database: string; bytes: number }[];
+}
 /** `services.databases` (ADR 0068 §1). */
 export interface ServiceDatabases {
   databases: { name: string; bytes: number; used_by: string[] }[];

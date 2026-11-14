@@ -94,6 +94,7 @@ working name). Start here.
 | [0076](adr/0076-sharing-sites.md) | Sharing a site: a Cloudflare quick tunnel (pinned cloudflared as a project process, forwarding to loopback with the site's name; nothing new listens), `kiln share <site> [--stop]`; and per-site LAN sharing on a private address (`--lan`), the only listener beyond loopback | accepted (Phase 4c) |
 | [0077](adr/0077-search-engines.md) | OpenSearch 3.9 and Elasticsearch 9.5 as service kinds: their bundled Java under Kiln names, `-E` settings on loopback, single node, security off, 512 MB heap, a config folder per instance; their own CI workflow | accepted (Phase 4c) |
 | [0078](adr/0078-names-without-the-hosts-file.md) | Names without the hosts file: kilnd answers `.test` on loopback and one NRPT rule, added once with consent, sends `.test` there; the spike passed on CI | proposed (Phase 4c) |
+| [0079](adr/0079-snapshots-and-tinker.md) | Database snapshots (`kiln db snapshot|snapshots|rollback`, the state before a rollback kept too) and `kiln tinker <site> <code>`; a camera button and Snapshots list per service, a Tinker tab per Laravel site | accepted (Phase 4c) |
 
 ## Conventions
 

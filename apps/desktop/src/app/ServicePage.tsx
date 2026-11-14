@@ -1,4 +1,4 @@
-import { ArrowDownload16Regular, ArrowLeft16Regular, Delete16Regular, Open16Regular, Play16Filled, Stop16Filled } from "@fluentui/react-icons";
+import { ArrowDownload16Regular, Camera16Regular, ArrowLeft16Regular, Delete16Regular, Open16Regular, Play16Filled, Stop16Filled } from "@fluentui/react-icons";
 import { useState } from "react";
 import { Button } from "../components/Button";
 import { Dialog } from "../components/Dialog";
@@ -9,7 +9,7 @@ import { Status } from "../components/Status";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
 import { TextField } from "../components/TextField";
-import { type Instance, type LogSources, type ServiceDatabases, type ServicesList, type SitesList } from "./api";
+import { type Instance, type LogSources, type ServiceSnapshotsList, type ServiceDatabases, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { fewNames, useRead } from "./hooks";
@@ -186,6 +186,8 @@ function ServiceDatabasesTab({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const valid = name ? databaseName(name) : null;
+  // Bumped after a snapshot, so the list below is read again.
+  const [snapped, setSnapped] = useState(0);
   if (!running) return <p className="m-0 px-1 text-[13px] text-text-2">Start {i.name} to see its databases.</p>;
   const total = (list.data?.databases ?? []).reduce((n, d) => n + d.bytes, 0);
   return (
@@ -215,6 +217,7 @@ function ServiceDatabasesTab({
             columns="minmax(160px,1fr) 100px minmax(160px,1.4fr) 80px"
             actions={
               <>
+                <Button variant="quiet" aria-label={`Snapshot ${d.name}`} title="Keep a snapshot to roll back to" icon={<Camera16Regular />} onClick={() => run(["db", "snapshot", i.name, d.name], `Kept a snapshot of ${d.name}.`).then(() => setSnapped((n) => n + 1))} />
                 <Button variant="quiet" aria-label={`Dump ${d.name}`} title="Dump it to a .sql file" icon={<ArrowDownload16Regular />} onClick={() => onDump(d.name)} />
                 <Button variant="quiet" aria-label={`Delete ${d.name}`} title="Delete it" icon={<Delete16Regular />} onClick={() => onDrop(d.name)} />
               </>
@@ -234,7 +237,51 @@ function ServiceDatabasesTab({
           </Row>
         ))}
       </Section>
+      <ServiceSnapshots key={snapped} instance={i} />
     </>
+  );
+}
+
+/** A service's snapshots (ADR 0079): taken from a database's row, rolled back after asking. */
+function ServiceSnapshots({ instance: i }: { instance: Instance }) {
+  const list = useRead<ServiceSnapshotsList>("services.snapshots", { name: i.name });
+  const { ask } = useChanges();
+  const all = list.data?.snapshots ?? [];
+  return (
+    <Section title="Snapshots" meta={list.data ? `${all.length} · kept by Kiln` : undefined}>
+      {list.data && all.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">None yet: a database's camera button keeps one, to roll back to after a migration or a test that went wrong.</li>}
+      {all.map((s) => {
+        const at = s.file.slice(s.database.length + 2, -4);
+        const when = `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)} ${at.slice(9, 11)}:${at.slice(11, 13)}:${at.slice(13, 15)} UTC`;
+        return (
+          <Row
+            key={s.file}
+            columns="minmax(140px,1fr) minmax(150px,1fr) 90px"
+            actions={
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={() =>
+                  ask(
+                    `Roll ${s.database} back?`,
+                    `Everything in ${s.database} on ${i.name} is replaced by this snapshot from ${when}. Kiln keeps a snapshot of it as it is now first, so this can be rolled back too.`,
+                    "Roll back",
+                    ["db", "rollback", i.name, s.file],
+                    `${s.database} is back as of ${when}.`,
+                  )
+                }
+              >
+                Roll back
+              </Button>
+            }
+          >
+            <RowName>{s.database}</RowName>
+            <Detail mono>{when}</Detail>
+            <Detail mono>{size(s.bytes)}</Detail>
+          </Row>
+        );
+      })}
+    </Section>
   );
 }
 

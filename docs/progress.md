@@ -1,6 +1,6 @@
 # Progress
 
-**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-13 built (ADRs 0068 to 0077); the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
+**Last updated:** 2026-11-14 · **Current phase:** **Phase 3 done** (16 of 16 tasks; exit criteria met on CI and next to a running Herd; ADRs 0035–0049; Windows first, Linux on hold (ADR 0039); Phase 4, the desktop app on Windows: P4-01, P4-02 and P4-15 done (ADRs 0051–0053), P4-03 to P4-06 done (ADRs 0054–0057), P4-07 to P4-11 and P4-16 to P4-20 built (ADRs 0058–0067); P4-12 (WhoDB) dropped; Phase 4c (a richer app, after Lerd) planned, P4C-01 to P4C-13 and P4C-15 built (ADRs 0068 to 0079), P4C-14's spike passed and its ADR waits for the user; the user tests the rest of Phase 4 together at the end) · **Phase 2 done** (11 of 11 tasks; exit criteria met in both VMs; ADRs 0026–0034) · **Phase 1 done** (15 of 15 tasks) · **CI:** green on Windows, Linux, macOS
 
 ## At a glance
 
@@ -1518,7 +1518,7 @@ Plan: [plan.md, Phase 4c](plan.md#phase-4c-a-richer-app-windows). Asked for by t
 | P4C-12 | LAN and tunnel sharing | built | [ADR 0076](adr/0076-sharing-sites.md); the Scenario fetches the site through a real tunnel |
 | P4C-13 | Elasticsearch and OpenSearch | built | [ADR 0077](adr/0077-search-engines.md); pins computed on a runner; their own CI workflow |
 | P4C-14 | Names without the hosts file (spike) | spike passed; waiting for the user | [ADR 0078](adr/0078-names-without-the-hosts-file.md) (proposed): building it changes a Windows setting once, so it waits for the user's yes |
-| P4C-15 | Database snapshots, Tinker | planned | |
+| P4C-15 | Database snapshots, Tinker | built | [ADR 0079](adr/0079-snapshots-and-tinker.md); render-tested; the Scenario rolls a table back and runs Tinker |
 
 ## Phase 3: services, Windows first (done)
 
@@ -1895,6 +1895,7 @@ amending [ADR 0035](adr/0035-services.md) §8.
 | 2026-11-14 | **LAN sharing on CI:** one listener on the runner's private address served the shop and went with `--stop`, in both jobs. **P4C-13 built** ([ADR 0077](adr/0077-search-engines.md)): OpenSearch 3.9.0 and Elasticsearch 9.5.6 as service kinds, from their Windows zips (their launchers and `jvm.options` read by range request; SHA-256 pins computed by the pin workflow, the vendors' SHA-512 checked by CI). Each runs its bundled Java under a Kiln name with `-E` settings (loopback, its HTTP and transport ports, its folders, single node), security off, a 512 MB heap and its own config folder. A workflow of their own ("Search engines") starts each, indexes and finds a document, and checks loopback and removal. |
 | 2026-11-14 | **P4C-13 on CI:** both engines pass their own workflow: OpenSearch (needed its temp folder made with the instance) healthy in about 2 minutes, Elasticsearch in about 1.5, each on loopback only, a document indexed and found, removed with no JVM left; the workflow sends request bodies through a file, as Windows PowerShell strips quotes from native arguments. **P4C-14, the spike** begins, on a throwaway runner only (`spike-dns.yml`): a resolver on 127.0.0.1:53 for `.test` and one Name Resolution Policy rule, checked with `Resolve-DnsName`, getaddrinfo and curl, then removed. |
 | 2026-11-14 | **P4C-14 spike passed** ([ADR 0078](adr/0078-names-without-the-hosts-file.md), proposed): on a throwaway runner, a resolver on 127.0.0.1:53 and one NRPT rule for `.test` made `Resolve-DnsName`, getaddrinfo and curl reach any `.test` name, other names still used the usual DNS, and removing the rule undid it. Building it into Kiln (kilnd answering `.test`, the rule through the helper, journaled) waits for the user's approval. |
+| 2026-11-14 | **P4C-15 built** ([ADR 0079](adr/0079-snapshots-and-tinker.md)): `kiln db snapshot` keeps a dump in the instance's `snapshots` folder, `kiln db snapshots` lists them (`services.snapshots`), `kiln db rollback` empties the database and loads one after asking, keeping the state before as a snapshot too, and takes only a name from the list. `kiln tinker <site> <code>` runs `php artisan tinker --execute` in a Laravel site with its PHP. The app has a camera button and a Snapshots list on a service's Databases tab, and a Tinker tab on Laravel sites. |
 
 ## How to update this file
 

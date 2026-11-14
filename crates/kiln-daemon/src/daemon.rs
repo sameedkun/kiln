@@ -309,6 +309,7 @@ impl Daemon {
         "requests.get",
         "services.databases",
         "git.branches",
+        "services.snapshots",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -992,6 +993,10 @@ impl Handler for Daemon {
             "requests.get" => self.requests(params),
             "services.logs" => self.service_logs(params),
             "services.databases" => self.service_databases(params),
+            "services.snapshots" => {
+                let name = self.instance_param(params)?;
+                self.read(&["db", "snapshots", name])
+            }
             "git.branches" => self.git_branches(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
