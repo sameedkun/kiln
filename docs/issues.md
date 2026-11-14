@@ -1417,3 +1417,15 @@ commits and PRs.
   before starting it, from the download cache. The web page is attached before the first
   start, and `service start` attaches a missing one. The Scenario checks pgAdmin's own
   `libpq.dll` is there.
+
+### I-100: rustfs.test answered with S3's "Access Denied" instead of the console (fixed)
+
+- **Found:** the Scenario (P4D-05), 2026-11-15.
+- **Cause:** RustFS's console lives at `/rustfs/console/`. It sends a browser there from `/`
+  with an absolute redirect to its own address (`http://127.0.0.1:<port>/…`), whatever the
+  `Host` header says; anything else at `/` gets S3's 403. Through Kiln's proxy, a browser would
+  have left `rustfs.test` for the bare port.
+- **Fix:** every proxy site now turns a `Location` header naming the dev server's own loopback
+  address and port into a path, so the browser stays on the site's name (dev servers such as
+  Vite redirect the same way). The Scenario follows the redirect as a browser and checks it
+  lands on `rustfs.test/rustfs/console/`.

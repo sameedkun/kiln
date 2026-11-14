@@ -610,15 +610,35 @@ enum Handler {
     },
 }
 
-/// Header changes on the way to the dev server.
+/// Header changes on the way to the dev server, and on the way back.
 #[derive(Debug, Serialize)]
 struct ProxyHeaders {
     request: HeaderOps,
+    response: ResponseOps,
 }
 
 #[derive(Debug, Serialize)]
 struct HeaderOps {
     set: BTreeMap<&'static str, Vec<String>>,
+}
+
+/// A redirect the dev server makes to its own address (as RustFS's console does from `/`)
+/// becomes relative, so the browser stays on the site's name.
+#[derive(Debug, Serialize)]
+struct ResponseOps {
+    replace: BTreeMap<&'static str, Vec<Replacement>>,
+}
+
+#[derive(Debug, Serialize)]
+struct Replacement {
+    search_regexp: String,
+    replace: &'static str,
+}
+
+/// An absolute URL at the start of a header that names the dev server's port on loopback,
+/// by any of loopback's names.
+fn own_address(port: u16) -> String {
+    format!(r"^https?://(localhost|127\.0\.0\.1|\[::1\]):{port}(/|$)")
 }
 
 /// HTTP to an HTTPS dev server: its self-signed certificate is accepted, as the connection
@@ -695,6 +715,15 @@ impl Handler {
                     set: BTreeMap::from([(
                         "Host",
                         vec!["{http.reverse_proxy.upstream.hostport}".to_owned()],
+                    )]),
+                },
+                response: ResponseOps {
+                    replace: BTreeMap::from([(
+                        "Location",
+                        vec![Replacement {
+                            search_regexp: own_address(target.port),
+                            replace: "/",
+                        }],
                     )]),
                 },
             },
@@ -1354,6 +1383,14 @@ mod tests {
         assert_eq!(
             handler["headers"]["request"]["set"]["Host"][0],
             "{http.reverse_proxy.upstream.hostport}"
+        );
+        let location = &handler["headers"]["response"]["replace"]["Location"][0];
+        assert_eq!(location["replace"], "/");
+        // Go's RE2 syntax, which Caddy uses: the port, then a path or the end, so :51730
+        // isn't :5173.
+        assert_eq!(
+            location["search_regexp"],
+            r"^https?://(localhost|127\.0\.0\.1|\[::1\]):5173(/|$)"
         );
         assert!(
             handler.get("transport").is_none(),

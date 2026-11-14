@@ -402,8 +402,11 @@ Check 'rustfs.test serves its web console (P4D-05)' {
     $url = [regex]::Match((Kiln sites), 'https?://rustfs\.test[^\s]*').Value
     if (-not $url) { throw "no rustfs.test in:`n$(Kiln sites)" }
     $uri = [Uri] $url
-    $page = curl.exe -sS -L --max-time 30 --ssl-revoke-best-effort --cacert "$env:APPDATA\Kiln\ca\root.crt" --resolve "$($uri.Host):$($uri.Port):127.0.0.1" $url 2>&1 | Out-String
-    if ($page -notmatch 'rustfs') { throw "no console page at $($url):`n$($page.Substring(0, [Math]::Min(300, $page.Length)))" }
+    # RustFS sends a browser from / to /rustfs/console/ by its own address; Kiln's proxy makes
+    # that redirect relative, so the browser stays on rustfs.test (curl would fail to leave it,
+    # as only rustfs.test is resolved).
+    $page = curl.exe -sS -L --max-time 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edge/130' -w "`nlanded at %{url_effective}" --ssl-revoke-best-effort --cacert "$env:APPDATA\Kiln\ca\root.crt" --resolve "$($uri.Host):$($uri.Port):127.0.0.1" $url 2>&1 | Out-String
+    if ($page -notmatch '<title>RustFS' -or $page -notmatch 'landed at https?://rustfs\.test(:\d+)?/rustfs/console/') { throw "no console page at $($url):`n$($page.Substring(0, [Math]::Min(300, $page.Length)))`n$(($page -split "`n")[-1])" }
 }
 # One S3 request, signed with AWS Signature Version 4 and the credentials Kiln sets.
 function S3($method, $path, [byte[]] $body = @()) {
