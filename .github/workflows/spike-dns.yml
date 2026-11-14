@@ -1,0 +1,26 @@
+name: Spike, names without the hosts file
+
+# P4C-14, a spike on a throwaway runner only (approved by the user 2026-11-14): a resolver on
+# 127.0.0.1 and one Name Resolution Policy rule for `.test`. Nothing here touches a PC of the
+# user's; Kiln itself changes nothing until the ADR that follows the spike.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tests/ci/spike-dns.ps1"
+      - ".github/workflows/spike-dns.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: NRPT spike (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: spike
+        shell: powershell
+        run: tests\ci\spike-dns.ps1
