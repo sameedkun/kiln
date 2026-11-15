@@ -335,6 +335,8 @@ impl Daemon {
         "notifications.list",
         "notifications.clear",
         "xdebug.status",
+        "config.show",
+        "config.stage",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -441,6 +443,41 @@ impl Daemon {
                 );
             }
         }
+    }
+
+    /// `config.stage` (ADR 0089 §5): text the app will save, written to Kiln's `staged`
+    /// folder so it never goes on a command line; answers its token. Staged texts a day old
+    /// are cleared.
+    fn stage(&self, params: &Value) -> Result<Value, RpcError> {
+        let text = params["text"]
+            .as_str()
+            .ok_or_else(|| RpcError::kiln("params.text is missing"))?;
+        if text.len() > STAGE_MOST {
+            return Err(RpcError::kiln(
+                "that's more than 1 MB: too big for a config file",
+            ));
+        }
+        let dir = self.paths.local.join("staged");
+        std::fs::create_dir_all(&dir).map_err(|e| RpcError::kiln(e.to_string()))?;
+        for entry in std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > Duration::from_hours(24));
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let token = stage_token();
+        std::fs::write(dir.join(format!("{token}.txt")), text)
+            .map_err(|e| RpcError::kiln(e.to_string()))?;
+        Ok(json!({ "token": token }))
     }
 
     /// Records a notification and publishes it (ADR 0087).
@@ -1158,6 +1195,8 @@ impl Handler for Daemon {
             "git.branches" => self.git_branches(params),
             "site.doctor" => self.site_doctor(params),
             "site.commands" => self.site_commands(params),
+            "config.show" => self.read(&["config", "show", config_target(params)?]),
+            "config.stage" => self.stage(params),
             "notifications.list" => Ok(self.notices.list()),
             "notifications.clear" => {
                 self.notices.clear();
@@ -1210,6 +1249,47 @@ fn plain_read(method: &str) -> Option<&'static [&'static str]> {
         "xdebug.status" => &["php", "xdebug", "status"],
         _ => return None,
     })
+}
+
+/// The most text `config.stage` takes.
+const STAGE_MOST: usize = 1024 * 1024;
+
+/// A staged text's name: 32 hex digits, from the clock and a counter.
+fn stage_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| {
+            u64::try_from(d.as_nanos() % u128::from(u64::MAX)).unwrap_or(0)
+        });
+    let count = COUNT.fetch_add(1, Ordering::SeqCst);
+    format!(
+        "{:016x}{:016x}",
+        nanos,
+        count ^ u64::from(std::process::id()) << 32
+    )
+}
+
+/// `params.target` as `php:<version>`, `env:<site>` or `service:<instance>` (ADR 0089 §1),
+/// with nothing in the name that could be an option or a path.
+fn config_target(params: &Value) -> Result<&str, RpcError> {
+    let target = params["target"]
+        .as_str()
+        .ok_or_else(|| RpcError::kiln("params.target is missing"))?;
+    let ok = target.split_once(':').is_some_and(|(kind, name)| {
+        matches!(kind, "php" | "env" | "service")
+            && !name.is_empty()
+            && !name.starts_with(['-', '.'])
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    });
+    if ok {
+        Ok(target)
+    } else {
+        Err(RpcError::kiln(format!("{target:?} isn't a config target")))
+    }
 }
 
 /// `params.host` as a site's name only: letters, digits, `.` and `-`, never an option or a

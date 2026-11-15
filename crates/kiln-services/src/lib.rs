@@ -235,6 +235,12 @@ pub trait ServiceProvider: Sync {
         None
     }
 
+    /// The file of the instance's settings the user edits (ADR 0089 §1), read before Kiln's
+    /// so Kiln's port, address and folders win; `None` if it has none.
+    fn user_config(&self, _dirs: &InstanceDirs) -> Option<PathBuf> {
+        None
+    }
+
     /// For a whole-tree install: whether to keep the file at `path` (relative to the tree,
     /// `/`-separated). Everything by default.
     fn keep(&self, _path: &str) -> bool {

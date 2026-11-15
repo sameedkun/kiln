@@ -12,6 +12,7 @@ import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
 import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList, type Updates, type XdebugStatus } from "./api";
 import { useChanges } from "./Change";
+import { ConfigEditor } from "./ConfigEditor";
 import { fewNames, useRead } from "./hooks";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
@@ -120,6 +121,8 @@ export function PhpPage() {
   const [installing, setInstalling] = useState(false);
   const versions = php.data?.versions ?? [];
   const [chosen, setChosen] = useState<string | null>(null);
+  // php.ini edited whole (ADR 0089).
+  const [editing, setEditing] = useState<string | null>(null);
   const shownFor = chosen ?? (php.data?.default ? minor(php.data.default) : versions[0] ? minor(versions[0].version) : null);
   const usedBy = (version: string) => (sites.data?.sites ?? []).filter((s) => s.php?.version === version).map((s) => s.host);
 
@@ -142,6 +145,7 @@ export function PhpPage() {
                   items={[
                     ...(isDefault ? [] : [{ label: "Make it the default", onSelect: () => run(["php", "default", v.version], `PHP ${v.version} serves sites by default now.`) }]),
                     { label: "Extensions", onSelect: () => setChosen(minor(v.version)) },
+                    { label: "Edit php.ini…", onSelect: () => setEditing(`php:${v.version}`) },
                     ...(v.xdebug_available
                       ? [
                           {
@@ -205,6 +209,7 @@ export function PhpPage() {
         })}
       </Section>
       {versions.some((v) => v.xdebug) && <XdebugSection />}
+      {editing && <ConfigEditor target={editing} onClose={() => setEditing(null)} />}
       <ProgressLine progress={progress} />
       {shownFor && <Extensions php={shownFor} lines={[...new Set(versions.map((v) => minor(v.version)))]} onChoose={setChosen} />}
       {installing && (

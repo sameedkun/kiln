@@ -33,6 +33,9 @@ pub struct Flavor {
     oracle: bool,
 }
 
+/// The instance's own settings file, beside Kiln's config (ADR 0089 §1).
+pub const USER_CONFIG: &str = "custom.cnf";
+
 const PORTS: &[PortRole] = &[PortRole {
     role: "mysql",
     usual: 3306,
@@ -320,6 +323,8 @@ impl ServiceProvider for Flavor {
         let instance = dirs.instance();
         let mut text = format!(
             "# Written by Kiln (ADR 0038); rewritten before every start.\n\
+             # The user's own settings first (ADR 0089): what follows wins.\n\
+             !include {}\n\
              [mysqld]\n\
              basedir={}\n\
              datadir={}\n\
@@ -328,6 +333,7 @@ impl ServiceProvider for Flavor {
              skip-name-resolve\n\
              pid-file={}\n\
              log-error={}\n",
+            conf_path(&instance.join(USER_CONFIG)),
             conf_path(&dirs.bin),
             conf_path(&dirs.data),
             port_of(ports),
@@ -342,6 +348,10 @@ impl ServiceProvider for Flavor {
             text.push_str("mysqlx=OFF\n");
         }
         Some(text)
+    }
+
+    fn user_config(&self, dirs: &InstanceDirs) -> Option<PathBuf> {
+        Some(dirs.instance().join(USER_CONFIG))
     }
 
     fn launch(&self, dirs: &InstanceDirs, ports: &BTreeMap<String, u16>) -> Launch {

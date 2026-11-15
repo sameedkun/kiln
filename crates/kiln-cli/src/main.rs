@@ -15,6 +15,7 @@ mod out;
 mod app;
 mod apply;
 mod coexist;
+mod config;
 mod daemon;
 mod doctor;
 mod domain;
@@ -227,6 +228,12 @@ enum Command {
     Editor {
         #[command(subcommand)]
         action: Option<EditorAction>,
+    },
+    /// Edit a PHP's php.ini, a site's .env or a service's own settings, checked first and
+    /// backed up (ADR 0089). Targets: php:<version>, env:<site>, service:<instance>.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
     },
     /// A site's other names, kept by Kiln (not in the project): add, remove or list them
     /// (ADR 0083).
@@ -561,6 +568,35 @@ enum DbAction {
         file: PathBuf,
         /// The database to load it into.
         database: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigAction {
+    /// Print the file (with --json: its path, text and backups).
+    Show { target: String },
+    /// Write a new version from a file: the changed lines shown, checked, the old one backed up.
+    Save {
+        target: String,
+        /// The new text.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Text the app staged (`config.stage`).
+        #[arg(long)]
+        staged: Option<String>,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// The backups, newest first.
+    Backups { target: String },
+    /// Put a backup back (itself a save: the current file is backed up first).
+    Restore {
+        target: String,
+        backup: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
     },
 }
 
@@ -1531,6 +1567,7 @@ fn is_site_tool(command: &Command) -> bool {
             | Command::Run { .. }
             | Command::Code { .. }
             | Command::Editor { .. }
+            | Command::Config { .. }
     )
 }
 
@@ -1562,6 +1599,21 @@ fn run_site_tools(command: Command) -> Result<(), String> {
             site, list: true, ..
         } => run::list(&site),
         Command::Run { site, command, .. } => run::run(&site, &command),
+        Command::Config { action } => match action {
+            ConfigAction::Show { target } => config::show(&target),
+            ConfigAction::Save {
+                target,
+                from,
+                staged,
+                yes,
+            } => config::save(&target, from.as_deref(), staged.as_deref(), yes),
+            ConfigAction::Backups { target } => config::list_backups(&target),
+            ConfigAction::Restore {
+                target,
+                backup,
+                yes,
+            } => config::restore(&target, &backup, yes),
+        },
         Command::Code { site, goto } => editor::code(site.as_deref(), goto.as_deref()),
         Command::Editor { action: None } => editor::show(),
         Command::Editor {

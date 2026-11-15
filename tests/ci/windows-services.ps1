@@ -1580,6 +1580,48 @@ Check 'tool remove adminer: the site and its files go' {
     if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
 }
 
+Check 'kiln config (ADR 0089): .env and php.ini checked before saving, backed up, restored; MySQL takes a setting and refuses a bad one' {
+    $work = Join-Path $env:RUNNER_TEMP 'kiln-config'
+    New-Item -ItemType Directory -Force $work | Out-Null
+    # .env: saved with a backup, a broken one refused, the backup restored byte for byte.
+    $before = (Get-FileHash $envFile -Algorithm SHA256).Hash
+    $text = (& $Kiln --json config show env:shop | Select-Object -Last 1 | ConvertFrom-Json).data.text
+    [System.IO.File]::WriteAllText((Join-Path $work 'env.txt'), $text + "KILN_CONFIG_TEST=1`n")
+    Expect 'Saved .env of shop' (Kiln config save env:shop --from (Join-Path $work 'env.txt') --yes)
+    if ((Get-Content $envFile -Raw) -notmatch 'KILN_CONFIG_TEST=1') { throw 'the .env was not saved' }
+    [System.IO.File]::WriteAllText((Join-Path $work 'bad.txt'), $text + "this is not a setting`n")
+    $refused = & $Kiln config save env:shop --from (Join-Path $work 'bad.txt') --yes 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    if ($refused -notmatch 'not KEY=value') { throw "a broken .env was saved:`n$refused" }
+    $backup = @((& $Kiln --json config backups env:shop | Select-Object -Last 1 | ConvertFrom-Json).data.backups)[0]
+    Kiln config restore env:shop $backup --yes | Out-Null
+    if ((Get-FileHash $envFile -Algorithm SHA256).Hash -ne $before) { throw 'restore did not put the .env back byte for byte' }
+
+    # php.ini: a line PHP can't start with is refused, nothing written.
+    $ini = (& $Kiln --json config show php:8.4 | Select-Object -Last 1 | ConvertFrom-Json).data
+    [System.IO.File]::WriteAllText((Join-Path $work 'php.ini'), $ini.text + "`nextension=kiln_no_such_extension`n")
+    $refused = & $Kiln config save php:8.4 --from (Join-Path $work 'php.ini') --yes 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    if ($refused -notmatch "doesn't start cleanly") { throw "a broken php.ini was saved:`n$refused" }
+    if ((Get-Content $ini.path -Raw) -match 'kiln_no_such_extension') { throw 'the broken php.ini was written' }
+
+    # MySQL's own settings: a value it takes, then an option it can't start with (back to the last good file).
+    $cnf = (& $Kiln --json config show service:mysql-8.4 | Select-Object -Last 1 | ConvertFrom-Json).data
+    if ($cnf.path -notmatch 'custom\.cnf$') { throw "mysql's settings file: $($cnf.path)" }
+    [System.IO.File]::WriteAllText((Join-Path $work 'my.cnf'), "[mysqld]`nmax_connections=321`n")
+    Expect 'Saved' (Kiln config save service:mysql-8.4 --from (Join-Path $work 'my.cnf') --yes)
+    $max = Client 'mysql-8.4' 'shop' 'SELECT @@max_connections;'
+    if ($max -notmatch '321') { throw "max_connections after the save:`n$max" }
+    [System.IO.File]::WriteAllText((Join-Path $work 'bad.cnf'), "[mysqld]`nkiln-no-such-option=1`n")
+    $refused = & $Kiln config save service:mysql-8.4 --from (Join-Path $work 'bad.cnf') --yes 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    if ($refused -notmatch "didn't start with the new settings") { throw "a bad option was kept:`n$refused" }
+    if ((Get-Content $cnf.path -Raw) -notmatch 'max_connections=321') { throw 'the last good settings did not come back' }
+    if ((Client 'mysql-8.4' 'shop' 'SELECT 1;') -notmatch '1') { throw 'mysql-8.4 is not answering after the rollback' }
+    # Back to an empty file of settings.
+    [System.IO.File]::WriteAllText((Join-Path $work 'my.cnf'), "[mysqld]`n")
+    Kiln config save service:mysql-8.4 --from (Join-Path $work 'my.cnf') --yes | Out-Null
+}
 Check 'notifications (ADR 0087): kilnd tells of mail Mailpit caught and of a long job done, keeps them, clears them' {
     function Notices { @((Kiln daemon call notifications.list | ConvertFrom-Json).notifications) }
     Send-MailMessage -SmtpServer 127.0.0.1 -Port $script:smtp -From app@example.test -To you@example.test `

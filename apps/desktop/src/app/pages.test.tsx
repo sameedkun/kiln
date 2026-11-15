@@ -644,3 +644,24 @@ describe("Notifications (ADR 0087)", () => {
     expect(await screen.findByText("none yet")).toBeTruthy();
   });
 });
+
+describe("editing a config file (ADR 0089)", () => {
+  it("stages the text, then previews kiln config save with its token", async () => {
+    const { ConfigEditor } = await import("./ConfigEditor");
+    answers["config.show"] = () => ({ label: ".env of shop.test", path: "D:/Code/shop/.env", exists: true, text: "APP_NAME=Shop\n", backups: ["20261115-093000.bak"] });
+    answers["config.stage"] = ({ text }) => {
+      expect(text).toBe("APP_NAME=Shop\nAPP_DEBUG=true\n");
+      return { token: "0123456789abcdef0123456789abcdef" };
+    };
+    answers["jobs.start"] = () => ({ job: 31 });
+    answers["jobs.get"] = () => ({ running: false, finished: { job: 31, ok: false, exit: 3, needs_confirmation: true, last: { type: "result", ok: false, needs_confirmation: true } }, events: [{ type: "confirm", question: "Save .env of shop.test?" }] });
+    shell(<ConfigEditor target="env:shop.test" onClose={() => {}} />);
+    const box = await screen.findByLabelText(".env of shop.test");
+    expect(screen.getByRole("button", { name: "Show the changes" }).hasAttribute("disabled")).toBe(true);
+    await userEvent.click(box);
+    await userEvent.keyboard("{Control>}{End}{/Control}APP_DEBUG=true{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Show the changes" }));
+    expect((await screen.findAllByText("Save .env of shop.test?")).length).toBeGreaterThan(0);
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toEqual({ args: ["config", "save", "env:shop.test", "--staged", "0123456789abcdef0123456789abcdef"], mode: "preview" });
+  });
+});

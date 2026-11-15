@@ -11,6 +11,7 @@ import { Tag } from "../components/Tag";
 import { TextField } from "../components/TextField";
 import { type Instance, type LogSources, type ServiceSnapshotsList, type ServiceDatabases, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
+import { ConfigEditor } from "./ConfigEditor";
 import { mainPort, serviceState } from "./Home";
 import { fewNames, useRead } from "./hooks";
 import { LogPanel } from "./LogsPage";
@@ -38,6 +39,8 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
   const { run, open: visit } = useChanges();
   const [tab, setTab] = useState("overview");
   const [open, setOpen] = useState<Open | null>(null);
+  // The instance's own settings file (ADR 0089).
+  const [editing, setEditing] = useState(false);
   // Bumped after a database is deleted, so the list is read again.
   const [dropped, setDropped] = useState(0);
   const i = services.data?.instances.find((x) => x.name === name);
@@ -87,6 +90,7 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
               Open {i.web}
             </Button>
           )}
+          {["mysql", "mariadb", "postgres"].includes(i.kind) && <Button onClick={() => setEditing(true)}>Edit settings…</Button>}
           <Button
             icon={running ? <Stop16Filled /> : <Play16Filled />}
             onClick={() => run(["service", running ? "stop" : "start", i.name], `${running ? "Stopped" : "Started"} ${i.name}.`)}
@@ -96,6 +100,7 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
         </>
       }
     >
+      {editing && <ConfigEditor target={`service:${i.name}`} onClose={() => setEditing(false)} />}
       <Tabs tabs={tabs} current={tabs.some((t) => t.id === tab) ? tab : "overview"} onSelect={setTab}>
         {tab === "databases" && hasDatabases ? (
           <ServiceDatabasesTab key={dropped} instance={i} running={running} go={go} onDrop={(db) => setOpen({ drop: db })} onDump={(db) => setOpen({ dumpOne: db })} />

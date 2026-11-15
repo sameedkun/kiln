@@ -81,7 +81,20 @@ fn write_config(
     let path = dirs.config();
     std::fs::create_dir_all(dirs.instance())
         .map_err(|e| format!("cannot create {}: {e}", dirs.instance().display()))?;
-    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    // The user's own file (ADR 0089 §1), made once so Kiln's config can include it.
+    if let Some(user) = provider.user_config(dirs)
+        && user.starts_with(dirs.instance())
+        && user.parent() == Some(dirs.instance())
+        && !user.exists()
+    {
+        std::fs::write(
+            &user,
+            "[mysqld]\n# Your own settings for this instance, e.g. max_connections=300.\n# Kiln reads them before its own: its port, address and folders win.\n",
+        )
+        .map_err(|e| format!("cannot write {}: {e}", user.display()))?;
+    }
+    Ok(())
 }
 
 /// pgAdmin's list of Kiln's PostgreSQL instances (ADR 0071), which its launcher loads before

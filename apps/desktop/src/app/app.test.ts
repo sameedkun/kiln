@@ -474,3 +474,12 @@ describe("Xdebug's modes (ADR 0088)", async () => {
     expect(toggledModes(["debug", "profile"], "debug", false)).toEqual(["profile"]);
   });
 });
+
+describe("config backups (ADR 0089)", async () => {
+  const { backupTime } = await import("./ConfigEditor");
+  it("reads a backup's name as its time", () => {
+    expect(backupTime("20261115-093000.bak")).toBe("2026-11-15 09:30:00 UTC");
+    expect(backupTime("20261115-093000-2.bak")).toBe("2026-11-15 09:30:00 UTC");
+    expect(backupTime("odd.bak")).toBe("odd.bak");
+  });
+});

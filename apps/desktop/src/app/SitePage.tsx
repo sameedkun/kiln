@@ -22,6 +22,7 @@ import { useRead } from "./hooks";
 import { framework, frameworkId } from "./SitesPage";
 import { FrameworkMark } from "../components/FrameworkMark";
 import { SiteCheck } from "./SiteCheck";
+import { ConfigEditor } from "./ConfigEditor";
 import { SiteCommands } from "./SiteCommands";
 import { SiteNames } from "./SiteNames";
 
@@ -940,8 +941,10 @@ function SiteLog({ site, first, onChoose }: { site: Site; first: string | null; 
 function SiteEnv({ site }: { site: Site }) {
   const env = useRead<EnvShow>("env.show", { project: site.project });
   const [shown, setShown] = useState<string[]>([]);
+  const [editing, setEditing] = useState(false);
   return (
-    <Section title=".env" meta={env.data?.path}>
+    <Section title=".env" meta={env.data?.path} action={env.data && <Button size="sm" onClick={() => setEditing(true)}>Edit…</Button>}>
+      {editing && <ConfigEditor target={`env:${site.host}`} onClose={() => setEditing(false)} />}
       {env.error && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">{env.error}</li>}
       {env.data?.keys.map((k) => {
         const hidden = k.secret && k.value !== "" && !shown.includes(k.key);

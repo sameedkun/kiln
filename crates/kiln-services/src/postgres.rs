@@ -162,6 +162,11 @@ impl ServiceProvider for Postgres {
         ))
     }
 
+    /// `initdb`'s own `postgresql.conf`, which Kiln's config includes first (ADR 0089 §1).
+    fn user_config(&self, dirs: &InstanceDirs) -> Option<PathBuf> {
+        Some(dirs.data.join("postgresql.conf"))
+    }
+
     fn launch(&self, dirs: &InstanceDirs, _ports: &BTreeMap<String, u16>) -> Launch {
         Launch {
             program: self.executable(&dirs.bin),
