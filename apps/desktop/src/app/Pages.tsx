@@ -7,7 +7,7 @@ import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
-import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type EditorInfo, type KilnSettings, type SetupStatus, type Updates, openReleases } from "./api";
+import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type EditorInfo, type KilnSettings, type SnapshotSettings, type SetupStatus, type Updates, openReleases } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -82,6 +82,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
       <KilnSection />
       <NamesSection />
       <EditorSection />
+      <SnapshotsSection />
       <AssistantsSection />
       <UpdatesSection />
       <FootprintSection />
@@ -294,6 +295,43 @@ function UpdatesSection() {
         }
       >
         Kiln asks GitHub for its newest release, sending nothing about you or this PC. {status}
+      </SettingRow>
+    </Section>
+  );
+}
+
+/** Snapshots Kiln takes itself (ADR 0086): before risky steps, daily, how many kept. */
+function SnapshotsSection() {
+  const settings = useRead<SnapshotSettings>("snapshots.settings");
+  const { run } = useChanges();
+  const s = settings.data;
+  if (!s) return null;
+  return (
+    <Section title="Snapshots">
+      <SettingRow
+        title="Before risky steps"
+        control={<Switch label="Before risky steps" checked={s.auto} onChange={(on) => run(["db", "snapshot-settings", "--auto", on ? "on" : "off"], on ? "Kiln snapshots first again." : "Kiln won't snapshot before risky steps.")} />}
+      >
+        A snapshot of the site's database before a branch switch, migrations from the Commands tab, a drop and a rollback, when the database is on one of Kiln's services.
+      </SettingRow>
+      <SettingRow
+        title="Every day"
+        control={<Switch label="Every day" checked={s.daily} onChange={(on) => run(["db", "snapshot-settings", "--daily", on ? "on" : "off"], on ? "A snapshot of each site's database every day." : "No daily snapshots.")} />}
+      >
+        Each database a site uses, once a day, while Kiln's daemon runs.
+      </SettingRow>
+      <SettingRow
+        title="How many to keep"
+        control={
+          <Select
+            label="Kept per database"
+            value={String(s.keep)}
+            onChange={(e) => run(["db", "snapshot-settings", "--keep", e.target.value], `Kiln keeps ${e.target.value} of its own snapshots per database.`)}
+            options={[3, 5, 10, 20, 50].map((n) => ({ value: String(n), label: `${n} per database` }))}
+          />
+        }
+      >
+        Only Kiln's own snapshots are deleted past this; yours, and ones you keep, stay.
       </SettingRow>
     </Section>
   );

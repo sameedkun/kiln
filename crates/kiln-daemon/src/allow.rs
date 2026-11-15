@@ -94,6 +94,9 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["db", "drop"], true),
     (&["db", "snapshot"], false),
     (&["db", "rollback"], true),
+    // Kiln's own snapshots (ADR 0086): keep one past the limit, and the settings.
+    (&["db", "keep"], false),
+    (&["db", "snapshot-settings"], false),
     (&["tinker"], false),
     // A site's own command (ADR 0084): artisan, composer or a vendor/bin tool, checked by kiln.
     (&["run"], false),

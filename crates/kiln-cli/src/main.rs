@@ -522,6 +522,28 @@ enum DbAction {
         /// The instance, e.g. mysql-8.4.
         name: String,
     },
+    /// Keep an automatic snapshot past the limit: Kiln won't delete it (ADR 0086).
+    Keep {
+        /// The instance, e.g. mysql-8.4.
+        name: String,
+        /// The snapshot's file name, from `kiln db snapshots`.
+        snapshot: String,
+    },
+    /// Take the daily snapshots that are due (kilnd runs it hourly while daily snapshots are
+    /// on; ADR 0086).
+    SnapshotDue,
+    /// Show or change Kiln's own snapshots: before risky steps, daily, how many kept (ADR 0086).
+    SnapshotSettings {
+        /// Snapshot before a branch switch, migrations, a drop: on or off.
+        #[arg(long)]
+        auto: Option<String>,
+        /// A daily snapshot of each database a site uses: on or off.
+        #[arg(long)]
+        daily: Option<String>,
+        /// Automatic snapshots kept per database (1–100).
+        #[arg(long)]
+        keep: Option<usize>,
+    },
     /// Put a database back as a snapshot has it, after asking (a snapshot of it as it is now
     /// is kept first).
     Rollback {
@@ -1309,6 +1331,11 @@ fn run_db(
         (Some(DbAction::Snapshot { name, database }), _) => snapshot::snapshot(&name, &database),
         (Some(DbAction::Snapshots { name }), _) => snapshot::list(&name),
         (Some(DbAction::Rollback { name, snapshot }), _) => snapshot::rollback(&name, &snapshot),
+        (Some(DbAction::Keep { name, snapshot }), _) => snapshot::keep(&name, &snapshot),
+        (Some(DbAction::SnapshotDue), _) => snapshot::due(),
+        (Some(DbAction::SnapshotSettings { auto, daily, keep }), _) => {
+            snapshot::settings(auto.as_deref(), daily.as_deref(), keep)
+        }
         (Some(DbAction::Create { name, database }), _) => dump::create(&name, &database),
         (Some(DbAction::Drop { name, database }), _) => dump::drop(&name, &database),
         (None, Some(name)) => service::db(&name, database),

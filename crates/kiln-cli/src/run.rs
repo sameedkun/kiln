@@ -66,6 +66,16 @@ fn program(word: &str, folder: &Path) -> Result<Program, String> {
     })
 }
 
+/// Whether an artisan command changes the database's shape or contents (ADR 0086): migrations
+/// (not `migrate:status`), `db:wipe`, `db:seed`.
+fn changes_database(args: &[String]) -> bool {
+    args.first().is_some_and(|c| {
+        (c == "migrate" || c.starts_with("migrate:")) && c != "migrate:status"
+            || c == "db:wipe"
+            || c == "db:seed"
+    })
+}
+
 /// Whether the arguments already say `--no-interaction`.
 fn quiet_already(args: &[String]) -> bool {
     args.iter().any(|a| a == "-n" || a == "--no-interaction")
@@ -183,6 +193,9 @@ pub fn run(name: &str, words: &[String]) -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(" ");
     crate::out::step(&format!("{shown} in {host} (PHP {})", php.version));
+    if program == Program::Artisan && changes_database(args) {
+        crate::snapshot::before(&folder, crate::snapshot::Reason::BeforeMigrate);
+    }
     let status = run_tree(command(&program, args, &folder, &php, crate::out::json())?)?;
     let exit = status.code();
     if crate::out::json() {
@@ -429,6 +442,24 @@ mod tests {
         assert_eq!(suggestions(&found(dir.path()))[0].warn, Some(TESTS_WARNING));
         std::fs::write(&xml, "<php>\n<env name=\"DB_CONNECTION\" value=\"sqlite\"/>\n<env name=\"DB_DATABASE\" value=\":memory:\"/>\n</php>").unwrap();
         assert_eq!(suggestions(&found(dir.path()))[0].warn, None);
+    }
+
+    #[test]
+    fn migrations_wipes_and_seeds_change_the_database_status_doesnt() {
+        let yes =
+            |w: &[&str]| changes_database(&w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+        for c in [
+            &["migrate"][..],
+            &["migrate:fresh", "--seed"],
+            &["migrate:rollback"],
+            &["db:wipe"],
+            &["db:seed"],
+        ] {
+            assert!(yes(c), "{c:?}");
+        }
+        for c in [&["migrate:status"][..], &["route:list"], &["about"], &[]] {
+            assert!(!yes(c), "{c:?}");
+        }
     }
 
     #[test]

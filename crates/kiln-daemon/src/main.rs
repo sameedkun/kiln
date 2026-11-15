@@ -82,6 +82,7 @@ fn main() -> ExitCode {
             watcher.watch(&mut backoff, now);
             watcher.watch_services(&mut service_backoff, now);
             watcher.check_ca(now);
+            watcher.check_snapshots(now);
             std::thread::sleep(WATCH_EVERY);
         }
     });

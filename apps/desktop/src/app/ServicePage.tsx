@@ -245,6 +245,20 @@ function ServiceDatabasesTab({
   );
 }
 
+/** What a snapshot is, in words (ADR 0086): yours, kept, or Kiln's and why. */
+export function snapshotKind(s: { kind?: string; reason?: string | null }): string {
+  if (s.kind === "kept") return "Kept";
+  if (s.kind !== "auto") return "Yours";
+  const why: Record<string, string> = {
+    "before-switch": "Before a branch switch",
+    "before-migrate": "Before migrations",
+    "before-drop": "Before a drop",
+    "before-rollback": "Before a rollback",
+    daily: "Daily",
+  };
+  return why[s.reason ?? ""] ?? "Kiln's";
+}
+
 /** A service's snapshots (ADR 0079): taken from a database's row, rolled back after asking. */
 function ServiceSnapshots({ instance: i, running }: { instance: Instance; running: boolean }) {
   const list = useRead<ServiceSnapshotsList>("services.snapshots", { name: i.name });
@@ -280,13 +294,19 @@ function ServiceSnapshots({ instance: i, running }: { instance: Instance; runnin
     <Section title="Snapshots" meta={list.data ? `${all.length} · kept by Kiln` : undefined}>
       {list.data && all.length === 0 && <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">None yet: a snapshot keeps a database as it is, to roll back to after a migration or a test that went wrong.</li>}
       {all.map((s) => {
-        const at = s.file.slice(s.database.length + 2, -4);
+        const at = s.file.slice(s.database.length + 2, s.database.length + 17);
         const when = `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)} ${at.slice(9, 11)}:${at.slice(11, 13)}:${at.slice(13, 15)} UTC`;
         return (
           <Row
             key={s.file}
-            columns="minmax(140px,1fr) minmax(170px,1fr) 90px 100px"
+            columns="minmax(140px,1fr) minmax(170px,1fr) 130px 90px 170px"
             actions={
+              <>
+              {s.kind === "auto" && (
+                <Button size="sm" variant="quiet" title="Kiln won't delete it" onClick={() => run(["db", "keep", i.name, s.file], "Kept: Kiln won't delete it.")}>
+                  Keep
+                </Button>
+              )}
               <Button
                 size="sm"
                 disabled={!running}
@@ -302,10 +322,12 @@ function ServiceSnapshots({ instance: i, running }: { instance: Instance; runnin
               >
                 Roll back
               </Button>
+              </>
             }
           >
             <RowName>{s.database}</RowName>
             <Detail mono>{when}</Detail>
+            <Detail>{snapshotKind(s)}</Detail>
             <Detail mono>{size(s.bytes)}</Detail>
           </Row>
         );

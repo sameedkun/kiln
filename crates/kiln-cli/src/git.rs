@@ -237,6 +237,8 @@ pub fn switch(name: &str, branch: &str) -> Result<(), String> {
             project.display()
         ));
     }
+    // Another branch's migrations may not match the database (ADR 0086).
+    crate::snapshot::before(&project, crate::snapshot::Reason::BeforeSwitch);
     git(&project, &["switch", branch])?;
     say!("{host} is on {branch} now.");
     Ok(())

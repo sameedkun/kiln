@@ -1503,6 +1503,35 @@ Check 'kiln db snapshot and rollback (ADR 0079): a table deleted after the snaps
         $global:LASTEXITCODE = 0
     }
 }
+Check 'automatic snapshots (ADR 0086): before migrations and a drop, pruned to the limit, kept past it, none while off' {
+    function Snaps($database) { @((JsonLines @(& $Kiln --json db snapshots mysql-8.4))[-1].data.snapshots | Where-Object { $_.database -eq $database }) }
+    try {
+        Kiln db snapshot-settings --keep 2 | Out-Null
+        $s = (& $Kiln --json db snapshot-settings | Select-Object -Last 1 | ConvertFrom-Json).data
+        if (-not $s.auto -or $s.daily -or $s.keep -ne 2) { throw "snapshot settings: $($s | ConvertTo-Json)" }
+        foreach ($i in 1..3) {
+            Expect 'Kept a snapshot of shop first (before-migrate)' (Kiln run shop artisan migrate --force)
+            Start-Sleep -Milliseconds 1100   # one name per second
+        }
+        $auto = @(Snaps 'shop' | Where-Object { $_.kind -eq 'auto' -and $_.reason -eq 'before-migrate' })
+        if ($auto.Length -ne 2) { throw "kept $($auto.Length) automatic snapshots, not 2: $($auto.file -join ', ')" }
+        Expect "Kiln won't delete it" (Kiln db keep mysql-8.4 $auto[0].file)
+        if (@(Snaps 'shop' | Where-Object { $_.kind -eq 'kept' }).Length -ne 1) { throw 'the kept snapshot is missing' }
+        Expect 'is already kept' (Kiln db keep mysql-8.4 ((Snaps 'shop' | Where-Object { $_.kind -eq 'kept' })[0].file))
+        # migrate:status changes nothing: no snapshot.
+        if ((Kiln run shop artisan migrate:status) -match 'Kept a snapshot') { throw 'migrate:status took a snapshot' }
+        # A drop keeps one first.
+        Kiln db create mysql-8.4 kiln_dropme | Out-Null
+        Expect 'before-drop' (& $Kiln --json --confirmed db drop mysql-8.4 kiln_dropme 2>&1 | Out-String)
+        if (-not (Snaps 'kiln_dropme' | Where-Object { $_.reason -eq 'before-drop' })) { throw 'no snapshot before the drop' }
+        # Off: none taken.
+        Kiln db snapshot-settings --auto off | Out-Null
+        if ((Kiln run shop artisan migrate --force) -match 'Kept a snapshot') { throw 'a snapshot was taken while off' }
+    } finally {
+        & $Kiln db snapshot-settings --auto on --keep 10 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+}
 Check 'kiln tinker shop (ADR 0079): PHP run in the app with its PHP' {
     Expect '42' (Kiln tinker shop 'echo 6*7;')
 }

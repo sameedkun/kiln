@@ -439,3 +439,14 @@ describe("file links in a site's log (ADR 0085)", async () => {
     expect(linkPaths(plain)).toEqual([{ text: plain }]);
   });
 });
+
+describe("what a snapshot is (ADR 0086)", async () => {
+  const { snapshotKind } = await import("./ServicePage");
+  it("says yours, kept, or Kiln's and why", () => {
+    expect(snapshotKind({ kind: "taken" })).toBe("Yours");
+    expect(snapshotKind({})).toBe("Yours");
+    expect(snapshotKind({ kind: "kept" })).toBe("Kept");
+    expect(snapshotKind({ kind: "auto", reason: "before-migrate" })).toBe("Before migrations");
+    expect(snapshotKind({ kind: "auto", reason: "daily" })).toBe("Daily");
+  });
+});

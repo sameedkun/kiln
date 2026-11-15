@@ -137,6 +137,9 @@ pub const RENEW_BEFORE_DAYS: i64 = 10;
 /// How often the daemon checks the intermediate (and once when it starts).
 pub const CA_CHECK_EVERY: Duration = Duration::from_hours(6);
 
+/// How often kilnd looks for daily snapshots that are due (ADR 0086 §3).
+pub const SNAPSHOT_CHECK_EVERY: Duration = Duration::from_hours(1);
+
 /// Whether an intermediate with `days_left` is due for renewal ([ADR 0026] §2, P2-03).
 /// Without one there is nothing to renew: `kiln web start` issues the first.
 ///
@@ -229,6 +232,9 @@ pub struct Daemon {
     service_repairs: Mutex<Vec<Value>>,
     /// When the intermediate was last checked, and the renewals made since the daemon started.
     ca_checked: Mutex<Option<Instant>>,
+    /// When daily snapshots were last looked for, and whether a run is going (ADR 0086 §3).
+    snapshots_checked: Mutex<Option<Instant>>,
+    snapshots_running: Arc<std::sync::atomic::AtomicBool>,
     renewals: Mutex<Vec<Value>>,
     /// Jobs started through the API ([ADR 0053] §4).
     ///
@@ -261,6 +267,8 @@ impl Daemon {
             repairs: Mutex::new(Vec::new()),
             service_repairs: Mutex::new(Vec::new()),
             ca_checked: Mutex::new(None),
+            snapshots_checked: Mutex::new(None),
+            snapshots_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             renewals: Mutex::new(Vec::new()),
             jobs: Arc::new(Jobs::default()),
             log_sources: Mutex::new(None),
@@ -314,6 +322,7 @@ impl Daemon {
         "jobs.stop",
         "site.commands",
         "editor.get",
+        "snapshots.settings",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -352,6 +361,41 @@ impl Daemon {
     /// Writes a line to kilnd's log.
     pub fn log(&self, line: &str) {
         self.log.line(line);
+    }
+
+    /// Daily snapshots (ADR 0086 §3): every [`SNAPSHOT_CHECK_EVERY`] while `snapshots.daily` is
+    /// on, `kiln db snapshot-due` on a thread of its own, so a slow dump never delays watching.
+    pub fn check_snapshots(&self, now: Instant) {
+        use std::sync::atomic::Ordering;
+        {
+            let mut checked = self
+                .snapshots_checked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if checked.is_some_and(|at| now.duration_since(at) < SNAPSHOT_CHECK_EVERY) {
+                return;
+            }
+            *checked = Some(now);
+        }
+        let on = kiln_state::StateStore::open_dir(&self.paths.state)
+            .ok()
+            .and_then(|(store, _)| store.setting("snapshots.daily").ok().flatten())
+            .is_some_and(|v| v == "on");
+        if !on || self.snapshots_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (running, log) = (Arc::clone(&self.snapshots_running), Arc::clone(&self.log));
+        std::thread::spawn(move || {
+            let outcome = run_kiln(&["db", "snapshot-due"]);
+            match &outcome {
+                Ok(output) | Err(output) => {
+                    for line in output.lines() {
+                        log.line(&format!("snapshots: {line}"));
+                    }
+                }
+            }
+            running.store(false, Ordering::SeqCst);
+        });
     }
 
     pub fn check_ca(&self, now: Instant) {
@@ -1053,6 +1097,7 @@ impl Handler for Daemon {
             "site.doctor" => self.site_doctor(params),
             "site.commands" => self.site_commands(params),
             "editor.get" => self.read(&["editor"]),
+            "snapshots.settings" => self.read(&["db", "snapshot-settings"]),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.list" => Ok(self.jobs.list()),

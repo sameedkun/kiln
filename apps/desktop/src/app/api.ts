@@ -85,6 +85,12 @@ export interface EditorInfo {
   found: { id: string; name: string; exe: string }[];
   known: { id: string; name: string }[];
 }
+/** `snapshots.settings` (ADR 0086 §5). */
+export interface SnapshotSettings {
+  auto: boolean;
+  daily: boolean;
+  keep: number;
+}
 /** `site.commands` (ADR 0084 §3): what a site can run. */
 export interface SiteCommands {
   host: string;
@@ -96,7 +102,7 @@ export interface SiteCommands {
 /** `services.snapshots` (ADR 0079). */
 export interface ServiceSnapshotsList {
   folder: string;
-  snapshots: { file: string; database: string; bytes: number }[];
+  snapshots: { file: string; database: string; bytes: number; kind?: "taken" | "auto" | "kept"; reason?: string | null }[];
 }
 /** `services.databases` (ADR 0068 §1). */
 export interface ServiceDatabases {

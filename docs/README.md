@@ -101,6 +101,7 @@ working name). Start here.
 | [0083](adr/0083-extra-site-names.md) | Extra names for a site: `kiln domain add/remove/list`, kept in Kiln's state (not the project) and served as aliases; `kiln secure`/`unsecure` move `APP_URL` with the site when it names the site (a journaled `.env` change); the site page's Other names | accepted (Phase 4e) |
 | [0084](adr/0084-site-commands.md) | A site's own commands: `kiln run <site>` for `artisan`, Kiln's Composer or a `vendor/bin` tool only, with the site's PHP; lines streamed with `--json`; what it starts in a kill-on-close job, and `jobs.stop` for `kiln run` jobs only; `site.commands` and the site page's Commands tab | accepted (Phase 4e) |
 | [0085](adr/0085-open-in-editor.md) | The user's editor: VS Code, Cursor, PhpStorm, Zed or Sublime Text found in their usual places (an `.exe` only), or chosen (`kiln editor use`); `kiln code` opens a site or a file inside it at a line; the site page's Open button, Settings → Editor, file links in a site's logs | accepted (Phase 4e) |
+| [0086](adr/0086-automatic-snapshots.md) | Snapshots Kiln takes itself: before a branch switch, migrations, a drop (strict) and a rollback; daily from kilnd if asked; named by reason, only those pruned to a limit per database; `kiln db keep`; `kiln db snapshot-settings` and Settings → Snapshots | accepted (Phase 4e) |
 
 ## Conventions
 

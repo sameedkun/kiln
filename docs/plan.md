@@ -312,7 +312,7 @@ Linux and macOS features, and anything that listens beyond loopback, are left ou
 | P4E-04 | Extra names per site from the CLI and app (`kiln domain add/remove`); `secure` and `unsecure` keep `APP_URL` in step | S | **built** 2026-11-15, [ADR 0083](adr/0083-extra-site-names.md); names kept in Kiln's state, not the project |
 | P4E-05 | Run commands from the site page: artisan, composer scripts, tests, `vendor/bin` tools (Pint, PHPStan, Pest), streamed | S–M | **built** 2026-11-15, [ADR 0084](adr/0084-site-commands.md); `kiln run`, stoppable through `jobs.stop` |
 | P4E-06 | Open in your editor: detected (VS Code, PhpStorm, Cursor, Zed, Sublime) or chosen; `kiln code`; `file:line` in logs opens there | S | **built** 2026-11-15, [ADR 0085](adr/0085-open-in-editor.md) |
-| P4E-07 | Snapshots taken for you before a branch switch, migrations and a drop, and on a schedule, with retention and "keep" | S–M | Phase 5's "snapshots before migrations" |
+| P4E-07 | Snapshots taken for you before a branch switch, migrations and a drop, and on a schedule, with retention and "keep" | S–M | **built** 2026-11-15, [ADR 0086](adr/0086-automatic-snapshots.md); Phase 5's "snapshots before migrations" |
 | P4E-08 | Windows notifications: mail caught by Mailpit, a dev process that stopped, a long job done; the last 50 kept in the app | M | |
 | P4E-09 | Xdebug's other modes: coverage (for `pest --coverage`), profile, trace | S | |
 | P4E-10 | Editing php.ini, the site's `.env` and a service's config in the app, validated, with backups to restore | M | |

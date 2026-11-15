@@ -105,6 +105,13 @@ pub fn drop(name: &str, database: &str) -> Result<(), String> {
         say!("Nothing was changed.");
         return Ok(());
     }
+    // A snapshot first (ADR 0086): if it can't be kept, nothing is dropped.
+    if let Some(Err(e)) = crate::snapshot::auto(name, database, crate::snapshot::Reason::BeforeDrop)
+    {
+        return Err(format!(
+            "couldn't keep a snapshot of {database} first, so nothing was deleted: {e}"
+        ));
+    }
     provider
         .drop_database(&dirs, &record.ports, database)
         .ok_or_else(|| format!("{} has no databases", provider.display_name()))?
