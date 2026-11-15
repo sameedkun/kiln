@@ -36,6 +36,7 @@ mod pool;
 mod project;
 mod proxy;
 mod requests;
+mod run;
 mod service;
 mod services_up;
 mod share;
@@ -197,6 +198,19 @@ enum Command {
         site: String,
         /// The group's name, e.g. "Acme".
         group: Option<String>,
+    },
+    /// Run a site's own command with its PHP, in its folder: artisan, composer or a tool in
+    /// vendor/bin, e.g. `kiln run shop artisan migrate:status` or `kiln run shop pest`
+    /// (ADR 0084). `--list` says what the site has.
+    Run {
+        /// The site, e.g. shop or shop.test.
+        site: String,
+        /// List what the site can run instead.
+        #[arg(long)]
+        list: bool,
+        /// The command and its arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
     },
     /// A site's other names, kept by Kiln (not in the project): add, remove or list them
     /// (ADR 0083).
@@ -1341,7 +1355,8 @@ fn run(command: Command) -> Result<(), String> {
         | Command::Share { .. }
         | Command::Tinker { .. }
         | Command::Init { .. }
-        | Command::Domain { .. }) => run_site_tools(command),
+        | Command::Domain { .. }
+        | Command::Run { .. }) => run_site_tools(command),
         Command::Updates { action } => run_updates(action),
         // `clear` is its only action.
         Command::Cache { .. } => footprint::clear_cache(),
@@ -1464,6 +1479,10 @@ fn run_site_tools(command: Command) -> Result<(), String> {
             no_build,
             yes,
         }),
+        Command::Run {
+            site, list: true, ..
+        } => run::list(&site),
+        Command::Run { site, command, .. } => run::run(&site, &command),
         Command::Domain { action } => match action {
             DomainAction::Add { site, names } => domain::add(&site, &names),
             DomainAction::Remove { site, names } => domain::remove(&site, &names),

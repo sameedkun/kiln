@@ -22,6 +22,7 @@ import { useRead } from "./hooks";
 import { framework, frameworkId } from "./SitesPage";
 import { FrameworkMark } from "../components/FrameworkMark";
 import { SiteCheck } from "./SiteCheck";
+import { SiteCommands } from "./SiteCommands";
 import { SiteNames } from "./SiteNames";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
@@ -112,13 +113,16 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
           { id: "logs", label: "Logs" },
           { id: "dumps", label: "Dumps" },
           { id: "env", label: ".env" },
+          ...(site.php ? [{ id: "commands", label: "Commands" }] : []),
           { id: "check", label: "Check" },
           ...(site.driver === "laravel" ? [{ id: "tinker", label: "Tinker" }] : []),
         ]}
         current={tab}
         onSelect={setTab}
       >
-      {tab === "check" ? (
+      {tab === "commands" ? (
+        <SiteCommands site={site} />
+      ) : tab === "check" ? (
         <SiteCheck site={site} />
       ) : tab === "tinker" ? (
         <SiteTinker site={site} />

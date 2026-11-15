@@ -397,3 +397,20 @@ describe("a site's other names (ADR 0083)", async () => {
     expect(addsNames(["domain", "remove", "shop.test", "admin.test"])).toBe(false);
   });
 });
+
+describe("a site's commands (ADR 0084)", async () => {
+  const { splitCommand, commandError } = await import("./SiteCommands");
+  const has = { host: "shop.test", artisan: true, scripts: ["test"], tools: ["pest", "pint"], suggested: [] };
+  it("splits a typed command, keeping quoted words", () => {
+    expect(splitCommand(`artisan tinker --execute "User::count()"  `)).toEqual(["artisan", "tinker", "--execute", "User::count()"]);
+    expect(splitCommand("")).toEqual([]);
+  });
+  it("takes artisan, composer and the site's vendor/bin tools only", () => {
+    expect(commandError(["artisan", "about"], has)).toBeNull();
+    expect(commandError(["composer", "test"], has)).toBeNull();
+    expect(commandError(["pest"], has)).toBeNull();
+    expect(commandError(["vendor/bin/pint", "--test"], has)).toBeNull();
+    expect(commandError(["php", "-v"], has)).toMatch(/artisan, composer or a tool in vendor\/bin \(pest, pint\)/);
+    expect(commandError(["artisan"], { ...has, artisan: false })).toBe("This site has no artisan.");
+  });
+});

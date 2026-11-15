@@ -532,3 +532,58 @@ describe("a site's other names (ADR 0083)", () => {
     expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["domain", "add", "shop.test", "api"], mode: "apply" });
   });
 });
+
+describe("a site's commands (ADR 0084)", () => {
+  it("offers the site's suggestions and runs one, showing its output", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["site.commands"] = () => ({
+      host: "shop.test",
+      artisan: true,
+      scripts: ["test"],
+      tools: ["pest", "pint"],
+      suggested: [
+        { label: "Run the tests", args: ["artisan", "test"] },
+        { label: "Migrations", args: ["artisan", "migrate:status"] },
+      ],
+    });
+    answers["jobs.start"] = () => ({ job: 11 });
+    answers["jobs.get"] = () => ({
+      running: false,
+      finished: { job: 11, ok: true, exit: 0, needs_confirmation: false, last: { type: "result", data: { exit: 0 } } },
+      events: [
+        { type: "step", text: "artisan migrate:status in shop.test (PHP 8.4.27)" },
+        { type: "note", text: "Migration name .... Batch / Status" },
+        { type: "note", text: "0001_01_01_000000_create_users_table .... [1] Ran" },
+      ],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    await userEvent.click(await screen.findByRole("tab", { name: "Commands" }));
+    expect(await screen.findByRole("button", { name: "composer test" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Migrations" }));
+    expect(await screen.findByText(/create_users_table/)).toBeTruthy();
+    expect(screen.getByText("Done (exit code 0).")).toBeTruthy();
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toEqual({ args: ["run", "shop.test", "artisan", "migrate:status"], mode: "apply" });
+    expect(asked.find((a) => a.key === "site.commands")?.args).toEqual({ host: "shop.test" });
+    // A command Kiln won't run can't be started.
+    await userEvent.type(screen.getByLabelText("Command"), "php -v");
+    expect(screen.getByRole("button", { name: "Run" }).hasAttribute("disabled")).toBe(true);
+  });
+});

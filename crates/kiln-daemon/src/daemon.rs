@@ -311,6 +311,8 @@ impl Daemon {
         "git.branches",
         "services.snapshots",
         "site.doctor",
+        "jobs.stop",
+        "site.commands",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -693,19 +695,14 @@ impl Daemon {
     ///
     /// [ADR 0081]: ../../../docs/adr/0081-site-doctor.md
     fn site_doctor(&self, params: &Value) -> Result<Value, RpcError> {
-        match params["host"].as_str() {
-            Some(host)
-                if !host.is_empty()
-                    && !host.starts_with(['-', '.'])
-                    && host
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') =>
-            {
-                self.read(&["doctor", host])
-            }
-            Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
-            None => Err(RpcError::kiln("params.host (a site) is missing")),
-        }
+        self.read(&["doctor", site_name(params)?])
+    }
+
+    /// `site.commands` ([ADR 0084] §3): what a site can run, for its Commands tab.
+    ///
+    /// [ADR 0084]: ../../../docs/adr/0084-site-commands.md
+    fn site_commands(&self, params: &Value) -> Result<Value, RpcError> {
+        self.read(&["run", site_name(params)?, "--list"])
     }
 
     /// `logs.tail` ([ADR 0059] §3): a log's last lines, or what was written since `after`.
@@ -849,11 +846,19 @@ impl Daemon {
             Arc::clone(&self.log),
             self.kiln.clone(),
         );
+        let stop = self.jobs.stop_handle(id);
         std::thread::spawn(move || {
-            let outcome = jobs::run(&kiln, &args, mode == Mode::Apply, JOB_LIMIT, &mut |event| {
-                jobs.event(id, event.clone());
-                events.publish("job.event", json!({"job": id, "event": event}));
-            });
+            let outcome = jobs::run_stoppable(
+                &kiln,
+                &args,
+                mode == Mode::Apply,
+                JOB_LIMIT,
+                stop.as_deref(),
+                &mut |event| {
+                    jobs.event(id, event.clone());
+                    events.publish("job.event", json!({"job": id, "event": event}));
+                },
+            );
             let finished = json!({
                 "job": id,
                 "ok": outcome.ok,
@@ -1045,19 +1050,49 @@ impl Handler for Daemon {
             }
             "git.branches" => self.git_branches(params),
             "site.doctor" => self.site_doctor(params),
+            "site.commands" => self.site_commands(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
-            "jobs.get" => {
-                let id = params["job"]
-                    .as_u64()
-                    .ok_or_else(|| RpcError::kiln("params.job (a job id) is missing"))?;
-                self.jobs
-                    .get(id)
-                    .ok_or_else(|| RpcError::kiln(format!("no job {id}")))
-            }
             "jobs.list" => Ok(self.jobs.list()),
+            method @ ("jobs.get" | "jobs.stop") => {
+                job_method(&self.jobs, &self.log, method, params)
+            }
             other => Err(RpcError::method_not_found(other)),
         }
+    }
+}
+
+/// `jobs.get`, and `jobs.stop` (ADR 0084 §4: only a `kiln run` job).
+fn job_method(jobs: &Jobs, log: &Log, method: &str, params: &Value) -> Result<Value, RpcError> {
+    let id = params["job"]
+        .as_u64()
+        .ok_or_else(|| RpcError::kiln("params.job (a job id) is missing"))?;
+    if method == "jobs.stop" {
+        log.line(&format!("job {id}: stop asked"));
+        return jobs
+            .stop(id)
+            .map(|()| json!({"stopping": true}))
+            .map_err(RpcError::kiln);
+    }
+    jobs.get(id)
+        .ok_or_else(|| RpcError::kiln(format!("no job {id}")))
+}
+
+/// `params.host` as a site's name only: letters, digits, `.` and `-`, never an option or a
+/// folder, since it reaches the command line.
+fn site_name(params: &Value) -> Result<&str, RpcError> {
+    match params["host"].as_str() {
+        Some(host)
+            if !host.is_empty()
+                && !host.starts_with(['-', '.'])
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') =>
+        {
+            Ok(host)
+        }
+        Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
+        None => Err(RpcError::kiln("params.host (a site) is missing")),
     }
 }
 

@@ -78,6 +78,14 @@ export interface GitBranches {
   dirty: boolean;
   worktrees: { path: string; branch: string | null; host: string | null }[];
 }
+/** `site.commands` (ADR 0084 §3): what a site can run. */
+export interface SiteCommands {
+  host: string;
+  artisan: boolean;
+  scripts: string[];
+  tools: string[];
+  suggested: { label: string; args: string[] }[];
+}
 /** `services.snapshots` (ADR 0079). */
 export interface ServiceSnapshotsList {
   folder: string;
@@ -275,7 +283,7 @@ export const onEvent = (handler: (note: Notification) => void): Promise<Unlisten
  * Runs a change as a job and waits for it to end, passing each line it prints to `onLine`.
  * `preview` stops at the command's confirmation (ADR 0053 §4).
  */
-export async function runJob(args: string[], mode: "preview" | "apply", onLine?: (event: JobEvent) => void): Promise<JobFinished> {
+export async function runJob(args: string[], mode: "preview" | "apply", onLine?: (event: JobEvent) => void, onStart?: (job: number) => void): Promise<JobFinished> {
   let id: number | null = null;
   let delivered = 0;
   const early: Notification[] = [];
@@ -294,6 +302,7 @@ export async function runJob(args: string[], mode: "preview" | "apply", onLine?:
   const unlisten = await onEvent((note) => (id === null ? early.push(note) : seen(note)));
   try {
     id = (await call<{ job: number }>("jobs.start", { args, mode })).job;
+    onStart?.(id);
     early.splice(0).forEach(seen);
     // A job that finished before the events arrived: its record has the end.
     const record = await call<{ running: boolean; finished: JobFinished | null; events: JobEvent[] }>("jobs.get", { job: id });

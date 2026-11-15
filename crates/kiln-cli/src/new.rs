@@ -395,6 +395,22 @@ pub(crate) fn composer(
     dir: &Path,
     record: &PhpRecord,
 ) -> Result<std::process::ExitStatus, String> {
+    let mut command = composer_command(args, dir, record)?;
+    #[cfg(windows)]
+    {
+        // Ctrl+C goes to Composer (same console); Kiln waits for it to stop.
+        let _ = kiln_sys::win::survive_ctrl_c();
+    }
+    // Its output is shown; with --json, as notes (ADR 0053 §1).
+    crate::out::run_shown(&mut command).map_err(|e| format!("cannot run Composer: {e}"))
+}
+
+/// Kiln's Composer for `dir` with `record`'s PHP (first on `PATH`), installed if missing.
+pub(crate) fn composer_command(
+    args: Vec<OsString>,
+    dir: &Path,
+    record: &PhpRecord,
+) -> Result<std::process::Command, String> {
     let local =
         kiln_state::default_local_dir().ok_or("cannot determine Kiln's local data directory")?;
     if !local.join(COMPOSER_PHAR).is_file() {
@@ -415,13 +431,7 @@ pub(crate) fn composer(
     command
         .current_dir(dir)
         .env("PATH", path_with(&record.dir)?);
-    #[cfg(windows)]
-    {
-        // Ctrl+C goes to Composer (same console); Kiln waits for it to stop.
-        let _ = kiln_sys::win::survive_ctrl_c();
-    }
-    // Its output is shown; with --json, as notes (ADR 0053 §1).
-    crate::out::run_shown(&mut command).map_err(|e| format!("cannot run Composer: {e}"))
+    Ok(command)
 }
 
 /// Serves the new project as `<name>.<tld>`: linked, or already served from a parked folder.

@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -95,6 +96,36 @@ pub fn outcome(last: Option<Value>, exit: Option<i32>, stderr: &str) -> Outcome 
     }
 }
 
+/// A way to stop a running job from another thread ([ADR 0084] §4): only `kiln run` jobs
+/// get one, since their `kiln` puts what it starts in a kill-on-close job, and stopping it
+/// mid-way changes nothing of Kiln's.
+///
+/// [ADR 0084]: ../../../docs/adr/0084-site-commands.md
+#[derive(Debug, Default)]
+pub struct Stop {
+    child: Mutex<Option<Arc<Mutex<std::process::Child>>>>,
+    stopped: AtomicBool,
+}
+
+impl Stop {
+    /// Ends the job's `kiln` (and, through its job object, what it started).
+    pub fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        if let Some(child) = self
+            .child
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            let _ = child.lock().unwrap_or_else(PoisonError::into_inner).kill();
+        }
+    }
+
+    fn was_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
+    }
+}
+
 /// Runs `kiln --json [--confirmed] <args>` without a window. `on_event` sees each line
 /// before the final one; after `limit` the run is stopped.
 pub fn run(
@@ -102,6 +133,18 @@ pub fn run(
     args: &[String],
     confirmed: bool,
     limit: Duration,
+    on_event: &mut dyn FnMut(Value),
+) -> Outcome {
+    run_stoppable(kiln, args, confirmed, limit, None, on_event)
+}
+
+/// [`run`], which `stop` can end early.
+pub fn run_stoppable(
+    kiln: &Path,
+    args: &[String],
+    confirmed: bool,
+    limit: Duration,
+    stop: Option<&Stop>,
     on_event: &mut dyn FnMut(Value),
 ) -> Outcome {
     let mut command = Command::new(kiln);
@@ -135,6 +178,12 @@ pub fn run(
         })
     });
     let child = Arc::new(Mutex::new(child));
+    if let Some(stop) = stop {
+        *stop.child.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&child));
+        if stop.was_stopped() {
+            stop.stop(); // asked before it started
+        }
+    }
     let (done, finished) = mpsc::channel::<()>();
     let watchdog = {
         let child = Arc::clone(&child);
@@ -152,6 +201,9 @@ pub fn run(
     let timed_out = watchdog.join().unwrap_or(false);
     let status = child.lock().unwrap_or_else(PoisonError::into_inner).wait();
     let said = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+    if stop.is_some_and(Stop::was_stopped) {
+        return Outcome::error("stopped", None);
+    }
     if timed_out {
         return Outcome::error(
             &format!(
@@ -173,6 +225,8 @@ struct Job {
     events: Vec<Value>,
     dropped: usize,
     finished: Option<Value>,
+    /// For a `kiln run` job: how to stop it.
+    stop: Option<Arc<Stop>>,
 }
 
 impl Job {
@@ -183,6 +237,7 @@ impl Job {
             "mode": self.mode.name(),
             "started": self.started,
             "running": self.finished.is_none(),
+            "stoppable": self.stop.is_some() && self.finished.is_none(),
             "finished": self.finished,
         })
     }
@@ -204,6 +259,7 @@ impl Jobs {
         let mut inner = self.lock();
         inner.0 += 1;
         let id = inner.0;
+        let args_are_run = args.first().is_some_and(|a| a == "run");
         inner.1.push_back(Job {
             id,
             args,
@@ -212,8 +268,44 @@ impl Jobs {
             events: Vec::new(),
             dropped: 0,
             finished: None,
+            stop: (args_are_run).then(|| Arc::new(Stop::default())),
         });
         id
+    }
+
+    /// A `kiln run` job's stop handle, while it runs.
+    #[must_use]
+    pub fn stop_handle(&self, id: u64) -> Option<Arc<Stop>> {
+        self.lock()
+            .1
+            .iter()
+            .find(|j| j.id == id && j.finished.is_none())
+            .and_then(|j| j.stop.clone())
+    }
+
+    /// `jobs.stop`: stops a running `kiln run` job.
+    ///
+    /// # Errors
+    /// No such job, it has ended, or it isn't one that can be stopped.
+    pub fn stop(&self, id: u64) -> Result<(), String> {
+        let inner = self.lock();
+        let job = inner
+            .1
+            .iter()
+            .find(|j| j.id == id)
+            .ok_or_else(|| format!("no job {id}"))?;
+        if job.finished.is_some() {
+            return Err(format!("job {id} has ended"));
+        }
+        let stop = job.stop.clone().ok_or_else(|| {
+            format!(
+                "job {id} (kiln {}) can't be stopped: only `kiln run` jobs can, as stopping a change half-way could leave it half-made",
+                job.args.first().map_or("", String::as_str)
+            )
+        })?;
+        drop(inner);
+        stop.stop();
+        Ok(())
     }
 
     pub fn event(&self, id: u64, event: Value) {
@@ -321,6 +413,35 @@ mod tests {
             silent.last["message"],
             "kiln ended without an answer (it was stopped)"
         );
+    }
+
+    #[test]
+    fn only_a_running_kiln_run_job_can_be_stopped() {
+        let jobs = Jobs::default();
+        let run = jobs.add(
+            vec!["run".into(), "shop".into(), "pest".into()],
+            Mode::Apply,
+            "now".into(),
+        );
+        let change = jobs.add(vec!["undo".into()], Mode::Apply, "now".into());
+        assert!(jobs.stop_handle(run).is_some());
+        assert!(jobs.stop_handle(change).is_none());
+        let listed = jobs.list();
+        assert_eq!(listed[1]["stoppable"], true);
+        assert_eq!(listed[0]["stoppable"], false);
+        assert!(
+            jobs.stop(change)
+                .unwrap_err()
+                .contains("only `kiln run` jobs can")
+        );
+        assert!(jobs.stop(99).unwrap_err().contains("no job 99"));
+        // Asked before its kiln started: it is stopped as soon as it does.
+        let handle = jobs.stop_handle(run).unwrap();
+        jobs.stop(run).unwrap();
+        assert!(handle.was_stopped());
+        jobs.finish(run, json!({"ok": false}));
+        assert!(jobs.stop(run).unwrap_err().contains("has ended"));
+        assert!(jobs.stop_handle(run).is_none());
     }
 
     #[test]

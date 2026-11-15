@@ -1292,6 +1292,35 @@ Check 'jobs: a preview stops at its confirmation, an apply runs, uninstall is re
     if ($refused -notmatch 'without asking') { throw "a preview of a change that doesn't ask went through:`n$refused" }
     $global:LASTEXITCODE = 0
 }
+Check 'kiln run (ADR 0084): a site''s artisan with its PHP, nothing but its own tools, a failure fails; a run job stops with the php it started, and only run jobs stop' {
+    Expect 'Laravel Version' (Kiln run shop artisan about)
+    $refused = & $Kiln run shop php -v 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    Expect "isn't artisan, composer or a tool" $refused
+    $list = (& $Kiln --json run shop --list | Select-Object -Last 1 | ConvertFrom-Json).data
+    if (-not $list.artisan -or -not ($list.suggested | Where-Object { $_.args[0] -eq 'artisan' -and $_.args[1] -eq 'migrate:status' })) { throw "kiln run --list: $($list | ConvertTo-Json -Depth 5)" }
+    $bad = & $Kiln run shop artisan kiln:no-such-command 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) { throw "a failing command succeeded:`n$bad" }
+    $global:LASTEXITCODE = 0
+    Expect 'exited with code' $bad
+
+    # Through the API, as the app runs it: lines stream, and Stop ends it with its php.
+    function Stoppable { @(Get-CimInstance Win32_Process -Filter "Name='php.exe'" | Where-Object { $_.CommandLine -match 'kilnstopme' }) }
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"run\",\"shop\",\"artisan\",\"tinker\",\"--execute\",\"sleep(300);//kilnstopme\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not (Stoppable) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    if (-not (Stoppable)) { throw "the run job's php never started: $(Kiln daemon call jobs.get ('{\"job\":' + $id + '}'))" }
+    $listed = (Kiln daemon call jobs.list | ConvertFrom-Json) | Where-Object { $_.job -eq $id }
+    if (-not $listed.stoppable) { throw "a running run job isn't stoppable: $($listed | ConvertTo-Json -Depth 4)" }
+    Kiln daemon call jobs.stop ('{\"job\":' + $id + '}') | Out-Null
+    $job = WaitJob $id
+    if ($job.finished.ok -or $job.finished.last.message -ne 'stopped') { throw "the stopped job: $($job.finished | ConvertTo-Json -Depth 5)" }
+    Start-Sleep -Seconds 2
+    if (Stoppable) { throw "php was left running after Stop: $((Stoppable).CommandLine)" }
+    $again = & $Kiln daemon call jobs.stop ('{\"job\":' + $id + '}') 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    Expect 'has ended' $again
+}
 Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
     # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
     $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'

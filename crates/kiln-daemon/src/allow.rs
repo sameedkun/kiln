@@ -95,6 +95,8 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["db", "snapshot"], false),
     (&["db", "rollback"], true),
     (&["tinker"], false),
+    // A site's own command (ADR 0084): artisan, composer or a vendor/bin tool, checked by kiln.
+    (&["run"], false),
     (&["undo"], true),
     (&["cache", "clear"], false),
     (&["updates", "check-kiln"], false),
