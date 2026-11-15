@@ -16,6 +16,8 @@ pub enum Kind {
     WordPress,
     #[default]
     Other,
+    /// Files only: no PHP checks.
+    Static,
     /// A name Kiln forwards to an address: only its answer is checked.
     Proxy,
 }
@@ -74,6 +76,8 @@ pub struct SiteFacts {
     /// The JS lock file is newer than the last install.
     pub node_stale: bool,
     pub storage_link_missing: bool,
+    /// The package manager a lock file names when it isn't npm (`pnpm`, `yarn`, `bun`).
+    pub js_manager: Option<String>,
     /// The SQLite file the `.env` names, and whether it exists.
     pub sqlite: Option<(PathBuf, bool)>,
     pub instances: Vec<InstanceFacts>,
@@ -402,6 +406,7 @@ fn project(f: &SiteFacts, out: &mut Vec<Finding>) {
         Kind::Laravel => "a Laravel app",
         Kind::WordPress => "a WordPress site",
         Kind::Other => "a PHP project",
+        Kind::Static => "a static site",
         Kind::Proxy => "a proxy",
     };
     out.push(finding(
@@ -413,6 +418,9 @@ fn project(f: &SiteFacts, out: &mut Vec<Finding>) {
             format!("{} is {what} in {}", f.name, f.folder.display())
         },
     ));
+    if f.kind == Kind::Static {
+        return; // served as files: no PHP
+    }
     let Some(php) = &f.php else {
         out.push(runs(
             finding(Area::Project, Status::Fail, "Kiln has no PHP for it yet"),
@@ -518,6 +526,59 @@ fn extensions(
     }
 }
 
+fn keys(n: usize) -> &'static str {
+    if n == 1 { "key" } else { "keys" }
+}
+
+/// Keys `.env.example` has that `.env` lacks (a warning), and the other way round (a note:
+/// often the developer's own).
+fn against_example(mine: &[Entry], example: &[Entry], out: &mut Vec<Finding>) {
+    let missing_from = |from: &[Entry], of: &[Entry]| {
+        let mut names: Vec<String> = Vec::new();
+        for e in of {
+            if !from.iter().any(|m| m.key == e.key) && !names.contains(&e.key) {
+                names.push(e.key.clone());
+            }
+        }
+        names
+    };
+    let lacking = missing_from(mine, example);
+    out.push(if lacking.is_empty() {
+        finding(
+            Area::EnvFile,
+            Status::Ok,
+            ".env has every key .env.example has",
+        )
+    } else {
+        with_fix(
+            finding(
+                Area::EnvFile,
+                Status::Warn,
+                format!(
+                    "{} {} in .env.example that .env lacks: {}",
+                    lacking.len(),
+                    keys(lacking.len()),
+                    lacking.join(", ")
+                ),
+            ),
+            "add them to .env (their values are the project's choice)",
+        )
+    });
+    let extra = missing_from(example, mine);
+    if !extra.is_empty() {
+        out.push(finding(
+            Area::EnvFile,
+            Status::Info,
+            format!(
+                "{} {} in .env that .env.example doesn't list: {}",
+                extra.len(),
+                keys(extra.len()),
+                extra.join(", ")
+            ),
+        ));
+    }
+}
+
 fn env_file(f: &SiteFacts, out: &mut Vec<Finding>) {
     let Some(env) = &f.env else {
         let missing = finding(Area::EnvFile, Status::Fail, ".env is missing");
@@ -530,33 +591,7 @@ fn env_file(f: &SiteFacts, out: &mut Vec<Finding>) {
     };
     let mine = entries(env);
     if let Some(example) = &f.env_example {
-        let mut lacking: Vec<String> = Vec::new();
-        for e in entries(example) {
-            if !mine.iter().any(|m| m.key == e.key) && !lacking.contains(&e.key) {
-                lacking.push(e.key);
-            }
-        }
-        out.push(if lacking.is_empty() {
-            finding(
-                Area::EnvFile,
-                Status::Ok,
-                ".env has every key .env.example has",
-            )
-        } else {
-            with_fix(
-                finding(
-                    Area::EnvFile,
-                    Status::Warn,
-                    format!(
-                        "{} key{} in .env.example that .env lacks: {}",
-                        lacking.len(),
-                        if lacking.len() == 1 { "" } else { "s" },
-                        lacking.join(", ")
-                    ),
-                ),
-                "add them to .env (their values are the project's choice)",
-            )
-        });
+        against_example(&mine, &entries(example), out);
     }
     let mut seen: Vec<&str> = Vec::new();
     for e in &mine {
@@ -647,14 +682,16 @@ fn packages(f: &SiteFacts, out: &mut Vec<Finding>) {
         ));
     }
     if f.package_json && !f.node_modules {
-        out.push(init(
-            finding(
-                Area::Packages,
-                Status::Warn,
-                "node_modules/ is missing: the front end's packages aren't installed",
-            ),
-            &f.folder,
-        ));
+        let missing = finding(
+            Area::Packages,
+            Status::Warn,
+            "node_modules/ is missing: the front end's packages aren't installed",
+        );
+        // kiln init installs with npm only; it leaves another manager's lock file alone.
+        out.push(match &f.js_manager {
+            Some(manager) => with_fix(missing, format!("{manager} install")),
+            None => init(missing, &f.folder),
+        });
     } else if f.package_json && f.node_stale {
         out.push(with_fix(
             finding(
@@ -737,10 +774,14 @@ fn service_on<'a>(
             None
         }
         None => {
-            let other = f
+            // One of Kiln's of that kind, a running one first.
+            let mut candidates: Vec<&InstanceFacts> = f
                 .instances
                 .iter()
-                .find(|i| kinds.contains(&i.kind.as_str()));
+                .filter(|i| kinds.contains(&i.kind.as_str()))
+                .collect();
+            candidates.sort_by_key(|i| !i.enabled);
+            let other = candidates.first().copied();
             let message = finding(
                 Area::Database,
                 missing,
@@ -1207,6 +1248,72 @@ mod tests {
         assert_eq!(value(text, "D").as_deref(), Some("plain"));
         let lines: Vec<usize> = entries(text).iter().map(|e| e.line).collect();
         assert_eq!(lines, vec![1, 2, 4, 5, 6]);
+    }
+
+    #[test]
+    fn keys_only_in_env_are_a_note() {
+        let mut facts = laravel();
+        facts.env = Some(
+            "APP_KEY=x\nAPP_URL=https://shop.test\nDB_CONNECTION=sqlite\nMY_TOKEN=abc\n".into(),
+        );
+        let report = diagnose(&facts);
+        let note = report
+            .findings
+            .iter()
+            .find(|f| f.message.contains("doesn't list"))
+            .unwrap();
+        assert_eq!(note.status, Status::Info);
+        assert_eq!(
+            note.message,
+            "1 key in .env that .env.example doesn't list: MY_TOKEN"
+        );
+        assert!(!report.render().contains("abc"));
+    }
+
+    #[test]
+    fn a_static_site_needs_no_php() {
+        let facts = SiteFacts {
+            name: "docs.test".into(),
+            folder: PathBuf::from(r"C:\Sites\docs"),
+            kind: Kind::Static,
+            url: Some("http://docs.test".into()),
+            answer: Answer::Got {
+                code: 200,
+                location: None,
+            },
+            ..SiteFacts::default()
+        };
+        assert_eq!(diagnose(&facts).worst(), Status::Ok);
+    }
+
+    #[test]
+    fn another_package_manager_is_named_not_kiln_init() {
+        let mut facts = laravel();
+        facts.package_json = true;
+        facts.js_manager = Some("pnpm".into());
+        let report = diagnose(&facts);
+        let missing = problems(&report)[0];
+        assert_eq!(missing.fix.as_deref(), Some("pnpm install"));
+        assert!(missing.run.is_none());
+    }
+
+    #[test]
+    fn env_use_points_at_a_running_instance_first() {
+        let mut facts = mysql_site(true, None, false);
+        facts.instances[0].ports = vec![3399];
+        facts.instances[0].enabled = false;
+        facts.instances.push(InstanceFacts {
+            name: "mariadb-11".into(),
+            kind: "mariadb".into(),
+            ports: vec![3308],
+            enabled: true,
+            databases: None,
+        });
+        let report = diagnose(&facts);
+        assert_eq!(
+            problems(&report)[0].run.as_ref().unwrap()[..3],
+            ["env", "use", "mariadb-11"].map(String::from)
+        );
     }
 
     #[test]

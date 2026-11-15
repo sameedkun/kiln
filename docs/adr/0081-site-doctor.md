@@ -39,8 +39,8 @@ ADR 0017 keeps the doctor read-only, with each fix a command; `doctor --fix` sta
 
    | Area | Checks |
    |---|---|
-   | Project | what it is (Laravel, WordPress, other, from the site's driver); the PHP Kiln picks against `composer.json`'s `require.php`; each `ext-*` it requires against the extensions that PHP loads |
-   | Environment file | (Laravel) `.env` exists; keys in `.env.example` that `.env` lacks; keys set twice, by line, the last one being what Laravel reads; `APP_KEY` set; `APP_URL` against the site's URL |
+   | Project | what it is (Laravel, WordPress, static, other, from the site's driver); for all but a static site, the PHP Kiln picks against `composer.json`'s `require.php`; each `ext-*` it requires against the extensions that PHP loads |
+   | Environment file | (Laravel) `.env` exists; keys in `.env.example` that `.env` lacks (a warning) and the other way round (a note); keys set twice, by line, the last one being what Laravel reads; `APP_KEY` set; `APP_URL` against the site's URL |
    | Packages | `vendor/` installed when there is a `composer.json`, and not older than `composer.lock`; `node_modules/` when there is a `package.json`, and not older than its lock file; the storage link |
    | Database | the `.env`'s database. SQLite: the file exists. MySQL, MariaDB or PostgreSQL on this computer: the Kiln instance on that port is running and has the database. Redis and mail: the instance on that port is running |
    | Answer | (a served site) one `GET /` to Kiln's web server on 127.0.0.1, with the site's name as `Host`. HTTPS is checked against Kiln's root only. No redirects are followed, timeouts are 10 s, and at most 64 KB is read. A 5xx adds the last error line from `storage/logs/laravel.log` |
@@ -53,19 +53,29 @@ ADR 0017 keeps the doctor read-only, with each fix a command; `doctor --fix` sta
      - a stopped web server.
    - A host off this computer is "not Kiln's; not checked".
 5. **Secrets stay out:** findings name keys, never values. `APP_KEY` is only "set" or
-   "empty". The JSON reaches the app, and an assistant over MCP.
+   "empty". The JSON reaches the app; the MCP server's doctor tool stays Kiln's own check,
+   with no site.
 6. **Fixes:**
-   - A finding's fix is a command, as before. When that command is Kiln's own and shows a
-     preview first, the finding also carries it as arguments (`run`), which the app runs
-     through the usual preview and confirmation:
-     - `kiln init <folder>` for `.env`, the key, `vendor/`, `node_modules/`, a missing
-       SQLite file or storage link (it does only what's missing, ADR 0080);
-     - `kiln service start <instance>`;
+   - A finding's fix is a command, as before. When that command is Kiln's own and on the
+     API's allow-list, the finding also carries it as arguments (`run`).
+   - Two show their preview and ask, and the app runs them through the usual preview and
+     confirmation:
+     - `kiln init <folder>` for `.env`, the key, `vendor/`, `node_modules/` (npm only), a
+       missing SQLite file or storage link (it does only what's missing, ADR 0080);
+     - `kiln env use <instance> --project <folder>` when the `.env`'s database port has
+       nothing on it, preferring a running instance.
+   - The rest make their change without a preview, so the app asks in words first:
+     - `kiln service start` and `kiln service restart <instance>`;
      - `kiln db create <instance> <database>`;
-     - `kiln php ext on <name> --php <version>`.
-   - Everything else is text, for example "add these keys from `.env.example`" or
-     "`composer install` (composer.lock changed)". Copying keys from `.env.example` isn't
-     automated: their values are the project's choice.
+     - `kiln php ext on <name> --php <version>`;
+     - `kiln php install 8.4`;
+     - `kiln web start`.
+   - A test pins this split to the allow-list.
+   - Everything else is text, for example:
+     - "add these keys from `.env.example`";
+     - "`composer install`" (composer.lock changed);
+     - "`pnpm install`" (another package manager's lock file).
+   - Copying keys from `.env.example` isn't automated: their values are the project's choice.
 7. **The PHP range** is read with a small parser for Composer's constraints:
    - `|` and `||` for or; a space or comma for and;
    - the operators `>=`, `>`, `<=`, `<`, `!=`, `=`, `^`, `~`;

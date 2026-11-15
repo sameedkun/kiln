@@ -258,6 +258,11 @@ Check 'https://mailpit.test: the inbox over HTTPS, with a certificate from Kiln'
         --resolve "$($uri.Host):$($uri.Port):127.0.0.1" "$($url.TrimEnd('/'))/api/v1/messages" 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { throw "curl couldn't verify or reach it:`n$page" }
     if (($page | ConvertFrom-Json).total -ne 1) { throw "the inbox over HTTPS answered:`n$page" }
+    # The site doctor asks it over HTTPS too, trusting only Kiln's root (ADR 0081): a proxy
+    # site gets only that check.
+    $doctor = Kiln doctor mailpit
+    if ($doctor -notmatch 'https://mailpit\.test\S* answers [23]\d\d') { throw "kiln doctor mailpit:`n$doctor" }
+    Expect '0 problem(s)' $doctor
 }
 Say '== pgAdmin, on request (ADR 0071)'
 Check 'service add pgadmin: from PostgreSQL 18''s zip, on loopback, its own settings, Kiln''s servers listed' {

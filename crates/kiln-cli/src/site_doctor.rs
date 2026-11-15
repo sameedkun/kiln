@@ -43,6 +43,7 @@ fn kind_of(driver: kiln_sites::Driver) -> Kind {
     match driver {
         kiln_sites::Driver::Laravel => Kind::Laravel,
         kiln_sites::Driver::WordPress | kiln_sites::Driver::WordPressBedrock => Kind::WordPress,
+        kiln_sites::Driver::Static => Kind::Static,
         _ => Kind::Other,
     }
 }
@@ -124,6 +125,23 @@ fn js_stale(folder: &Path) -> bool {
     ]
     .iter()
     .any(|(lock, marker)| newer(&folder.join(lock), &modules.join(marker)))
+}
+
+/// The package manager a lock file names, when it isn't npm (whose lock wins, as in
+/// `kiln init`).
+fn js_manager(folder: &Path) -> Option<String> {
+    if folder.join("package-lock.json").is_file() {
+        return None;
+    }
+    [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("bun.lockb", "bun"),
+        ("bun.lock", "bun"),
+    ]
+    .iter()
+    .find(|(lock, _)| folder.join(lock).is_file())
+    .map(|(_, manager)| (*manager).to_owned())
 }
 
 /// The last `.ERROR:` line of the app's log, cut short.
@@ -240,6 +258,7 @@ fn gather(target: &str) -> Result<SiteFacts, String> {
         package_json: folder.join("package.json").is_file(),
         node_modules: folder.join("node_modules").is_dir(),
         node_stale: js_stale(&folder),
+        js_manager: js_manager(&folder),
         storage_link_missing: folder.join("storage").join("app").join("public").is_dir()
             && std::fs::symlink_metadata(folder.join("public").join("storage")).is_err(),
         sqlite: env
@@ -345,7 +364,7 @@ fn parse(response: &str) -> Result<(u16, Option<String>), String> {
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
-        .ok_or("no HTTP answer")?;
+        .ok_or("no HTTP answer within 10 s")?;
     let location = lines.find_map(|l| {
         let (k, v) = l.split_once(':')?;
         k.trim()
@@ -429,6 +448,14 @@ mod tests {
         ] {
             let args: Vec<String> = args.into_iter().map(String::from).collect();
             assert_eq!(check(&args, Mode::Apply), Ok(()), "{args:?}");
+            // The app previews exactly init and env use (SiteCheck.tsx's fixWay); the rest
+            // have no preview and are asked about in words.
+            let previews = args[0] == "init" || args[..2] == ["env", "use"];
+            assert_eq!(
+                check(&args, Mode::Preview).is_ok(),
+                previews,
+                "{args:?} previews"
+            );
         }
     }
 }
