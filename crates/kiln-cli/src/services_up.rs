@@ -189,7 +189,7 @@ fn wire(
         if keys.is_empty() {
             continue;
         }
-        crate::env::use_instance(
+        let wired = crate::env::use_instance(
             name,
             Some(dir.to_path_buf()),
             None,
@@ -197,7 +197,15 @@ fn wire(
             false,
             false,
             yes,
-        )?;
+        );
+        match wired {
+            // A service the project has no setting for (Mailpit on Bedrock, ADR 0082) runs
+            // unwired; a database that can't be wired stops here.
+            Err(e) if !provider.has_databases() => say!("{name} runs, but isn't wired: {e}."),
+            other => {
+                other?;
+            }
+        }
     }
     Ok(database.is_some())
 }

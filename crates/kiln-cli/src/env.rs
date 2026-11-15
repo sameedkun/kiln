@@ -183,11 +183,10 @@ impl Target {
     }
 }
 
-/// Roots' Bedrock: `WordPress` under `web/wp`, settings in `.env`.
+/// Roots' Bedrock (`web/wp-config.php`, settings in `.env`), as the site list's driver says,
+/// so the app and the CLI agree.
 fn is_bedrock(project: &Path) -> bool {
-    project.join("web").join("wp").is_dir()
-        || std::fs::read_to_string(project.join("composer.json"))
-            .is_ok_and(|t| t.contains("\"roots/wordpress\""))
+    kiln_sites::detect(project) == kiln_sites::Driver::WordPressBedrock
 }
 
 fn target(project: &Path) -> Result<Target, String> {
@@ -459,12 +458,13 @@ mod tests {
         assert_eq!(target(p), Ok(Target::WpConfig(p.join("wp-config.php"))));
         std::fs::write(p.join(".env"), "").unwrap();
         assert_eq!(target(p), Ok(Target::Laravel(p.join(".env"))));
-        std::fs::write(
-            p.join("composer.json"),
-            r#"{"require":{"roots/wordpress":"^6"}}"#,
-        )
-        .unwrap();
+        // Bedrock as a fresh clone has it (no web/wp until Composer runs), and as the site
+        // list's driver sees it.
+        std::fs::create_dir(p.join("web")).unwrap();
+        std::fs::write(p.join("web").join("wp-config.php"), "<?php").unwrap();
+        std::fs::write(p.join("web").join("index.php"), "<?php").unwrap();
         assert_eq!(target(p), Ok(Target::Bedrock(p.join(".env"))));
+        assert_eq!(kiln_sites::detect(p), kiln_sites::Driver::WordPressBedrock);
     }
 
     #[test]

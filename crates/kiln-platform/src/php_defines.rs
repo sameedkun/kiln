@@ -23,33 +23,78 @@ use serde_json::{Value, json};
 /// Journal kind of [`PhpDefinesOp`].
 pub const PHP_DEFINES_KIND: &str = "project.php.defines";
 
-/// Where a constant's value is in the text: the literal's byte range.
-fn find(text: &str, key: &str) -> Option<(usize, usize)> {
-    let mut from = 0;
-    while let Some(at) = text[from..].find("define").map(|i| i + from) {
-        from = at + "define".len();
-        let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
-        let before = text[line_start..at].trim_start();
-        if before.starts_with("//") || before.starts_with('#') || before.starts_with('*') {
-            continue;
-        }
+/// Where a constant's value is in the text: the literal's byte range, `None` if the text
+/// doesn't define it, and an error if its first `define` gives something other than one plain
+/// literal (`getenv('DB_NAME')`, `'localhost' . ':3306'`), which Kiln leaves to the user.
+fn find(text: &str, key: &str) -> Result<Option<(usize, usize)>, String> {
+    for at in defines(text) {
         if at > 0 && text[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') {
             continue; // `undefined`, `my_define`
         }
-        let Some(range) = literal_after(text, from, key) else {
-            continue;
-        };
-        return Some(range);
+        match literal_after(text, at + "define".len(), key) {
+            None => {}
+            Some(Ok(range)) => return Ok(Some(range)),
+            Some(Err(())) => {
+                return Err(format!(
+                    "{key} is set to an expression, not a plain value; change it by hand"
+                ));
+            }
+        }
     }
-    None
+    Ok(None)
+}
+
+/// Where `define` is written as code: not in a comment (`//`, `#`, `/* */`) or a string, so
+/// a salt holding `/*` or a commented-out example can't mislead.
+fn defines(text: &str) -> Vec<usize> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Code,
+        Line,
+        Block,
+        Quoted(u8),
+    }
+    let bytes = text.as_bytes();
+    let mut state = State::Code;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        match state {
+            State::Code => {
+                if rest.starts_with(b"//") || rest[0] == b'#' {
+                    state = State::Line;
+                } else if rest.starts_with(b"/*") {
+                    state = State::Block;
+                    i += 1;
+                } else if rest[0] == b'\'' || rest[0] == b'"' {
+                    state = State::Quoted(rest[0]);
+                } else if rest.starts_with(b"define") {
+                    out.push(i);
+                    i += "define".len() - 1;
+                }
+            }
+            State::Line if rest[0] == b'\n' => state = State::Code,
+            State::Block if rest.starts_with(b"*/") => {
+                state = State::Code;
+                i += 1;
+            }
+            State::Quoted(_) if rest[0] == b'\\' => i += 1,
+            State::Quoted(q) if rest[0] == q => state = State::Code,
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 fn skip_ws(text: &str, at: usize) -> usize {
     at + (text[at..].len() - text[at..].trim_start().len())
 }
 
-/// After `define`: `( 'KEY', <literal> )`, the literal's range.
-fn literal_after(text: &str, at: usize, key: &str) -> Option<(usize, usize)> {
+/// After `define`: `( 'KEY', <literal> )`, the literal's range. `None` if it isn't `key`'s
+/// `define`; `Some(Err)` if it is, but its value isn't one plain literal.
+fn literal_after(text: &str, at: usize, key: &str) -> Option<Result<(usize, usize), ()>> {
     let mut i = skip_ws(text, at);
     i += text[i..].strip_prefix('(').map(|_| 1)?;
     i = skip_ws(text, i);
@@ -63,6 +108,12 @@ fn literal_after(text: &str, at: usize, key: &str) -> Option<(usize, usize)> {
     i = skip_ws(text, i);
     i += text[i..].strip_prefix(',').map(|_| 1)?;
     let start = skip_ws(text, i);
+    // From here it is `key`'s define: anything unexpected is an expression.
+    Some(plain_literal(text, start).ok_or(()))
+}
+
+/// One quoted string or bare token (`true`, `6379`) at `start`, then `)`.
+fn plain_literal(text: &str, start: usize) -> Option<(usize, usize)> {
     let first = text[start..].chars().next()?;
     let end = if first == '\'' || first == '"' {
         let mut escaped = false;
@@ -76,9 +127,13 @@ fn literal_after(text: &str, at: usize, key: &str) -> Option<(usize, usize)> {
         })?;
         start + 1 + close + 1
     } else {
-        // A bare value (`true`, `6379`): up to the closing parenthesis.
-        let close = text[start..].find(')')?;
-        start + text[start..start + close].trim_end().len()
+        let len = text[start..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '+')))
+            .unwrap_or(text.len() - start);
+        if len == 0 {
+            return None;
+        }
+        start + len
     };
     let after = skip_ws(text, end);
     text[after..].starts_with(')').then_some((start, end))
@@ -120,12 +175,18 @@ fn encode(key: &str, value: &str) -> String {
 /// The value `text` gives the constant `key`, if it defines it.
 #[must_use]
 pub fn value_of(text: &str, key: &str) -> Option<String> {
-    find(text, key).map(|(s, e)| decode(&text[s..e]))
+    find(text, key)
+        .ok()
+        .flatten()
+        .map(|(s, e)| decode(&text[s..e]))
 }
 
 /// The literal as written, for putting back exactly.
 fn literal_of(text: &str, key: &str) -> Option<String> {
-    find(text, key).map(|(s, e)| text[s..e].to_owned())
+    find(text, key)
+        .ok()
+        .flatten()
+        .map(|(s, e)| text[s..e].to_owned())
 }
 
 /// Where a new `define` goes: the start of the line `WordPress` says to stop editing above,
@@ -143,7 +204,7 @@ fn newline(text: &str) -> &'static str {
 
 /// `text` with `key` set to the literal `literal`.
 fn set_literal(text: &str, key: &str, literal: &str) -> Result<String, String> {
-    if let Some((s, e)) = find(text, key) {
+    if let Some((s, e)) = find(text, key)? {
         let mut out = text.to_owned();
         out.replace_range(s..e, literal);
         return Ok(out);
@@ -161,7 +222,7 @@ fn set_literal(text: &str, key: &str, literal: &str) -> Result<String, String> {
 
 /// `text` with the `define` line of `key` taken out (one Kiln added).
 fn remove(text: &str, key: &str) -> String {
-    let Some((s, _)) = find(text, key) else {
+    let Ok(Some((s, _))) = find(text, key) else {
         return text.to_owned();
     };
     let start = text[..s].rfind('\n').map_or(0, |i| i + 1);
@@ -453,6 +514,46 @@ mod tests {
         fs::write(&path, "<?php\ndefine( 'DB_NAME', 'x' );\n").unwrap();
         let err = op(path).preview().unwrap_err();
         assert!(err.to_string().contains("no place for DB_USER"), "{err}");
+    }
+
+    #[test]
+    fn an_expression_is_left_to_the_user_before_anything_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wp-config.php");
+        for line in [
+            "define( 'DB_NAME', getenv('DB_NAME') );",
+            "define( 'DB_NAME', 'local' . 'host' );",
+        ] {
+            fs::write(
+                &path,
+                format!("<?php\n{line}\n/* That's all, stop editing! */\n"),
+            )
+            .unwrap();
+            let err = op(path.clone()).preview().unwrap_err();
+            assert!(
+                err.to_string().contains("DB_NAME is set to an expression"),
+                "{line}: {err}"
+            );
+            assert_eq!(
+                value_of(&fs::read_to_string(&path).unwrap(), "DB_NAME"),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn comment_marks_inside_strings_and_block_comments_are_told_apart() {
+        let text = "<?php\ndefine( 'AUTH_KEY', 'a/*b#c//d' );\ndefine( 'DB_NAME', 'real' );\n/* old: define( 'DB_USER', 'x' ); */ define( 'DB_USER', 'live' );\n";
+        assert_eq!(value_of(text, "DB_NAME").as_deref(), Some("real"));
+        assert_eq!(value_of(text, "DB_USER").as_deref(), Some("live"));
+        assert_eq!(value_of(text, "AUTH_KEY").as_deref(), Some("a/*b#c//d"));
+    }
+
+    #[test]
+    fn history_names_the_file_and_the_constants() {
+        let op = op(PathBuf::from(r"C:\Sites\blog\wp-config.php"));
+        let line = crate::describe::describe(PHP_DEFINES_KIND, &op.params());
+        assert!(line.contains(r"blog\wp-config.php: DB_NAME"), "{line}");
     }
 
     #[test]

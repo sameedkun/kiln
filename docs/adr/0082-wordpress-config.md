@@ -24,7 +24,7 @@ Lerd writes WordPress's config for its services; the user asked for what Lerd ha
 
    | The project has | Kiln writes |
    |---|---|
-   | a `.env` and is Bedrock (`web/wp`, or `roots/wordpress` in `composer.json`) | WordPress's names in `.env` |
+   | a `.env` and is Bedrock (`web/wp-config.php` and `web/index.php`, as the site list detects it) | WordPress's names in `.env` |
    | a `.env` | Laravel's names, as before |
    | `wp-config.php` and no `.env` | constants in `wp-config.php` |
 
@@ -45,7 +45,11 @@ Lerd writes WordPress's config for its services; the user asked for what Lerd ha
 3. **Editing `wp-config.php`** is a new journaled operation, `project.php.defines`:
    - It rewrites the value of each constant's first `define` in place, the one PHP keeps.
      Every other byte stays, including comments, quoting style elsewhere, and line endings.
-   - A `define` on a commented line is never touched.
+   - A `define` in a comment (`//`, `#`, `/* */`) is never touched. The file is read with
+     strings and comments told apart, so a salt holding `/*` can't mislead it.
+   - A constant whose first `define` holds an expression, such as `getenv('DB_NAME')` or
+     `'localhost' . ':3306'`, stops the preview before asking: the user changes it by hand.
+     Kiln doesn't add a second `define`, which PHP would ignore.
    - A missing constant goes on its own line above WordPress's "That's all, stop editing!"
      comment, else above the line that loads `wp-settings.php`. With neither, the preview
      fails before asking.
@@ -56,7 +60,10 @@ Lerd writes WordPress's config for its services; the user asked for what Lerd ha
      - with `--force`, only where Kiln's value is still there: the old literal goes back
        exactly, and a line Kiln added is removed.
 4. **Like `.env` wiring**, the preview shows the old and new values. History describes it.
-   Uninstall leaves it in effect, as a project file, and says so.
+   Uninstall leaves it in effect, as a project file, and says so. `kiln services up` (and
+   `kiln init`) wire through the same command. A service the project has no setting for,
+   such as Mailpit on Bedrock, runs unwired, with a note; a database that can't be wired
+   still stops it.
 5. **Not yet:** Drupal's `settings.php` (an array, not constants), and the `--cache`,
    `--session` and `--queue` switches, which are Laravel's.
 
