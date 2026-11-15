@@ -560,7 +560,7 @@ describe("a site's commands (ADR 0084)", () => {
       scripts: ["test"],
       tools: ["pest", "pint"],
       suggested: [
-        { label: "Run the tests", args: ["artisan", "test"] },
+        { label: "Run the tests", args: ["artisan", "test"], warn: "phpunit.xml sets no test database." },
         { label: "Migrations", args: ["artisan", "migrate:status"] },
       ],
     });
@@ -582,6 +582,12 @@ describe("a site's commands (ADR 0084)", () => {
     expect(screen.getByText("Done (exit code 0).")).toBeTruthy();
     expect(asked.find((a) => a.key === "jobs.start")?.args).toEqual({ args: ["run", "shop.test", "artisan", "migrate:status"], mode: "apply" });
     expect(asked.find((a) => a.key === "site.commands")?.args).toEqual({ host: "shop.test" });
+    // The tests ask first when phpunit.xml sets no test database.
+    const starts = asked.filter((x) => x.key === "jobs.start").length;
+    await userEvent.click(screen.getByRole("button", { name: "Run the tests" }));
+    expect(screen.getByText("phpunit.xml sets no test database.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(asked.filter((x) => x.key === "jobs.start").length).toBe(starts);
     // A command Kiln won't run can't be started.
     await userEvent.type(screen.getByLabelText("Command"), "php -v");
     expect(screen.getByRole("button", { name: "Run" }).hasAttribute("disabled")).toBe(true);

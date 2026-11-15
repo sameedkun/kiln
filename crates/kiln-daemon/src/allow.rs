@@ -125,7 +125,14 @@ const RESERVED: &[&str] = &["--json", "--confirmed", "--yes", "-y"];
 /// # Errors
 /// Why not, in words for the app to show.
 pub fn check(args: &[String], mode: Mode) -> Result<(), String> {
-    if let Some(flag) = args
+    // A site's command (ADR 0084) keeps its own options: `artisan route:list --json` is the
+    // tool's --json. Only the words before the command are kiln's.
+    let kilns = if args.first().is_some_and(|a| a == "run") {
+        &args[..args.len().min(2)]
+    } else {
+        args
+    };
+    if let Some(flag) = kilns
         .iter()
         .find(|a| RESERVED.contains(&a.split('=').next().unwrap_or_default()))
     {
@@ -198,6 +205,21 @@ pub fn project_of_service_add(args: &[String]) -> Result<Option<&str>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sites_command_keeps_its_own_options() {
+        let args = |w: &[&str]| w.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            check(
+                &args(&["run", "shop", "artisan", "route:list", "--json"]),
+                Mode::Apply
+            ),
+            Ok(())
+        );
+        assert!(check(&args(&["run", "--confirmed", "shop"]), Mode::Apply).is_err());
+        assert!(check(&args(&["link", "shop", "--json"]), Mode::Apply).is_err());
+        assert!(check(&args(&["run", "shop", "pest"]), Mode::Preview).is_err());
+    }
 
     #[test]
     fn a_project_process_names_its_folder() {

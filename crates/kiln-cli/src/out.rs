@@ -166,17 +166,12 @@ pub fn run_shown(command: &mut Command) -> std::io::Result<ExitStatus> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let stderr = child.stderr.take().map(|err| {
-        std::thread::spawn(move || {
-            for line in BufReader::new(err).lines().map_while(Result::ok) {
-                note(&line);
-            }
-        })
-    });
+    let stderr = child
+        .stderr
+        .take()
+        .map(|err| std::thread::spawn(move || each_line(err, &mut note)));
     if let Some(out) = child.stdout.take() {
-        for line in BufReader::new(out).lines().map_while(Result::ok) {
-            note(&line);
-        }
+        each_line(out, &mut note);
     }
     if let Some(thread) = stderr {
         let _ = thread.join();
@@ -184,9 +179,35 @@ pub fn run_shown(command: &mut Command) -> std::io::Result<ExitStatus> {
     child.wait()
 }
 
+/// Calls `f` with each line of `reader` until it ends, as text even when a line isn't UTF-8
+/// (a Windows message in the system code page): reading never stops early, so the program
+/// writing it can't block on a full pipe.
+pub fn each_line(reader: impl std::io::Read, f: &mut dyn FnMut(&str)) {
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&line);
+                f(text.trim_end_matches(['\n', '\r']));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_line_is_read_even_one_that_isnt_utf8() {
+        let bytes: &[u8] = b"first\r\ncaf\xe9 broken\nlast without end";
+        let mut lines = Vec::new();
+        each_line(bytes, &mut |l| lines.push(l.to_owned()));
+        assert_eq!(lines, ["first", "caf\u{fffd} broken", "last without end"]);
+    }
 
     #[test]
     fn the_final_line_says_what_happened() {

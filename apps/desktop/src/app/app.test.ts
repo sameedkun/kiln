@@ -414,3 +414,12 @@ describe("a site's commands (ADR 0084)", async () => {
     expect(commandError(["artisan"], { ...has, artisan: false })).toBe("This site has no artisan.");
   });
 });
+
+describe("how a site's command ended (ADR 0084)", async () => {
+  const { endText } = await import("./SiteCommands");
+  it("tells done, stopped and failed apart", () => {
+    expect(endText({ ok: true, last: { type: "result" } })).toEqual({ tone: "ok", text: "Done (exit code 0)." });
+    expect(endText({ ok: false, last: { type: "error", message: "stopped" } })).toEqual({ tone: "neutral", text: "Stopped." });
+    expect(endText({ ok: false, last: { type: "error", message: "`artisan test` exited with code 1" } }).tone).toBe("bad");
+  });
+});

@@ -6,7 +6,7 @@
 //! [ADR 0084]: ../../../docs/adr/0084-site-commands.md
 
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -32,6 +32,18 @@ fn tool_name(name: &str) -> Option<&str> {
     ok.then_some(name)
 }
 
+/// Whether `path` is a PHP script (`<?php`, or a shebang naming php): what Kiln runs with
+/// PHP. A shell script (`sail`) or a `.bat` proxy isn't.
+fn is_php_script(path: &Path) -> bool {
+    let mut head = [0u8; 128];
+    let read = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = String::from_utf8_lossy(&head[..read]);
+    let first = head.lines().next().unwrap_or_default();
+    head.starts_with("<?php") || (first.starts_with("#!") && first.contains("php"))
+}
+
 /// The program the first word names, if the project has it.
 fn program(word: &str, folder: &Path) -> Result<Program, String> {
     match word {
@@ -44,7 +56,8 @@ fn program(word: &str, folder: &Path) -> Result<Program, String> {
         .strip_prefix("vendor/bin/")
         .or_else(|| word.strip_prefix(r"vendor\bin\"))
         .unwrap_or(word);
-    let tool = tool_name(name).filter(|n| folder.join("vendor").join("bin").join(n).is_file());
+    let tool =
+        tool_name(name).filter(|n| is_php_script(&folder.join("vendor").join("bin").join(n)));
     tool.map(|n| Program::Tool(n.to_owned())).ok_or_else(|| {
         format!(
             "`{word}` isn't artisan, composer or a tool in {}'s vendor/bin",
@@ -125,16 +138,10 @@ fn run_tree(mut command: Command) -> Result<ExitStatus, String> {
         .ok();
     if json {
         let stderr = child.stderr.take().map(|err| {
-            std::thread::spawn(move || {
-                for line in BufReader::new(err).lines().map_while(Result::ok) {
-                    crate::out::note(&line);
-                }
-            })
+            std::thread::spawn(move || crate::out::each_line(err, &mut crate::out::note))
         });
         if let Some(out) = child.stdout.take() {
-            for line in BufReader::new(out).lines().map_while(Result::ok) {
-                crate::out::note(&line);
-            }
+            crate::out::each_line(out, &mut crate::out::note);
         }
         if let Some(thread) = stderr {
             let _ = thread.join();
@@ -197,6 +204,30 @@ struct Found {
     artisan: bool,
     scripts: Vec<String>,
     tools: Vec<String>,
+    /// `phpunit.xml` sets no test database, so a test run with `RefreshDatabase` uses (and
+    /// empties) the one `.env` names.
+    tests_use_env_database: bool,
+}
+
+/// Whether `phpunit.xml` (or `.dist`) sets `DB_CONNECTION` or `DB_DATABASE` outside a comment.
+fn tests_use_env_database(folder: &Path) -> bool {
+    let Some(text) = ["phpunit.xml", "phpunit.xml.dist"]
+        .iter()
+        .find_map(|f| std::fs::read_to_string(folder.join(f)).ok())
+    else {
+        return false;
+    };
+    // Comments out, then look for the settings.
+    let mut live = String::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("<!--") {
+        live.push_str(&rest[..at]);
+        rest = rest[at..]
+            .find("-->")
+            .map_or("", |end| &rest[at + end + 3..]);
+    }
+    live.push_str(rest);
+    !live.contains("name=\"DB_CONNECTION\"") && !live.contains("name=\"DB_DATABASE\"")
 }
 
 fn found(folder: &Path) -> Found {
@@ -217,20 +248,33 @@ fn found(folder: &Path) -> Found {
         .flatten()
         .filter_map(Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| !n.to_ascii_lowercase().ends_with(".bat") && tool_name(n).is_some())
+        .filter(|n| {
+            tool_name(n).is_some() && is_php_script(&folder.join("vendor").join("bin").join(n))
+        })
         .collect();
     tools.sort();
     Found {
         artisan: folder.join("artisan").is_file(),
         scripts,
         tools,
+        tests_use_env_database: tests_use_env_database(folder),
     }
 }
 
+/// One of the app's buttons; `warn` is said, and agreed to, before it runs.
+#[derive(Debug, PartialEq, Eq)]
+struct Suggestion {
+    label: &'static str,
+    args: Vec<&'static str>,
+    warn: Option<&'static str>,
+}
+
+const TESTS_WARNING: &str = "phpunit.xml sets no test database, so tests that refresh the database run on the one .env names, and may empty it.";
+
 /// The app's buttons: tests, style, analysis, then a few artisan reads.
-fn suggestions(f: &Found) -> Vec<(&'static str, Vec<&'static str>)> {
+fn suggestions(f: &Found) -> Vec<Suggestion> {
     let has = |t: &str| f.tools.iter().any(|x| x == t);
-    let mut out = Vec::new();
+    let mut out: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
     if f.artisan && (has("pest") || has("phpunit")) {
         out.push(("Run the tests", vec!["artisan", "test"]));
     } else if has("pest") {
@@ -252,7 +296,13 @@ fn suggestions(f: &Found) -> Vec<(&'static str, Vec<&'static str>)> {
         out.push(("Routes", vec!["artisan", "route:list"]));
         out.push(("About the app", vec!["artisan", "about"]));
     }
-    out
+    out.into_iter()
+        .map(|(label, args)| Suggestion {
+            warn: (label == "Run the tests" && f.tests_use_env_database).then_some(TESTS_WARNING),
+            label,
+            args,
+        })
+        .collect()
 }
 
 /// `kiln run <site> --list`.
@@ -266,7 +316,7 @@ pub fn list(name: &str) -> Result<(), String> {
             "artisan": f.artisan,
             "scripts": f.scripts,
             "tools": f.tools,
-            "suggested": suggested.iter().map(|(label, args)| serde_json::json!({"label": label, "args": args})).collect::<Vec<_>>(),
+            "suggested": suggested.iter().map(|s| serde_json::json!({"label": s.label, "args": s.args, "warn": s.warn})).collect::<Vec<_>>(),
         }));
         return Ok(());
     }
@@ -280,8 +330,11 @@ pub fn list(name: &str) -> Result<(), String> {
     if !f.tools.is_empty() {
         say!("vendor/bin: {}", f.tools.join(", "));
     }
-    for (label, args) in &suggested {
-        say!("  {label}: kiln run {host} {}", args.join(" "));
+    for s in &suggested {
+        say!("  {}: kiln run {host} {}", s.label, s.args.join(" "));
+        if let Some(warn) = s.warn {
+            say!("    ({warn})");
+        }
     }
     Ok(())
 }
@@ -290,14 +343,22 @@ pub fn list(name: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const PHP_TOOL: &str = "#!/usr/bin/env php\n<?php\n// a Composer proxy\n";
+
     fn project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("vendor").join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for f in ["pest", "pest.bat", "pint", "pint.bat", "phpstan"] {
-            std::fs::write(bin.join(f), "").unwrap();
+        for f in ["pest", "pint", "phpstan"] {
+            std::fs::write(bin.join(f), PHP_TOOL).unwrap();
         }
-        std::fs::write(dir.path().join("artisan"), "").unwrap();
+        std::fs::write(
+            bin.join("pest.bat"),
+            "@ECHO OFF\r\nphp \"%~dp0pest\" %*\r\n",
+        )
+        .unwrap();
+        std::fs::write(bin.join("sail"), "#!/usr/bin/env bash\necho sail\n").unwrap();
+        std::fs::write(dir.path().join("artisan"), "#!/usr/bin/env php\n<?php\n").unwrap();
         std::fs::write(
             dir.path().join("composer.json"),
             r#"{"scripts":{"test":"pest","dev":"x","post-autoload-dump":"y","pre-install-cmd":"z"}}"#,
@@ -307,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn only_artisan_composer_and_vendor_bin_tools_run() {
+    fn only_artisan_composer_and_vendor_bin_php_tools_run() {
         let dir = project();
         let p = dir.path();
         assert_eq!(program("artisan", p), Ok(Program::Artisan));
@@ -325,6 +386,8 @@ mod tests {
             "php",
             "phpunit",
             "cmd",
+            "sail",
+            "pest.bat",
             "../../evil",
             "vendor/bin/../x",
             r"C:\x.exe",
@@ -342,78 +405,66 @@ mod tests {
     }
 
     #[test]
-    fn the_app_gets_scripts_tools_and_suggestions() {
+    fn the_app_gets_scripts_php_tools_and_suggestions() {
         let dir = project();
         let f = found(dir.path());
         assert!(f.artisan);
         assert_eq!(f.scripts, ["dev", "test"]);
         assert_eq!(f.tools, ["pest", "phpstan", "pint"]);
-        let labels: Vec<Vec<&str>> = suggestions(&f).into_iter().map(|(_, a)| a).collect();
-        assert_eq!(labels[0], ["artisan", "test"]);
-        assert_eq!(labels[1], ["pint", "--test"]);
-        assert_eq!(labels[2], ["phpstan", "analyse", "--no-progress"]);
-        assert!(labels.contains(&vec!["artisan", "migrate:status"]));
+        let all = suggestions(&f);
+        let args: Vec<&Vec<&str>> = all.iter().map(|s| &s.args).collect();
+        assert_eq!(*args[0], ["artisan", "test"]);
+        assert_eq!(*args[1], ["pint", "--test"]);
+        assert_eq!(*args[2], ["phpstan", "analyse", "--no-progress"]);
+        assert!(args.contains(&&vec!["artisan", "migrate:status"]));
+        // No phpunit.xml: nothing to say before the tests.
+        assert_eq!(all[0].warn, None);
+    }
+
+    #[test]
+    fn tests_on_the_envs_database_are_warned_about() {
+        let dir = project();
+        let xml = dir.path().join("phpunit.xml");
+        std::fs::write(&xml, "<php>\n<env name=\"APP_ENV\" value=\"testing\"/>\n<!-- <env name=\"DB_CONNECTION\" value=\"sqlite\"/> -->\n</php>").unwrap();
+        assert_eq!(suggestions(&found(dir.path()))[0].warn, Some(TESTS_WARNING));
+        std::fs::write(&xml, "<php>\n<env name=\"DB_CONNECTION\" value=\"sqlite\"/>\n<env name=\"DB_DATABASE\" value=\":memory:\"/>\n</php>").unwrap();
+        assert_eq!(suggestions(&found(dir.path()))[0].warn, None);
     }
 
     #[test]
     fn the_app_never_waits_on_a_question() {
+        let dir = project();
         let php = PhpRecord {
             version: "8.4.1".into(),
-            dir: PathBuf::from(r"C:\php"),
+            dir: dir.path().join("php"),
             archive: String::new(),
             sha256: String::new(),
         };
-        let dir = project();
         let args = |c: &Command| -> Vec<String> {
             c.get_args()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
         };
-        let artisan = command(
-            &Program::Artisan,
-            &["migrate".into()],
-            dir.path(),
-            &php,
-            true,
-        )
-        .unwrap();
-        assert_eq!(args(&artisan), ["artisan", "migrate", "--no-interaction"]);
-        let given = command(
-            &Program::Artisan,
-            &["migrate".into(), "-n".into()],
-            dir.path(),
-            &php,
-            true,
-        )
-        .unwrap();
-        assert_eq!(args(&given), ["artisan", "migrate", "-n"]);
-        let terminal = command(
-            &Program::Artisan,
-            &["migrate".into()],
-            dir.path(),
-            &php,
-            false,
-        )
-        .unwrap();
-        assert_eq!(args(&terminal), ["artisan", "migrate"]);
-        let pint = command(
-            &Program::Tool("pint".into()),
-            &["--test".into()],
-            dir.path(),
-            &php,
-            true,
-        )
-        .unwrap();
+        let run = |program: &Program, words: &[&str], json: bool| {
+            let words: Vec<String> = words.iter().map(|w| (*w).to_owned()).collect();
+            args(&command(program, &words, dir.path(), &php, json).unwrap())
+        };
         assert_eq!(
-            args(&pint),
-            [
-                Path::new("vendor")
-                    .join("bin")
-                    .join("pint")
-                    .to_string_lossy()
-                    .into_owned(),
-                "--test".into()
-            ]
+            run(&Program::Artisan, &["migrate"], true),
+            ["artisan", "migrate", "--no-interaction"]
+        );
+        assert_eq!(
+            run(&Program::Artisan, &["migrate", "-n"], true),
+            ["artisan", "migrate", "-n"]
+        );
+        assert_eq!(
+            run(&Program::Artisan, &["migrate"], false),
+            ["artisan", "migrate"]
+        );
+        let pint: PathBuf = ["vendor", "bin", "pint"].iter().collect();
+        assert_eq!(
+            run(&Program::Tool("pint".into()), &["--test"], true),
+            [pint.to_string_lossy().into_owned(), "--test".to_owned()]
         );
     }
 }

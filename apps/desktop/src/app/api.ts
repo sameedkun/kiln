@@ -84,7 +84,7 @@ export interface SiteCommands {
   artisan: boolean;
   scripts: string[];
   tools: string[];
-  suggested: { label: string; args: string[] }[];
+  suggested: { label: string; args: string[]; warn?: string | null }[];
 }
 /** `services.snapshots` (ADR 0079). */
 export interface ServiceSnapshotsList {

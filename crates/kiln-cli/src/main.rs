@@ -1079,6 +1079,12 @@ fn changes_state(command: &Command) -> bool {
                 ..
             }
             | Command::Tinker { .. }
+            // A test run or queue:work lasts minutes or hours; it reads Kiln's state once and
+            // changes nothing of Kiln's (ADR 0084).
+            | Command::Run { .. }
+            | Command::Domain {
+                action: DomainAction::List { .. }
+            }
             | Command::Git {
                 action: GitAction::Branches { .. }
             }
@@ -1551,5 +1557,35 @@ fn run_daemon(action: DaemonAction) -> Result<(), String> {
         DaemonAction::Enable { yes } => daemon::enable(yes),
         DaemonAction::Disable { yes } => daemon::disable(yes),
         DaemonAction::Call { method, params } => daemon::call(&method, params.as_deref()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_words(args: &[&str]) -> (bool, bool, Vec<String>) {
+        let cli = Cli::try_parse_from(std::iter::once("kiln").chain(args.iter().copied()))
+            .unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        match cli.command {
+            Command::Run { list, command, .. } => (cli.json, list, command),
+            other => panic!("{args:?} parsed as {other:?}"),
+        }
+    }
+
+    /// A site's command keeps its own options, even ones Kiln has too (ADR 0084).
+    #[test]
+    fn kiln_run_hands_every_word_after_the_command_to_it() {
+        assert_eq!(
+            run_words(&["run", "shop", "pint", "--test"]).2,
+            ["pint", "--test"]
+        );
+        assert_eq!(run_words(&["run", "shop", "php", "-v"]).2, ["php", "-v"]);
+        let (json, list, words) = run_words(&["run", "shop", "--list"]);
+        assert!(!json && list && words.is_empty());
+        let (json, _, words) =
+            run_words(&["--json", "run", "shop", "artisan", "route:list", "--json"]);
+        assert!(json);
+        assert_eq!(words, ["artisan", "route:list", "--json"]);
     }
 }

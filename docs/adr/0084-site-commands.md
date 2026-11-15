@@ -28,8 +28,12 @@ Stopping the `kiln` process alone would leave the `php` it started running.
    | `composer` | Kiln's Composer (installed if missing, as `kiln new` does) |
    | `vendor/bin/<tool>`, or a tool's bare name found there (`pint`, `pest`, `phpstan`, `phpunit`, …) | `php vendor/bin/<tool> …` |
 
-   Nothing else: not `php`, not a path, not another program. It is the project's own code,
-   as a terminal would run it; the app's API can't name an arbitrary executable.
+   - A `vendor/bin` tool must be a PHP script, starting with `<?php` or a php shebang. A
+     shell script such as `sail`, or a `.bat` proxy, isn't one.
+   - Nothing else runs: not `php`, not a path, not another program. It is the project's own
+     code, as a terminal would run it; the app's API can't name an arbitrary executable.
+   - `kiln run` reads Kiln's state once and takes no change lock, so a test run or
+     `queue:work` doesn't hold up other commands.
 
 2. **On a terminal**, the command has the console, so it can ask, show colour and be
    stopped with Ctrl+C.
@@ -37,11 +41,14 @@ Stopping the `kiln` process alone would leave the `php` it started running.
    **With `--json`** (the app):
    - its standard input is empty;
    - `artisan` and `composer` get `--no-interaction`;
-   - each output line is a `note` event as it comes;
-   - the final result carries the exit code.
+   - each output line is a `note` event as it comes, read as text even when it isn't UTF-8,
+     so a line can't stop the stream;
+   - the result carries the exit code: as data on success, in the error's words otherwise.
 
    A non-zero exit fails the command, so a failing test run shows as failed. It isn't a
    Kiln error: the output says why.
+   - On the API's allow-list, Kiln's reserved options (`--json`, `--yes`) are checked only
+     before the command. After it they're the tool's own, as in `artisan route:list --json`.
 3. **`kiln run <site> --list`** (`--json`) says what the site has:
    - whether `artisan` is there;
    - `composer.json`'s scripts;
@@ -50,6 +57,10 @@ Stopping the `kiln` process alone would leave the `php` it started running.
      - tests (`artisan test`, else `pest` or `phpunit`);
      - `pint` and `phpstan`;
      - `artisan migrate:status`, `artisan route:list` and `artisan about`.
+   - The tests button carries a warning when `phpunit.xml` sets no `DB_CONNECTION` or
+     `DB_DATABASE` outside a comment. Tests that refresh the database would then run on the
+     one `.env` names, and may empty it. The app shows that warning, and runs the tests only
+     after the user agrees.
 4. **The tree stops with Kiln:**
    - On Windows, `kiln run` puts what it starts in a kill-on-close job object.
    - When `kiln` ends, by Ctrl+C or because it was stopped, Windows ends the command and
@@ -65,6 +76,9 @@ Stopping the `kiln` process alone would leave the `php` it started running.
      - a field for any `artisan`, `composer` or `vendor/bin` command;
      - the output streaming in as it comes;
      - Stop while it runs.
+   - The tab stays mounted while another tab shows, so a run and its output survive a tab
+     switch. If the site page is left and opened again, the tab follows a run of that site
+     that's still going, with its output so far and Stop.
    - The MCP server doesn't get it.
 
 ## Consequences

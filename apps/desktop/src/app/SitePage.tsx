@@ -120,9 +120,13 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
         current={tab}
         onSelect={setTab}
       >
-      {tab === "commands" ? (
-        <SiteCommands site={site} />
-      ) : tab === "check" ? (
+      {/* Kept mounted while hidden, so a running command and its output survive a tab switch (ADR 0084 §5). */}
+      {site.php && (
+        <div hidden={tab !== "commands"}>
+          <SiteCommands site={site} />
+        </div>
+      )}
+      {tab === "commands" ? null : tab === "check" ? (
         <SiteCheck site={site} />
       ) : tab === "tinker" ? (
         <SiteTinker site={site} />
