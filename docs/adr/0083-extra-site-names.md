@@ -35,8 +35,11 @@ old scheme, so links, redirects and asset URLs point at the wrong one until some
      and settings.
    - It gets a certificate, its own row in `kiln sites` (source `alias`), and a place in the
      hosts file on the next `kiln hosts sync` (or the app's offer).
-   - If its main site goes, the name stops being served and stays in the setting until
-     removed, or until a site of that name returns.
+   - When `kiln unlink` takes the main site away for good, its names go with it, and Kiln
+     says so. A later site of that name doesn't get them back unasked. A parked site that
+     disappears keeps them in the setting, unserved, until removed.
+   - `kiln doctor <name>` checks `APP_URL` against the main site's URL, and the answer on
+     the name itself.
    - In the sites JSON, an extra name has `"domain": true`. A main site lists its names
      with where each comes from: `aliases: [{host, from: "kiln" | "kiln.toml"}]`.
 4. **`APP_URL` follows `kiln secure` and `kiln unsecure`.**
@@ -46,6 +49,8 @@ old scheme, so links, redirects and asset URLs point at the wrong one until some
      `kiln undo` reverses it.
    - An `APP_URL` on another name, such as a tunnel or a production URL, is left alone,
      with a note.
+   - The app's HTTPS switch says this beside it and in its done message. There is no
+     preview: the change is one value, and History can undo it.
 5. **The app:** the site page lists the site's names. Kiln's own names have a Remove
    button; ones from `kiln.toml` say so. An Add field runs `kiln domain add`, and then
    offers the hosts file as after a link.

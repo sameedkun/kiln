@@ -177,9 +177,9 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
             <Switch
               checked={site.secure}
               disabled={!caReady && !site.secure}
-              onChange={(on) => run([on ? "secure" : "unsecure", site.host], `${site.host} is served over ${on ? "HTTPS" : "HTTP"} now.`)}
+              onChange={(on) => run([on ? "secure" : "unsecure", site.host], `${site.host} is served over ${on ? "HTTPS" : "HTTP"} now; an APP_URL on it follows.`)}
               label="HTTPS"
-              description={caReady ? "With Kiln's own certificate" : "Needs Kiln's certificate authority, set up once for every site"}
+              description={caReady ? "With Kiln's own certificate. An APP_URL on this name follows (History can undo it)." : "Needs Kiln's certificate authority, set up once for every site"}
             />
             {!caReady && (
               <Button

@@ -89,7 +89,7 @@ export function SitesPage({ go }: { go: (page: string) => void }) {
               { label: s.group ? `Group: ${s.group}…` : "Put in a group…", onSelect: () => setGrouping(s) },
               {
                 label: s.secure ? "Serve over plain HTTP" : "Serve over HTTPS",
-                onSelect: () => run([s.secure ? "unsecure" : "secure", s.host], `${s.host} is served over ${s.secure ? "HTTP" : "HTTPS"} now.`),
+                onSelect: () => run([s.secure ? "unsecure" : "secure", s.host], `${s.host} is served over ${s.secure ? "HTTP" : "HTTPS"} now; an APP_URL on it follows.`),
               },
               ...(s.source === "link"
                 ? [

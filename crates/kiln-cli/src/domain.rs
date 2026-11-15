@@ -40,6 +40,17 @@ fn save(store: &mut StateStore, all: &BTreeMap<String, Vec<String>>) -> Result<(
         .map_err(|e| e.to_string())
 }
 
+/// Forgets a site's names when the site itself is gone (`kiln unlink`, ADR 0083 §3), so a
+/// later site of that name doesn't get them back unasked. Returns the names forgotten.
+pub(crate) fn forget(store: &mut StateStore, host: &str) -> Result<Vec<String>, String> {
+    let mut all = kiln_runtime::domains(store);
+    let Some(names) = all.remove(host) else {
+        return Ok(Vec::new());
+    };
+    save(store, &all)?;
+    Ok(names)
+}
+
 /// `kiln domain add <site> <name>...`.
 pub fn add(site: &str, names: &[String]) -> Result<(), String> {
     let mut store = crate::web::open_store()?;

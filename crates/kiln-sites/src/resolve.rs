@@ -352,14 +352,25 @@ mod tests {
         let domains = BTreeMap::from([
             (
                 "shop.test".to_owned(),
-                vec!["admin".to_owned(), "API.test".to_owned(), "blog".to_owned()],
+                vec![
+                    "admin".to_owned(),
+                    "API.test".to_owned(),
+                    "blog".to_owned(),
+                    "v2.api.shop".to_owned(),
+                ],
             ),
             ("gone.test".to_owned(), vec!["old".to_owned()]),
         ]);
         add_domains(&mut resolved, &domains, &tld);
         assert_eq!(
             hosts(&resolved),
-            ["admin.test", "api.test", "blog.test", "shop.test"]
+            [
+                "admin.test",
+                "api.test",
+                "blog.test",
+                "shop.test",
+                "v2.api.shop.test"
+            ]
         );
         let admin = &resolved.sites[0];
         assert!(admin.domain && admin.secure);

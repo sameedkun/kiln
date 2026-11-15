@@ -216,6 +216,18 @@ fn php(store: &StateStore, folder: &Path) -> (Option<String>, Option<Vec<String>
     (Some(record.version), loaded, shipped)
 }
 
+/// For another name of a site: the main site's URL, which `APP_URL` should name (ADR 0083).
+fn main_url(store: &StateStore, name: &str) -> Option<String> {
+    let resolved = crate::web::resolved(store).ok()?;
+    let main = resolved
+        .sites
+        .iter()
+        .find(|s| s.host.as_str() == name)?
+        .alias_of
+        .clone()?;
+    crate::web::site_urls(store).get(main.as_str()).cloned()
+}
+
 fn gather(target: &str) -> Result<SiteFacts, String> {
     let store = crate::doctor::open_read_only()?;
     let (name, folder, kind, url) = find(&store, target)?;
@@ -269,6 +281,7 @@ fn gather(target: &str) -> Result<SiteFacts, String> {
                 (p, exists)
             }),
         instances: instances(&store, db_port, &up),
+        main_url: main_url(&store, &name),
         listening: up,
         env,
         log_line,

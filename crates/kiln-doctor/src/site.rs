@@ -59,6 +59,8 @@ pub struct SiteFacts {
     pub kind: Kind,
     /// Where Kiln serves it.
     pub url: Option<String>,
+    /// For another name of a site: the main site's URL, which `APP_URL` should name.
+    pub main_url: Option<String>,
     /// The PHP version Kiln picks for the folder.
     pub php: Option<String>,
     pub composer_json: Option<String>,
@@ -631,7 +633,7 @@ fn env_file(f: &SiteFacts, out: &mut Vec<Finding>) {
             &f.folder,
         ));
     }
-    if let Some(url) = &f.url {
+    if let Some(url) = f.main_url.as_ref().or(f.url.as_ref()) {
         let wanted = url.trim_end_matches('/');
         match value(env, "APP_URL") {
             Some(set) if set.trim_end_matches('/') == wanted => out.push(finding(
@@ -1132,6 +1134,17 @@ mod tests {
         let text = diagnose(&facts).render();
         assert!(text.contains("APP_KEY is empty"));
         assert!(text.contains("APP_URL is http://localhost, but the site is at https://shop.test"));
+    }
+
+    #[test]
+    fn another_name_wants_app_url_on_its_main_site() {
+        let mut facts = laravel();
+        facts.name = "admin.test".into();
+        facts.url = Some("https://admin.test".into());
+        facts.main_url = Some("https://shop.test/".into());
+        let report = diagnose(&facts);
+        assert_eq!(problems(&report), Vec::<&Finding>::new());
+        assert!(report.render().contains("https://admin.test answers 200"));
     }
 
     fn mysql_site(enabled: bool, databases: Option<Vec<String>>, listening: bool) -> SiteFacts {

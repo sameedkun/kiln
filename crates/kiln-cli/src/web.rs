@@ -664,6 +664,12 @@ pub fn unlink(name: &str) -> Result<(), String> {
         return Err(format!("{host} isn't linked"));
     }
     say!("Unlinked {host}. Its files are untouched.");
+    if !resolved(&store)?.sites.iter().any(|s| s.host == host) {
+        let names = crate::domain::forget(&mut store, host.as_str())?;
+        if !names.is_empty() {
+            say!("Its other names went with it: {}.", names.join(", "));
+        }
+    }
     // A secured parked site was pinned as a link (ADR 0015 §8); it falls back to parked.
     if let Some(site) = resolved(&store)?.sites.iter().find(|s| s.host == host) {
         say!(
