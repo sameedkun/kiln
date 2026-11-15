@@ -40,6 +40,7 @@ mod proxy;
 mod requests;
 mod run;
 mod service;
+mod service_update;
 mod services_up;
 mod share;
 mod site_doctor;
@@ -676,6 +677,27 @@ enum ToolAction {
 enum ServiceAction {
     /// What Kiln can run: every kind with its versions for this machine, licence and ports.
     Catalog,
+    /// Which services are on an older patch than the one Kiln pins for their series (ADR 0090).
+    Updates,
+    /// Update services to the patch Kiln pins: data stays, a database is snapshotted first,
+    /// the previous version is kept for `kiln service rollback` (ADR 0090).
+    Update {
+        /// The instances (see `kiln service updates`).
+        names: Vec<String>,
+        /// Every service that has an update.
+        #[arg(long)]
+        all: bool,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Put a service back on the version before its last update.
+    Rollback {
+        name: String,
+        /// Do not ask for confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Download (checked against Kiln's pinned SHA-256), set up and start a service.
     Add {
         /// What to run, e.g. mailpit.
@@ -1438,6 +1460,9 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
         ServiceAction::Start { names } => service::start(&names),
         ServiceAction::Stop { names } => service::stop(&names),
         ServiceAction::Restart { name } => service::restart(&name),
+        ServiceAction::Updates => service_update::list(),
+        ServiceAction::Update { names, all, yes } => service_update::update(&names, all, yes),
+        ServiceAction::Rollback { name, yes } => service_update::rollback(&name, yes),
         ServiceAction::Port { name, ports } => service::port(&name, &ports),
         ServiceAction::Logs { name, lines } => service::logs(&name, lines),
         ServiceAction::Remove { name, delete_data } => service::remove(&name, delete_data),

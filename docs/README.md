@@ -105,6 +105,7 @@ working name). Start here.
 | [0087](adr/0087-notifications.md) | Notifications: kilnd collects mail Mailpit caught, programs the services supervisor saw fail, long jobs done; keeps 50; `notifications.list`/`clear`; the app shows Windows toasts (installed Kiln) and a Notifications page | accepted (Phase 4e) |
 | [0088](adr/0088-xdebug-modes.md) | Xdebug's other modes: the debug worker runs debug, profile and/or trace on a trigger (`kiln php xdebug mode`), files in Kiln's folder (`status`, `clear`); coverage loaded by `kiln run` for a `--coverage` run only | accepted (Phase 4e) |
 | [0089](adr/0089-editing-config-files.md) | Editing php.ini, a site's `.env` and a service's own settings (`custom.cnf`, `postgresql.conf`) whole: `kiln config`; checked first (PHP starts, `.env` lines, the service restarts or goes back), 10 backups, restore; the app stages text with kilnd | accepted (Phase 4e) |
+| [0090](adr/0090-service-updates.md) | Service updates: the patch Kiln pins for an instance's series when newer; `kiln service update` (data stays, a database snapshotted first, back to the old version if it won't start), `kiln service rollback`; the Services page's Update all | accepted (Phase 4e) |
 
 ## Conventions
 

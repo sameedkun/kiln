@@ -316,7 +316,7 @@ Linux and macOS features, and anything that listens beyond loopback, are left ou
 | P4E-08 | Windows notifications: mail caught by Mailpit, a dev process that stopped, a long job done; the last 50 kept in the app | M | **built** 2026-11-15, [ADR 0087](adr/0087-notifications.md); toasts for an installed Kiln |
 | P4E-09 | Xdebug's other modes: coverage (for `pest --coverage`), profile, trace | S | **built** 2026-11-15, [ADR 0088](adr/0088-xdebug-modes.md) |
 | P4E-10 | Editing php.ini, the site's `.env` and a service's config in the app, validated, with backups to restore | M | **built** 2026-11-15, [ADR 0089](adr/0089-editing-config-files.md) |
-| P4E-11 | Service updates: a newer patch shown, one or all updated, the previous kept to roll back | M | |
+| P4E-11 | Service updates: a newer patch shown, one or all updated, the previous kept to roll back | M | **built** 2026-11-15, [ADR 0090](adr/0090-service-updates.md) |
 | P4E-12 | Database servers Kiln doesn't run (Herd's, XAMPP's, a Windows service) used as services: wiring, dumps, snapshots | M | read-only toward them except what the user asks |
 
 Later, each needing a check first: a debug window with SQL queries and N+1s (an

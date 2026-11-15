@@ -11,6 +11,7 @@ import {
 } from "@fluentui/react-icons";
 import { useState, type ReactNode } from "react";
 import { Button } from "../components/Button";
+import { Notice } from "../components/Notice";
 import { Chips } from "../components/Chips";
 import { Dialog } from "../components/Dialog";
 import { Menu, type MenuItem } from "../components/Menu";
@@ -20,7 +21,7 @@ import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { TextField } from "../components/TextField";
-import { pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServicesList, type SitesList } from "./api";
+import { pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServiceUpdates, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { fewNames, useRead } from "./hooks";
@@ -58,7 +59,9 @@ type Open =
 export function ServicesPage({ go }: { go: (page: string) => void }) {
   const services = useRead<ServicesList>("services.list");
   const sites = useRead<SitesList>("sites.list");
-  const { run, open: visit } = useChanges();
+  const updates = useRead<ServiceUpdates>("services.updates");
+  const due = (updates.data?.instances ?? []).filter((u) => u.newer);
+  const { run, open: visit, confirm } = useChanges();
   const [category, setCategory] = useState("all");
   const [open, setOpen] = useState<Open | null>(null);
   const instances = services.data?.instances ?? [];
@@ -149,6 +152,15 @@ export function ServicesPage({ go }: { go: (page: string) => void }) {
       }
     >
       {services.error && <p className="text-[13px] text-bad">{services.error}</p>}
+      {due.length > 0 && (
+        <Notice
+          tone="attention"
+          title={`${due.length} service${due.length === 1 ? " has" : "s have"} a newer patch`}
+          actions={<Button variant="ink" onClick={() => confirm("Update services?", ["service", "update", "--all"], "Updated: each previous version is kept to go back to.")}>Update all…</Button>}
+        >
+          {due.map((u) => `${u.name} ${u.version} → ${u.newer}`).join(" · ")}. Their data stays; a database is snapshotted first.
+        </Notice>
+      )}
       {services.data && instances.length === 0 && (
         <p className="m-0 max-w-[60ch] text-[13px] text-text-2">No services yet. "Add a service" downloads one, checks it against Kiln's pinned hash, and runs it on this PC only.</p>
       )}

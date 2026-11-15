@@ -313,7 +313,7 @@ fn desired(store: &StateStore) -> Result<Pools, String> {
 /// taken one of their ports ([ADR 0037] §3).
 ///
 /// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
-fn apply(store: &StateStore) -> Result<(), String> {
+pub(crate) fn apply(store: &StateStore) -> Result<(), String> {
     let pools = desired(store)?;
     let supervisor = supervisor()?;
     // What ran before, to wait for what no longer should: the supervisor stops programs in
@@ -754,7 +754,7 @@ fn release_of(
 }
 
 /// Downloads and installs `release` into `bin`, unless it is already there.
-fn install_binaries(
+pub(crate) fn install_binaries(
     provider: &dyn ServiceProvider,
     release: &kiln_services::Release,
     bin: &Path,

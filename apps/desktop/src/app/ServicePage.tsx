@@ -9,7 +9,7 @@ import { Status } from "../components/Status";
 import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
 import { TextField } from "../components/TextField";
-import { type Instance, type LogSources, type ServiceSnapshotsList, type ServiceDatabases, type ServicesList, type SitesList } from "./api";
+import { type Instance, type LogSources, type ServiceSnapshotsList, type ServiceDatabases, type ServiceUpdates, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { ConfigEditor } from "./ConfigEditor";
 import { mainPort, serviceState } from "./Home";
@@ -36,11 +36,14 @@ type Open = "ports" | "wire" | "dump" | "restore" | "remove" | "pgadmin" | { dro
 export function ServicePage({ name, go }: { name: string; go: (page: string) => void }) {
   const services = useRead<ServicesList>("services.list");
   const sites = useRead<SitesList>("sites.list");
-  const { run, open: visit } = useChanges();
+  const { run, open: visit, confirm } = useChanges();
   const [tab, setTab] = useState("overview");
   const [open, setOpen] = useState<Open | null>(null);
   // The instance's own settings file (ADR 0089).
   const [editing, setEditing] = useState(false);
+  // A newer patch, or the version before the last update (ADR 0090).
+  const updates = useRead<ServiceUpdates>("services.updates");
+  const update = updates.data?.instances.find((u) => u.name === name);
   // Bumped after a database is deleted, so the list is read again.
   const [dropped, setDropped] = useState(0);
   const i = services.data?.instances.find((x) => x.name === name);
@@ -88,6 +91,16 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
           {i.web && (
             <Button icon={<Open16Regular />} onClick={() => visit(i.web!)}>
               Open {i.web}
+            </Button>
+          )}
+          {update?.newer && (
+            <Button variant="ink" onClick={() => confirm(`Update ${i.name}?`, ["service", "update", i.name], `${i.name} runs ${update.newer} now.`)}>
+              Update to {update.newer}…
+            </Button>
+          )}
+          {update?.previous && !update.newer && (
+            <Button onClick={() => confirm(`Put ${i.name} back on ${update.previous}?`, ["service", "rollback", i.name], `${i.name} runs ${update.previous} again.`)}>
+              Back to {update.previous}…
             </Button>
           )}
           {["mysql", "mariadb", "postgres"].includes(i.kind) && <Button onClick={() => setEditing(true)}>Edit settings…</Button>}

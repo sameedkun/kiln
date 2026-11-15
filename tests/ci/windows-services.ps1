@@ -1580,6 +1580,16 @@ Check 'tool remove adminer: the site and its files go' {
     if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
 }
 
+Check 'kiln service updates (ADR 0090): every instance on Kiln''s pin; update and rollback say why they do nothing' {
+    Expect 'Every service is on the patch Kiln pins' (Kiln service updates)
+    $list = (& $Kiln --json service updates | Select-Object -Last 1 | ConvertFrom-Json).data.instances
+    if (-not ($list | Where-Object { $_.name -eq 'mysql-8.4' -and -not $_.newer })) { throw "service updates: $($list | ConvertTo-Json -Depth 4)" }
+    Expect 'already on' (Kiln service update mysql-8.4 --yes)
+    Expect 'Every service is on the patch Kiln pins' (Kiln service update --all --yes)
+    $refused = & $Kiln service rollback mysql-8.4 --yes 2>&1 | Out-String
+    $global:LASTEXITCODE = 0
+    Expect 'no earlier version' $refused
+}
 Check 'kiln config (ADR 0089): .env and php.ini checked before saving, backed up, restored; MySQL takes a setting and refuses a bad one' {
     $work = Join-Path $env:RUNNER_TEMP 'kiln-config'
     New-Item -ItemType Directory -Force $work | Out-Null

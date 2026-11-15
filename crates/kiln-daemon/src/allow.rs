@@ -85,6 +85,9 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["service", "restart"], false),
     (&["service", "port"], false),
     (&["service", "remove"], false),
+    // Patch updates and going back (ADR 0090): the versions shown first.
+    (&["service", "update"], true),
+    (&["service", "rollback"], true),
     (&["services", "up"], false),
     (&["services", "down"], false),
     (&["env", "use"], true),

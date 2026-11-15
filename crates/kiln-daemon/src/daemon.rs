@@ -337,6 +337,7 @@ impl Daemon {
         "xdebug.status",
         "config.show",
         "config.stage",
+        "services.updates",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -1247,6 +1248,7 @@ fn plain_read(method: &str) -> Option<&'static [&'static str]> {
         "editor.get" => &["editor"],
         "snapshots.settings" => &["db", "snapshot-settings"],
         "xdebug.status" => &["php", "xdebug", "status"],
+        "services.updates" => &["service", "updates"],
         _ => return None,
     })
 }

@@ -28,6 +28,7 @@ pub enum Reason {
     BeforeMigrate,
     BeforeDrop,
     BeforeRollback,
+    BeforeUpdate,
     Daily,
 }
 
@@ -39,6 +40,7 @@ impl Reason {
             Self::BeforeMigrate => "before-migrate",
             Self::BeforeDrop => "before-drop",
             Self::BeforeRollback => "before-rollback",
+            Self::BeforeUpdate => "before-update",
             Self::Daily => "daily",
         }
     }
@@ -49,6 +51,7 @@ impl Reason {
             Self::BeforeMigrate,
             Self::BeforeDrop,
             Self::BeforeRollback,
+            Self::BeforeUpdate,
             Self::Daily,
         ]
         .into_iter()

@@ -98,6 +98,10 @@ export interface XdebugStatus {
   output_dir: string;
   files: { name: string; bytes: number; at: number }[];
 }
+/** `services.updates` (ADR 0090): each instance's version, a newer pinned patch, the one before. */
+export interface ServiceUpdates {
+  instances: { name: string; kind: string; version: string; newer: string | null; previous: string | null }[];
+}
 /** `site.commands` (ADR 0084 §3): what a site can run. */
 export interface SiteCommands {
   host: string;
