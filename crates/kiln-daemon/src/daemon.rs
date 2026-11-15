@@ -1015,8 +1015,11 @@ impl Daemon {
             // A long one is told when it ends (ADR 0087 §1): the user has moved on meanwhile.
             if mode == Mode::Apply && began.elapsed() >= LONG_JOB {
                 let command = format!("kiln {}", args.join(" "));
+                let stopped = outcome.last["message"].as_str() == Some("stopped");
                 let (title, body) = if outcome.ok {
                     (format!("Done: {command}"), "It worked.".to_owned())
+                } else if stopped {
+                    (format!("Stopped: {command}"), "You stopped it.".to_owned())
                 } else {
                     (
                         format!("Failed: {command}"),

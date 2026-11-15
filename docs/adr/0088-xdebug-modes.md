@@ -23,9 +23,12 @@ Lerd offers these modes; the user asked for what Lerd has.
    - The setting is `xdebug.modes`, one for every PHP version.
    - It applies at once wherever Xdebug is on: the worker's `php.ini` is written again and
      the pools reloaded.
-   - The worker still starts Xdebug only on a trigger (`start_with_request=trigger`). The
-     same cookie or `?XDEBUG_TRIGGER=1` profiles or traces a request; other requests are
-     untouched.
+   - The worker still starts Xdebug only on a trigger (`start_with_request=trigger`), and
+     each name starts what Xdebug says it does:
+     - `XDEBUG_SESSION` (the browser helpers' cookie) starts step debugging only;
+     - `XDEBUG_TRIGGER`, as a cookie or `?XDEBUG_TRIGGER=1`, starts every mode that is on;
+     - the legacy `XDEBUG_PROFILE` and `XDEBUG_TRACE` start their own.
+   - The web server sends all of these to the debug worker; other requests are untouched.
 2. **Files** from profile and trace go to Kiln's own `xdebug\output` folder:
    `cachegrind.out.<time>.<request>` and `trace.<time>.<request>.xt`.
    - **`kiln php xdebug status`** (`--json`, the read `xdebug.status`) gives:

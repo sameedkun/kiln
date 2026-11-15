@@ -45,9 +45,19 @@ configuration unasked.
    environment (`MYSQL_PWD`, `PGPASSWORD`), never on a command line.
 3. **What never happens to it:**
    - `kiln service start|stop|restart|port|remove|update` refuse, saying Kiln doesn't run it;
+   - `kiln config` won't edit its settings;
    - the supervisor never sees it;
-   - Kiln's automatic and daily snapshots (ADR 0086) skip it;
+   - Kiln's automatic snapshots before a project's steps, and daily ones (ADR 0086), skip
+     it. A drop or rollback the user asks for on it still keeps one first, as for Kiln's
+     own;
    - Kiln writes no config of its own for it.
+
+   **Detach** forgets the server. It keeps Kiln's folder for it (`services\<name>`, with
+   its snapshots) until the user removes it.
+   - Through the app's API, `--password` and `--bin` are refused. The password comes
+     staged instead (`--password-staged`), so it never reaches a job's arguments or kilnd's
+     log.
+   - A folder of programs to run is for the terminal only.
 4. **Listing:**
    - `kiln service list` (`--json`) shows it, marked `external`, running when its port
      answers.

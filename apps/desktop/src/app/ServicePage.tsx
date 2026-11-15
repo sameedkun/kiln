@@ -103,13 +103,16 @@ export function ServicePage({ name, go }: { name: string; go: (page: string) => 
               Back to {update.previous}…
             </Button>
           )}
-          {["mysql", "mariadb", "postgres"].includes(i.kind) && <Button onClick={() => setEditing(true)}>Edit settings…</Button>}
-          <Button
-            icon={running ? <Stop16Filled /> : <Play16Filled />}
-            onClick={() => run(["service", running ? "stop" : "start", i.name], `${running ? "Stopped" : "Started"} ${i.name}.`)}
-          >
-            {running ? "Stop" : "Start"}
-          </Button>
+          {["mysql", "mariadb", "postgres"].includes(i.kind) && !i.external && <Button onClick={() => setEditing(true)}>Edit settings…</Button>}
+          {/* A server Kiln doesn't run is never started or stopped by it (ADR 0091). */}
+          {!i.external && (
+            <Button
+              icon={running ? <Stop16Filled /> : <Play16Filled />}
+              onClick={() => run(["service", running ? "stop" : "start", i.name], `${running ? "Stopped" : "Started"} ${i.name}.`)}
+            >
+              {running ? "Stop" : "Start"}
+            </Button>
+          )}
         </>
       }
     >

@@ -155,6 +155,9 @@ pub fn check(args: &[String], mode: Mode) -> Result<(), String> {
     {
         return Err(format!("{flag} is set by kilnd, not by the caller"));
     }
+    if let Some(why) = refused_option(args) {
+        return Err(why);
+    }
     let Some((words, asks)) = COMMANDS.iter().find(|(words, _)| {
         args.len() >= words.len() && words.iter().zip(args).all(|(w, a)| *w == a.as_str())
     }) else {
@@ -168,6 +171,31 @@ pub fn check(args: &[String], mode: Mode) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Options a client may not pass, though a terminal may: a file to read (`config save --from`
+/// would show any readable file in its preview), a password (it would be in kilnd's log and the
+/// job list: the app stages it, ADR 0091), a folder of programs to run (`--bin`).
+fn refused_option(args: &[String]) -> Option<String> {
+    let has = |flag: &str| {
+        args.iter()
+            .any(|a| a == flag || a.starts_with(&format!("{flag}=")))
+    };
+    let starts = |words: &[&str]| {
+        args.len() >= words.len() && words.iter().zip(args).all(|(w, a)| *w == a.as_str())
+    };
+    if starts(&["config", "save"]) && has("--from") {
+        return Some(
+            "through the API, `config save` takes the app's staged text (--staged), not a file"
+                .into(),
+        );
+    }
+    if starts(&["service", "attach"]) && (has("--password") || has("--bin")) {
+        return Some(
+            "through the API, `service attach` takes its password staged (--password-staged) and no --bin".into(),
+        );
+    }
+    None
 }
 
 /// Options of `service add` and `services up` that take a value as the next argument.
@@ -222,6 +250,62 @@ pub fn project_of_service_add(args: &[String]) -> Result<Option<&str>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_passwords_and_programs_stay_off_the_api() {
+        let args = |w: &[&str]| w.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert!(
+            check(
+                &args(&["config", "save", "env:shop", "--from", "C:/secret.txt"]),
+                Mode::Preview
+            )
+            .is_err()
+        );
+        assert_eq!(
+            check(
+                &args(&["config", "save", "env:shop", "--staged", "ab"]),
+                Mode::Preview
+            ),
+            Ok(())
+        );
+        assert!(
+            check(
+                &args(&[
+                    "service",
+                    "attach",
+                    "mysql",
+                    "--port",
+                    "3306",
+                    "--password",
+                    "x"
+                ]),
+                Mode::Apply
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                &args(&["service", "attach", "mysql", "--port", "3306", "--bin=C:/x"]),
+                Mode::Apply
+            )
+            .is_err()
+        );
+        assert_eq!(
+            check(
+                &args(&[
+                    "service",
+                    "attach",
+                    "mysql",
+                    "--port",
+                    "3306",
+                    "--password-staged",
+                    "ab"
+                ]),
+                Mode::Apply
+            ),
+            Ok(())
+        );
+    }
 
     #[test]
     fn a_sites_command_keeps_its_own_options() {

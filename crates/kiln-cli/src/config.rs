@@ -82,6 +82,11 @@ fn file_of(target: &Target) -> Result<PathBuf, String> {
         }
         Target::Service(name) => {
             let record = crate::service::record_of(&store, name)?;
+            if record.version == crate::external::VERSION {
+                return Err(format!(
+                    "{name} isn't run by Kiln, so Kiln doesn't change its settings (ADR 0091): edit them where that server keeps them"
+                ));
+            }
             let provider = crate::service::provider_of(&record.kind)?;
             provider
                 .user_config(&crate::service::dirs_of(&record)?)
@@ -409,6 +414,8 @@ fn save_text(target: &Target, text: &str, yes: bool) -> Result<bool, String> {
                 if restarted.is_err() || !answers(name, std::time::Duration::from_secs(30)) {
                     write(&path, &before)?;
                     let _ = crate::service::restart(name);
+                    // Back on the last good file before saying so.
+                    let _ = answers(name, std::time::Duration::from_secs(30));
                     return Err(format!(
                         "{name} didn't start with the new settings, so the previous ones are back; `kiln service logs {name}` says why"
                     ));

@@ -1066,7 +1066,8 @@ Check 'Xdebug modes (ADR 0088): profile on a trigger writes a cachegrind file, c
     Expect 'runs debug, profile now' (Kiln php xdebug mode 'debug,profile')
     try {
         Kiln php xdebug clear | Out-Null
-        if ((XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')) -notmatch 'debug\s*$') { throw 'the triggered request missed the debug worker' }
+        # XDEBUG_SESSION starts only step debugging; XDEBUG_TRIGGER starts every mode on.
+        if ((XdebugPage @('-H', 'Cookie: XDEBUG_TRIGGER=1')) -notmatch 'debug\s*$') { throw 'the triggered request missed the debug worker' }
         $deadline = (Get-Date).AddSeconds(15)
         do {
             $status = (& $Kiln --json php xdebug status | Select-Object -Last 1 | ConvertFrom-Json).data
@@ -1617,6 +1618,8 @@ Check 'a server Kiln doesn''t run (ADR 0091): attached by port, its databases li
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+        # Kiln's own folder for it (its snapshot), which detach keeps.
+        Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Kiln\services\foreign" -ErrorAction SilentlyContinue
     }
 }
 Check 'kiln service updates (ADR 0090): every instance on Kiln''s pin; update and rollback say why they do nothing' {
@@ -1646,13 +1649,22 @@ Check 'kiln config (ADR 0089): .env and php.ini checked before saving, backed up
     Kiln config restore env:shop $backup --yes | Out-Null
     if ((Get-FileHash $envFile -Algorithm SHA256).Hash -ne $before) { throw 'restore did not put the .env back byte for byte' }
 
-    # php.ini: a line PHP can't start with is refused, nothing written.
-    $ini = (& $Kiln --json config show php:8.4 | Select-Object -Last 1 | ConvertFrom-Json).data
+    # php.ini: a line PHP can't start with is refused, nothing written; a good one is saved
+    # (its workers restart) and put back.
+    $php = 'php:' + ((& $Kiln --json php list | Select-Object -Last 1 | ConvertFrom-Json).data.versions | Select-Object -First 1).version
+    $ini = (& $Kiln --json config show $php | Select-Object -Last 1 | ConvertFrom-Json).data
     [System.IO.File]::WriteAllText((Join-Path $work 'php.ini'), $ini.text + "`nextension=kiln_no_such_extension`n")
-    $refused = & $Kiln config save php:8.4 --from (Join-Path $work 'php.ini') --yes 2>&1 | Out-String
+    $refused = & $Kiln config save $php --from (Join-Path $work 'php.ini') --yes 2>&1 | Out-String
     $global:LASTEXITCODE = 0
     if ($refused -notmatch "doesn't start cleanly") { throw "a broken php.ini was saved:`n$refused" }
     if ((Get-Content $ini.path -Raw) -match 'kiln_no_such_extension') { throw 'the broken php.ini was written' }
+    $iniBefore = (Get-FileHash $ini.path -Algorithm SHA256).Hash
+    [System.IO.File]::WriteAllText((Join-Path $work 'php.ini'), $ini.text + "`n; kiln-config-test`n")
+    Expect 'Saved php.ini' (Kiln config save $php --from (Join-Path $work 'php.ini') --yes)
+    ShopPage
+    $iniBackup = @((& $Kiln --json config backups $php | Select-Object -Last 1 | ConvertFrom-Json).data.backups)[0]
+    Kiln config restore $php $iniBackup --yes | Out-Null
+    if ((Get-FileHash $ini.path -Algorithm SHA256).Hash -ne $iniBefore) { throw 'php.ini is not back byte for byte' }
 
     # MySQL's own settings: a value it takes, then an option it can't start with (back to the last good file).
     $cnf = (& $Kiln --json config show service:mysql-8.4 | Select-Object -Last 1 | ConvertFrom-Json).data

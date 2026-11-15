@@ -6,6 +6,9 @@ import { call, message } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
+/** Unsaved edits by target, for the session: a save the check refuses can be fixed and tried again. */
+const drafts = new Map<string, string>();
+
 /** `config.show` (ADR 0089 §2). */
 export interface ConfigShow {
   label: string;
@@ -31,8 +34,15 @@ export function ConfigEditor({ target, onClose }: { target: string; onClose: () 
   const [backup, setBackup] = useState("");
   const [error, setError] = useState<string>();
   useEffect(() => {
-    if (file.data && text === null) setText(file.data.text);
-  }, [file.data, text]);
+    if (file.data && text === null) {
+      const draft = drafts.get(target);
+      // A draft that was saved since is the file now: start from the file.
+      if (draft === undefined || draft === file.data.text) {
+        drafts.delete(target);
+        setText(file.data.text);
+      } else setText(draft);
+    }
+  }, [file.data, text, target]);
 
   const label = file.data?.label ?? target;
   const changed = file.data !== undefined && text !== null && text !== file.data.text;
@@ -41,6 +51,7 @@ export function ConfigEditor({ target, onClose }: { target: string; onClose: () 
     if (text === null) return;
     try {
       const { token } = await call<{ token: string }>("config.stage", { text });
+      drafts.set(target, text);
       onClose();
       confirm(`Save ${label}?`, ["config", "save", target, "--staged", token], `Saved ${label}; the previous version is a backup.`);
     } catch (e) {
@@ -56,7 +67,14 @@ export function ConfigEditor({ target, onClose }: { target: string; onClose: () 
       title={`Edit ${label}`}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              drafts.delete(target);
+              onClose();
+            }}
+          >
+            Cancel
+          </Button>
           <Button variant="ink" disabled={!changed} onClick={save}>
             Show the changes
           </Button>

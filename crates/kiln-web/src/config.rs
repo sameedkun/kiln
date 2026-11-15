@@ -695,12 +695,19 @@ pub const PHP_TRY_INTERVAL: Duration = Duration::from_millis(50);
 /// [ADR 0061]: ../../../docs/adr/0061-xdebug.md
 pub const DEBUG_POOL_SUFFIX: &str = "+xdebug";
 
-/// A `Cookie` header carrying an Xdebug trigger: `XDEBUG_SESSION` (browser extensions) or
-/// `XDEBUG_TRIGGER`, by name, not inside another cookie's value.
-const DEBUG_COOKIE_PATTERN: &str = r"(^|;\s*)XDEBUG_(SESSION|TRIGGER)=";
+/// A `Cookie` header carrying an Xdebug trigger: `XDEBUG_SESSION` (browser extensions),
+/// `XDEBUG_TRIGGER`, or the profile and trace modes' `XDEBUG_PROFILE` and `XDEBUG_TRACE`
+/// (ADR 0088), by name, not inside another cookie's value.
+const DEBUG_COOKIE_PATTERN: &str = r"(^|;\s*)XDEBUG_(SESSION|TRIGGER|PROFILE|TRACE)=";
 
-/// Query parameters that ask Xdebug to debug the request.
-const DEBUG_QUERY_KEYS: &[&str] = &["XDEBUG_SESSION_START", "XDEBUG_SESSION", "XDEBUG_TRIGGER"];
+/// Query parameters that ask Xdebug to debug, profile or trace the request.
+const DEBUG_QUERY_KEYS: &[&str] = &[
+    "XDEBUG_SESSION_START",
+    "XDEBUG_SESSION",
+    "XDEBUG_TRIGGER",
+    "XDEBUG_PROFILE",
+    "XDEBUG_TRACE",
+];
 
 impl Handler {
     /// The dev server behind a proxy site. It sees its own `host:port` as `Host`, which dev
@@ -1228,14 +1235,14 @@ mod tests {
             "127.0.0.1:9101"
         );
         let sets = debug["match"].as_array().unwrap();
-        assert_eq!(sets.len(), 4, "the cookie, then one set per query key");
+        assert_eq!(sets.len(), 6, "the cookie, then one set per query key");
         for set in sets {
             assert_eq!(set["path"], serde_json::json!(["*.php"]), "{set}");
         }
         let pattern = sets[0]["header_regexp"]["Cookie"]["pattern"]
             .as_str()
             .unwrap();
-        assert_eq!(pattern, r"(^|;\s*)XDEBUG_(SESSION|TRIGGER)=");
+        assert_eq!(pattern, r"(^|;\s*)XDEBUG_(SESSION|TRIGGER|PROFILE|TRACE)=");
         assert_eq!(
             sets[1]["query"],
             serde_json::json!({"XDEBUG_SESSION_START": ["*"]})

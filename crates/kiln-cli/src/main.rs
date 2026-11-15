@@ -1224,6 +1224,9 @@ fn changes_state(command: &Command) -> bool {
             | Command::Run { .. }
             | Command::Code { .. }
             | Command::Editor { action: None }
+            | Command::Config {
+                action: ConfigAction::Show { .. } | ConfigAction::Backups { .. }
+            }
             | Command::Domain {
                 action: DomainAction::List { .. }
             }
@@ -1249,6 +1252,9 @@ fn changes_state(command: &Command) -> bool {
                     | PhpAction::Ext {
                         action: ExtAction::List { .. }
                     }
+                    | PhpAction::Xdebug {
+                        action: XdebugAction::Status
+                    }
             }
             | Command::Node {
                 action: NodeAction::Available | NodeAction::List
@@ -1257,7 +1263,10 @@ fn changes_state(command: &Command) -> bool {
                 action: WebAction::Status | WebAction::Config
             }
             | Command::Service {
-                action: ServiceAction::List | ServiceAction::Catalog | ServiceAction::Logs { .. }
+                action: ServiceAction::List
+                    | ServiceAction::Catalog
+                    | ServiceAction::Logs { .. }
+                    | ServiceAction::Updates
             }
             // A client session can last hours and changes nothing of Kiln's.
             | Command::Db { .. }
@@ -1317,7 +1326,28 @@ fn quiet_on_closed_output() {
     }));
 }
 
+/// How much stack Kiln's work gets. The command dispatch is one large function: in a debug
+/// build each of its arms keeps its own stack slots, which outgrew Windows' 1 MB main-thread
+/// stack (I-103). A thread of its own, with room to spare, runs it.
+const STACK: usize = 16 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("kiln".into())
+        .stack_size(STACK)
+        .spawn(kiln_main)
+        .and_then(|worker| {
+            worker
+                .join()
+                .map_err(|_| std::io::Error::other("Kiln stopped unexpectedly"))
+        })
+        .unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        })
+}
+
+fn kiln_main() -> ExitCode {
     quiet_on_closed_output();
     let cli = Cli::parse();
     out::start(cli.json, cli.confirmed);

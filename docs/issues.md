@@ -1448,3 +1448,26 @@ commits and PRs.
   site doctor read the last.
 - **Rule meanwhile:** the site doctor reports every key set twice, by line ("Laravel reads the
   last"). To fix: `value_of` and `settings` read the last, and `set` changes that line.
+
+### I-103: Every `kiln` command overflowed its stack after P4E-10 to P4E-12 (fixed)
+
+- **Found:** CI and the Scenario on f873780, 2026-11-15. `kiln --version`, `service list`, every
+  command: "thread 'main' has overflowed its stack". The uninstall tests and the desktop app's
+  end-to-end run failed with it.
+- **Cause:** not recursion. The command dispatch is one large function, and a debug build gives
+  each match arm's temporaries their own stack slots. With P4E-10 to P4E-12's arms the frame
+  outgrew Windows' 1 MB main-thread stack. Unit tests didn't run the binary, so only the
+  integration tests and the Scenario saw it.
+- **Fix:** `main` runs Kiln on a thread of its own with a 16 MB stack.
+
+### I-104: Two Scenario checks failed for reasons of their own (fixed)
+
+- **Found:** the Scenario on aa20000/6f799f0, 2026-11-15.
+- **Causes:**
+  - PowerShell turns `debug,profile` into an array, so `kiln php xdebug mode` got two
+    arguments. It now takes the modes as one word or several, and the Scenario quotes them.
+  - The notifications check ran after the Scenario had stopped kilnd. It now starts kilnd
+    and stops it again.
+  - The profile check sent `XDEBUG_SESSION`, which starts step debugging only. Profiling
+    needs `XDEBUG_TRIGGER`, which the web server now routes along with `XDEBUG_PROFILE` and
+    `XDEBUG_TRACE`.

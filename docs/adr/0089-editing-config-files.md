@@ -57,6 +57,11 @@ the user edits.
      1 MB, and answers a token.
    - The app runs `kiln config save <target> --staged <token>` through the usual preview and
      confirmation. The staged file is deleted when used.
+   - Through the API, `--from <file>` is refused: a preview would show any readable file's
+     lines.
+   - A server Kiln doesn't run (ADR 0091) has no target.
+   - An unsaved edit stays in the editor for the session, so a save the check refuses can
+     be fixed and tried again.
    - Editors:
      - the PHP page: Edit php.ini, per version;
      - the site page's `.env` tab: Edit;

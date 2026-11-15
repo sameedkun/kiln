@@ -248,8 +248,9 @@ function XdebugSection() {
   return (
     <Section title="Debugging" meta="Xdebug on demand" action={s && s.files.length > 0 ? <Button size="sm" onClick={() => run(["php", "xdebug", "clear"], "Deleted the profiles and traces.")}>Clear files</Button> : undefined}>
       <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">
-        A request with the <code className="font-mono text-xs text-text">XDEBUG_SESSION</code> cookie (your browser's Xdebug helper) or{" "}
-        <code className="font-mono text-xs text-text">?XDEBUG_TRIGGER=1</code> goes to a debug worker running what's on below. Every other request stays on the fast workers.
+        A request with an Xdebug trigger goes to a debug worker; every other request stays on the fast workers. The{" "}
+        <code className="font-mono text-xs text-text">XDEBUG_SESSION</code> cookie (your browser's Xdebug helper) starts step debugging;{" "}
+        <code className="font-mono text-xs text-text">XDEBUG_TRIGGER</code> (a cookie, or <code className="font-mono text-xs text-text">?XDEBUG_TRIGGER=1</code>) starts everything on below.
         Coverage needs nothing here: a Commands-tab run with <code className="font-mono text-xs text-text">--coverage</code> loads Xdebug for itself.
       </li>
       {s &&
