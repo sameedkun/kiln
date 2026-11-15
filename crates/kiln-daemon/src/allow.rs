@@ -87,6 +87,9 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["service", "remove"], false),
     // Patch updates and going back (ADR 0090): the versions shown first.
     (&["service", "update"], true),
+    // Servers Kiln doesn't run (ADR 0091): kept or forgotten, never changed.
+    (&["service", "attach"], false),
+    (&["service", "detach"], false),
     (&["service", "rollback"], true),
     (&["services", "up"], false),
     (&["services", "down"], false),

@@ -102,7 +102,7 @@ fn backups_dir(target: &Target) -> Result<PathBuf, String> {
 }
 
 /// The staged text's file for `token` (written by kilnd's `config.stage`).
-fn staged_path(token: &str) -> Result<PathBuf, String> {
+pub(crate) fn staged_path(token: &str) -> Result<PathBuf, String> {
     if token.len() != 32 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("{token:?} isn't a staged text's token"));
     }

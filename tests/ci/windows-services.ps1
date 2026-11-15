@@ -1063,7 +1063,7 @@ Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet
     } finally { $listener.Stop() }
 }
 Check 'Xdebug modes (ADR 0088): profile on a trigger writes a cachegrind file, clear deletes it; a test run with --coverage gets Xdebug by itself' {
-    Expect 'runs debug, profile now' (Kiln php xdebug mode debug,profile)
+    Expect 'runs debug, profile now' (Kiln php xdebug mode 'debug,profile')
     try {
         Kiln php xdebug clear | Out-Null
         if ((XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')) -notmatch 'debug\s*$') { throw 'the triggered request missed the debug worker' }
@@ -1580,6 +1580,45 @@ Check 'tool remove adminer: the site and its files go' {
     if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
 }
 
+Check 'a server Kiln doesn''t run (ADR 0091): attached by port, its databases listed, made, dumped and snapshotted; never stopped by Kiln; detached' {
+    # A MariaDB of its own, started by hand from Kiln's binaries: to Kiln, someone else's server.
+    $bin = (Get-ChildItem "$env:LOCALAPPDATA\Kiln\services\bin\mariadb" -Directory | Select-Object -First 1).FullName
+    $data = Join-Path $env:RUNNER_TEMP 'foreign-db'
+    Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+    $init = & (Join-Path $bin 'bin\mariadb-install-db.exe') "--datadir=$data" 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "mariadb-install-db failed:`n$init" }
+    $server = Start-Process (Join-Path $bin 'bin\mariadbd.exe') -PassThru -WindowStyle Hidden `
+        -ArgumentList @('--no-defaults', "--datadir=`"$data`"", '--port=3399', '--bind-address=127.0.0.1')
+    try {
+        $deadline = (Get-Date).AddSeconds(60)
+        do { Start-Sleep -Milliseconds 500; $up = Test-NetConnection 127.0.0.1 -Port 3399 -InformationLevel Quiet -WarningAction SilentlyContinue } until ($up -or (Get-Date) -gt $deadline)
+        if (-not $up) { throw 'the hand-started MariaDB never answered on 3399' }
+        Expect 'Attached foreign' (Kiln service attach mariadb --port 3399 --name foreign)
+        $listed = (& $Kiln --json service list | Select-Object -Last 1 | ConvertFrom-Json).data.instances | Where-Object { $_.name -eq 'foreign' }
+        if (-not $listed.external -or -not $listed.running) { throw "service list: $($listed | ConvertTo-Json -Depth 4)" }
+        Kiln db create foreign kiln_foreign | Out-Null
+        Expect 'kiln_foreign' (Kiln db list foreign)
+        $dumpFile = Join-Path $env:RUNNER_TEMP 'foreign.sql'
+        Remove-Item $dumpFile -ErrorAction SilentlyContinue
+        Expect 'Wrote' (Kiln db dump foreign kiln_foreign --output $dumpFile)
+        Expect 'Snapshot of kiln_foreign kept' (Kiln db snapshot foreign kiln_foreign)
+        $refused = & $Kiln service stop foreign 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect "isn't run by Kiln" $refused
+        if ($server.HasExited) { throw 'Kiln stopped the server it does not run' }
+        $wrong = & $Kiln service attach mariadb --port 3399 --name wrong --user nobody --password nope 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect "couldn't log in" $wrong
+        Expect 'Detached foreign' (Kiln service detach foreign)
+        if ($server.HasExited) { throw 'detach stopped the server' }
+    } finally {
+        & $Kiln service detach foreign 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+    }
+}
 Check 'kiln service updates (ADR 0090): every instance on Kiln''s pin; update and rollback say why they do nothing' {
     Expect 'Every service is on the patch Kiln pins' (Kiln service updates)
     $list = (& $Kiln --json service updates | Select-Object -Last 1 | ConvertFrom-Json).data.instances
@@ -1634,6 +1673,11 @@ Check 'kiln config (ADR 0089): .env and php.ini checked before saving, backed up
 }
 Check 'notifications (ADR 0087): kilnd tells of mail Mailpit caught and of a long job done, keeps them, clears them' {
     function Notices { @((Kiln daemon call notifications.list | ConvertFrom-Json).notifications) }
+    # The daemon was stopped earlier: started for this check, after which its notifier's first look
+    # (a few seconds) sets the count the new mail is told against.
+    Kiln daemon start | Out-Null
+    try {
+    Start-Sleep -Seconds 8
     Send-MailMessage -SmtpServer 127.0.0.1 -Port $script:smtp -From app@example.test -To you@example.test `
         -Subject 'kiln-notify-test' -Body 'hello' -WarningAction SilentlyContinue
     $deadline = (Get-Date).AddSeconds(40)
@@ -1650,6 +1694,10 @@ Check 'notifications (ADR 0087): kilnd tells of mail Mailpit caught and of a lon
     if (-not (Test-Path "$env:APPDATA\Kiln\notifications.json") -and -not (Get-ChildItem "$env:APPDATA\Kiln" -Recurse -Filter notifications.json -ErrorAction SilentlyContinue)) { throw 'notifications.json not written' }
     Kiln daemon call notifications.clear | Out-Null
     if ((Notices).Length -ne 0) { throw 'notifications.clear left some' }
+    } finally {
+        & $Kiln daemon stop 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
 }
 Say '== uninstall'
 Check 'kiln uninstall refuses while services hold data, and changes nothing' {

@@ -54,6 +54,12 @@ pub(crate) fn provider_of(kind: &str) -> Result<&'static dyn ServiceProvider, St
 }
 
 pub(crate) fn dirs_of(record: &ServiceRecord) -> Result<InstanceDirs, String> {
+    // A server Kiln doesn't run (ADR 0091): its tools and login.
+    if record.version == crate::external::VERSION
+        && let Some(e) = crate::external::get(&record.name)
+    {
+        return crate::external::dirs(&record.name, &e);
+    }
     Ok(InstanceDirs::new(
         &services_dir()?,
         &record.kind,
@@ -63,9 +69,13 @@ pub(crate) fn dirs_of(record: &ServiceRecord) -> Result<InstanceDirs, String> {
 }
 
 pub(crate) fn record_of(store: &StateStore, name: &str) -> Result<ServiceRecord, String> {
-    store
-        .service(name)
-        .map_err(|e| e.to_string())?
+    if let Some(record) = store.service(name).map_err(|e| e.to_string())? {
+        return Ok(record);
+    }
+    // A server Kiln doesn't run, attached by the user (ADR 0091).
+    crate::external::all(store)
+        .get(name)
+        .map(|e| crate::external::record(name, e))
         .ok_or_else(|| format!("no service called {name} (see `kiln service list`)"))
 }
 
@@ -627,6 +637,7 @@ fn ports_of_others(store: &StateStore, except: &str) -> Result<BTreeMap<u16, Str
 ///
 /// [ADR 0037]: ../../../docs/adr/0037-service-ports-and-coexistence.md
 pub fn port(name: &str, values: &[String]) -> Result<(), String> {
+    crate::external::refuse(name, "move")?;
     let mut store = crate::web::open_store()?;
     let mut record = record_of(&store, name)?;
     let provider = provider_of(&record.kind)?;
@@ -1158,6 +1169,7 @@ pub fn catalog() {
 pub fn list() -> Result<(), String> {
     let store = crate::web::open_store()?;
     let records = store.services().map_err(|e| e.to_string())?;
+    let external = crate::external::all(&store);
     if crate::out::json() {
         let projects = site_projects(&store);
         let proxies = crate::web::proxy_specs(&store).unwrap_or_default();
@@ -1190,9 +1202,35 @@ pub fn list() -> Result<(), String> {
                 "enabled": r.enabled,
                 "running": r.enabled && running && answers(r, &listeners),
                 "project": r.project,
+            })).chain(external.iter().map(|(name, e)| {
+                let r = crate::external::record(name, e);
+                serde_json::json!({
+                    "name": name,
+                    "kind": e.kind,
+                    "version": crate::external::VERSION,
+                    "ports": r.ports,
+                    "used_by": used_by(&r, &projects),
+                    "shared_url": null,
+                    "env": kiln_services::provider(&e.kind).map(|p| p.env_keys(&r.ports)).unwrap_or_default(),
+                    "web": null,
+                    "databases": true,
+                    "main_port": e.port,
+                    "enabled": true,
+                    // Not Kiln's (ADR 0091): running when its port answers.
+                    "running": std::net::TcpStream::connect_timeout(&(std::net::Ipv4Addr::LOCALHOST, e.port).into(), Duration::from_millis(300)).is_ok(),
+                    "project": null,
+                    "external": true,
+                })
             })).collect::<Vec<_>>(),
         }));
         return Ok(());
+    }
+    for (name, e) in &external {
+        say!(
+            "{name}  {} on 127.0.0.1:{}  not run by Kiln",
+            e.kind,
+            e.port
+        );
     }
     if records.is_empty() {
         let kinds: Vec<_> = kiln_services::providers()
@@ -1231,6 +1269,9 @@ pub fn list() -> Result<(), String> {
 }
 
 fn set_enabled(names: &[String], enabled: bool) -> Result<(), String> {
+    for name in names {
+        crate::external::refuse(name, if enabled { "start" } else { "stop" })?;
+    }
     let mut store = crate::web::open_store()?;
     let targets: Vec<String> = if names.is_empty() {
         store
@@ -1308,6 +1349,7 @@ pub fn stop(names: &[String]) -> Result<(), String> {
 
 /// `kiln service restart <name>`: stopped, then started again.
 pub fn restart(name: &str) -> Result<(), String> {
+    crate::external::refuse(name, "restart")?;
     let mut store = crate::web::open_store()?;
     record_of(&store, name)?;
     store
@@ -1397,6 +1439,7 @@ pub fn db(name: &str, database: Option<&str>) -> Result<(), String> {
 ///
 /// [ADR 0036]: ../../../docs/adr/0036-service-framework.md
 pub fn remove(name: &str, delete_data: bool) -> Result<(), String> {
+    crate::external::refuse(name, "remove (`kiln service detach` forgets)")?;
     let mut store = crate::web::open_store()?;
     let record = record_of(&store, name)?;
     let dirs = dirs_of(&record)?;

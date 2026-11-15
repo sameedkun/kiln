@@ -483,3 +483,13 @@ describe("config backups (ADR 0089)", async () => {
     expect(backupTime("odd.bak")).toBe("odd.bak");
   });
 });
+
+describe("attaching a server Kiln doesn't run (ADR 0091)", async () => {
+  const { attachArgs } = await import("./ServicesPage");
+  it("passes only what's given, and never the password itself", () => {
+    expect(attachArgs({ kind: "mysql", port: "3306", name: "", user: "", bin: "" }, null)).toEqual(["service", "attach", "mysql", "--port", "3306"]);
+    const full = attachArgs({ kind: "postgres", port: "5432", name: "herd-pg", user: "postgres", bin: "C:/pg" }, "abc");
+    expect(full).toEqual(["service", "attach", "postgres", "--port", "5432", "--name", "herd-pg", "--user", "postgres", "--password-staged", "abc", "--bin", "C:/pg"]);
+    expect(full.join(" ")).not.toMatch(/--password /);
+  });
+});

@@ -263,6 +263,13 @@ impl Flavor {
         bin.join("bin").join(format!("{name}{EXE_SUFFIX}"))
     }
 
+    /// [`Self::env`], with an attached server's password (ADR 0091 §2).
+    fn auth_env(dirs: &InstanceDirs) -> BTreeMap<String, String> {
+        let mut env = Self::env(&dirs.bin);
+        env.extend(dirs.password_env("MYSQL_PWD"));
+        env
+    }
+
     fn env(bin: &Path) -> BTreeMap<String, String> {
         let lib = kiln_lib(bin);
         if cfg!(target_os = "linux") && lib.is_dir() {
@@ -590,7 +597,7 @@ impl ServiceProvider for Flavor {
         let mut args = vec![
             "--host=127.0.0.1".to_owned(),
             format!("--port={}", port_of(ports)),
-            "--user=root".to_owned(),
+            format!("--user={}", dirs.user_or("root")),
             "--single-transaction".to_owned(),
             "--routines".to_owned(),
             "--events".to_owned(),
@@ -603,7 +610,7 @@ impl ServiceProvider for Flavor {
         Some(Launch {
             program: Self::tool(&dirs.bin, self.dump),
             args,
-            env: Self::env(&dirs.bin),
+            env: Self::auth_env(dirs),
             cwd: None,
             stop_command: None,
         })
@@ -627,13 +634,13 @@ impl ServiceProvider for Flavor {
         let mut args = vec![
             "--host=127.0.0.1".to_owned(),
             format!("--port={}", port_of(ports)),
-            "--user=root".to_owned(),
+            format!("--user={}", dirs.user_or("root")),
         ];
         args.extend(database.map(str::to_owned));
         Some(Launch {
             program: Self::tool(&dirs.bin, self.client),
             args,
-            env: Self::env(&dirs.bin),
+            env: Self::auth_env(dirs),
             cwd: None,
             stop_command: None,
         })

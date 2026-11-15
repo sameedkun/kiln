@@ -69,6 +69,8 @@ export interface Instance {
   shared_url?: string | null;
   /** What `kiln env use` writes into a site's .env (ADR 0068 §3). */
   env: [string, string][];
+  /** A server Kiln doesn't run, attached for wiring, dumps and snapshots (ADR 0091). */
+  external?: boolean;
 }
 /** `git.branches` (ADR 0075). */
 export interface GitBranches {

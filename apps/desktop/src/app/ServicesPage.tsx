@@ -21,7 +21,7 @@ import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { TextField } from "../components/TextField";
-import { pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServiceUpdates, type ServicesList, type SitesList } from "./api";
+import { call, pickSave, pickSql, type Instance, type ServiceKind, type ServiceLogs, type ServicesCatalog, type ServiceUpdates, type ServicesList, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { mainPort, serviceState } from "./Home";
 import { fewNames, useRead } from "./hooks";
@@ -48,6 +48,7 @@ const cols = "minmax(180px,1.2fr) 80px minmax(140px,1.3fr) 150px 112px";
 
 type Open =
   | { kind: "add" }
+  | { kind: "attach" }
   | { kind: "logs"; instance: Instance }
   | { kind: "ports"; instance: Instance }
   | { kind: "wire"; instance: Instance }
@@ -92,19 +93,25 @@ export function ServicesPage({ go }: { go: (page: string) => void }) {
         actions={
           <>
             {i.web && <Button variant="quiet" aria-label={`Open ${i.name}'s page`} title={`Open ${i.web}`} icon={<Open16Regular />} onClick={() => visit(i.web!)} />}
-            <Button
-              variant="quiet"
-              aria-label={`${running ? "Stop" : "Start"} ${i.name}`}
-              icon={running ? <Stop16Filled /> : <Play16Filled />}
-              onClick={() => run(["service", running ? "stop" : "start", i.name], `${running ? "Stopped" : "Started"} ${i.name}.`)}
-            />
+            {!i.external && (
+              <Button
+                variant="quiet"
+                aria-label={`${running ? "Stop" : "Start"} ${i.name}`}
+                icon={running ? <Stop16Filled /> : <Play16Filled />}
+                onClick={() => run(["service", running ? "stop" : "start", i.name], `${running ? "Stopped" : "Started"} ${i.name}.`)}
+              />
+            )}
             <Menu
               label={`More for ${i.name}`}
               trigger={(props) => <Button variant="quiet" aria-label={`More for ${i.name}`} icon={<MoreHorizontal16Regular />} {...props} />}
               items={[
-                { label: "Restart", onSelect: () => run(["service", "restart", i.name], `Restarted ${i.name}.`) },
-                { label: "View its log", onSelect: () => setOpen({ kind: "logs", instance: i }) },
-                ...(Object.keys(i.ports).length ? [{ label: "Change a port…", onSelect: () => setOpen({ kind: "ports", instance: i }) }] : []),
+                ...(i.external
+                  ? [{ label: "Detach (Kiln forgets it)", onSelect: () => run(["service", "detach", i.name], `Kiln forgot ${i.name}; the server is as it was.`) }]
+                  : [
+                      { label: "Restart", onSelect: () => run(["service", "restart", i.name], `Restarted ${i.name}.`) },
+                      { label: "View its log", onSelect: () => setOpen({ kind: "logs", instance: i }) },
+                      ...(Object.keys(i.ports).length ? [{ label: "Change a port…", onSelect: () => setOpen({ kind: "ports", instance: i }) }] : []),
+                    ]),
                 ...(i.project ? [] : [{ label: "Wire a site to it…", onSelect: () => setOpen({ kind: "wire", instance: i }) }]),
                 ...(i.databases && i.kind !== "mongodb"
                   ? [
@@ -146,9 +153,14 @@ export function ServicesPage({ go }: { go: (page: string) => void }) {
       title="Services"
       after={services.data && <span className="figures text-[13px] text-text-3">{`${running} of ${instances.length} running`}</span>}
       actions={
-        <Button icon={<Add16Regular />} onClick={() => setOpen({ kind: "add" })}>
-          Add a service
-        </Button>
+        <>
+          <Button variant="quiet" onClick={() => setOpen({ kind: "attach" })}>
+            Attach a server…
+          </Button>
+          <Button icon={<Add16Regular />} onClick={() => setOpen({ kind: "add" })}>
+            Add a service
+          </Button>
+        </>
       }
     >
       {services.error && <p className="text-[13px] text-bad">{services.error}</p>}
@@ -179,6 +191,7 @@ export function ServicesPage({ go }: { go: (page: string) => void }) {
       })}
 
       {open?.kind === "add" && <AddDialog sites={sites.data} onClose={() => setOpen(null)} />}
+      {open?.kind === "attach" && <AttachDialog onClose={() => setOpen(null)} />}
       {open?.kind === "logs" && <LogsDialog instance={open.instance} onClose={() => setOpen(null)} />}
       {open?.kind === "ports" && <PortsDialog instance={open.instance} onClose={() => setOpen(null)} />}
       {open?.kind === "wire" && <WireDialog instance={open.instance} sites={sites.data} onClose={() => setOpen(null)} />}
@@ -190,6 +203,61 @@ export function ServicesPage({ go }: { go: (page: string) => void }) {
 }
 
 /** A dialog whose main button runs one job, then closes. */
+/** `kiln service attach`'s arguments; the password goes staged, never as one (ADR 0091). */
+export function attachArgs(a: { kind: string; port: string; name: string; user: string; bin: string }, staged: string | null): string[] {
+  return [
+    "service",
+    "attach",
+    a.kind,
+    "--port",
+    a.port,
+    ...(a.name.trim() ? ["--name", a.name.trim()] : []),
+    ...(a.user.trim() ? ["--user", a.user.trim()] : []),
+    ...(staged ? ["--password-staged", staged] : []),
+    ...(a.bin.trim() ? ["--bin", a.bin.trim()] : []),
+  ];
+}
+
+// A server Kiln doesn't run, attached (ADR 0091): Herd's or XAMPP's database, a Windows service.
+function AttachDialog({ onClose }: { onClose: () => void }) {
+  const { run } = useChanges();
+  const [a, setA] = useState({ kind: "mysql", port: "3306", name: "", user: "", bin: "" });
+  const [password, setPassword] = useState("");
+  const port = Number(a.port);
+  const ready = Number.isInteger(port) && port > 0 && port < 65536;
+  return (
+    <JobDialog
+      title="Attach a database server"
+      action="Attach"
+      ready={ready}
+      onClose={onClose}
+      work={async () => {
+        const staged = password ? (await call<{ token: string }>("config.stage", { text: password })).token : null;
+        await run(attachArgs(a, staged), "Attached: wire a site to it from its row.");
+      }}
+    >
+      <p className="mt-0">For a MySQL, MariaDB or PostgreSQL server Kiln doesn't run, such as Herd's or XAMPP's. Kiln wires sites to it, dumps and snapshots it when you ask, and never starts, stops or changes it.</p>
+      <div className="flex flex-col gap-3">
+        <Select
+          label="Kind"
+          value={a.kind}
+          onChange={(e) => setA({ ...a, kind: e.target.value, port: e.target.value === "postgres" ? "5432" : "3306" })}
+          options={[
+            { value: "mysql", label: "MySQL" },
+            { value: "mariadb", label: "MariaDB" },
+            { value: "postgres", label: "PostgreSQL" },
+          ]}
+        />
+        <TextField label="Port on 127.0.0.1" value={a.port} onChange={(e) => setA({ ...a, port: e.target.value })} error={a.port && !ready ? "A port, 1 to 65535." : undefined} />
+        <TextField label="User" placeholder={a.kind === "postgres" ? "postgres" : "root"} value={a.user} onChange={(e) => setA({ ...a, user: e.target.value })} />
+        <TextField label="Password" type="password" placeholder="none" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <TextField label="Its install folder (optional)" mono placeholder="C:\xampp\mysql" value={a.bin} onChange={(e) => setA({ ...a, bin: e.target.value })} hint="The folder with bin\ in it, for its own tools. Empty: one of Kiln's own installs of that kind." />
+        <TextField label="Name in Kiln (optional)" placeholder={`${a.kind}-${a.port}`} value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} />
+      </div>
+    </JobDialog>
+  );
+}
+
 export function JobDialog({
   title,
   action,

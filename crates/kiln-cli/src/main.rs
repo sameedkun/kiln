@@ -23,6 +23,7 @@ mod dump;
 mod editor;
 mod env;
 mod ext;
+mod external;
 mod footprint;
 mod git;
 mod groups;
@@ -679,6 +680,32 @@ enum ServiceAction {
     Catalog,
     /// Which services are on an older patch than the one Kiln pins for their series (ADR 0090).
     Updates,
+    /// Use a MySQL, MariaDB or PostgreSQL server Kiln doesn't run (Herd's, XAMPP's, a Windows
+    /// service) for wiring, dumps and snapshots; Kiln never starts or changes it (ADR 0091).
+    Attach {
+        /// mysql, mariadb or postgres.
+        kind: String,
+        /// Its port on 127.0.0.1.
+        #[arg(long)]
+        port: u16,
+        /// The name it gets in Kiln (default: <kind>-<port>).
+        #[arg(long)]
+        name: Option<String>,
+        /// Its login (default: root, or postgres).
+        #[arg(long)]
+        user: Option<String>,
+        /// Its password (default: none).
+        #[arg(long)]
+        password: Option<String>,
+        /// Its password, staged by the app (`config.stage`), so it never shows in a job.
+        #[arg(long)]
+        password_staged: Option<String>,
+        /// Its install folder (the one with bin\ in it), for its own client and dump tools.
+        #[arg(long)]
+        bin: Option<PathBuf>,
+    },
+    /// Forget an attached server; nothing on it changes.
+    Detach { name: String },
     /// Update services to the patch Kiln pins: data stays, a database is snapshotted first,
     /// the previous version is kept for `kiln service rollback` (ADR 0090).
     Update {
@@ -904,7 +931,11 @@ enum XdebugAction {
     },
     /// Choose what the debug worker runs on a trigger: debug, profile, trace, or several,
     /// e.g. `debug,profile` (ADR 0088).
-    Mode { modes: String },
+    Mode {
+        /// debug, profile, trace: comma-separated or as separate words.
+        #[arg(required = true)]
+        modes: Vec<String>,
+    },
     /// Where Xdebug is on, its modes, and the profile and trace files.
     Status,
     /// Delete the profile and trace files.
@@ -1360,7 +1391,7 @@ fn run_php(action: PhpAction) -> Result<(), String> {
         PhpAction::Xdebug { action } => match action {
             XdebugAction::On { php } => xdebug::on(php.as_deref()),
             XdebugAction::Off { php } => xdebug::off(php.as_deref()),
-            XdebugAction::Mode { modes } => xdebug::set_modes(&modes),
+            XdebugAction::Mode { modes } => xdebug::set_modes(&modes.join(",")),
             XdebugAction::Status => xdebug::status(),
             XdebugAction::Clear => xdebug::clear(),
         },
@@ -1461,6 +1492,24 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
         ServiceAction::Stop { names } => service::stop(&names),
         ServiceAction::Restart { name } => service::restart(&name),
         ServiceAction::Updates => service_update::list(),
+        ServiceAction::Attach {
+            kind,
+            port,
+            name,
+            user,
+            password,
+            password_staged,
+            bin,
+        } => external::attach_with(
+            &kind,
+            port,
+            name.as_deref(),
+            user.as_deref(),
+            password,
+            password_staged.as_deref(),
+            bin,
+        ),
+        ServiceAction::Detach { name } => external::detach(&name),
         ServiceAction::Update { names, all, yes } => service_update::update(&names, all, yes),
         ServiceAction::Rollback { name, yes } => service_update::rollback(&name, yes),
         ServiceAction::Port { name, ports } => service::port(&name, &ports),

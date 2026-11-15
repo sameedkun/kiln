@@ -121,6 +121,16 @@ pub struct InstanceDirs {
     pub data: PathBuf,
     /// `<services>/<name>/<name>.log`: its output.
     pub log: PathBuf,
+    /// The login of a server Kiln doesn't run (ADR 0091); Kiln's own use the kind's default.
+    pub auth: Option<Auth>,
+}
+
+/// A database server's login (ADR 0091 §2). The password reaches tools through the
+/// environment, never a command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth {
+    pub user: String,
+    pub password: String,
 }
 
 impl InstanceDirs {
@@ -132,7 +142,24 @@ impl InstanceDirs {
             bin: bin_dir(services, kind, version),
             data: services.join(name).join("data"),
             log: services.join(name).join(format!("{name}.log")),
+            auth: None,
         }
+    }
+
+    /// The user to log in as: the attached server's, else `default`.
+    #[must_use]
+    pub fn user_or<'a>(&'a self, default: &'a str) -> &'a str {
+        self.auth.as_ref().map_or(default, |a| a.user.as_str())
+    }
+
+    /// `var` set to the password, when there is one.
+    #[must_use]
+    pub fn password_env(&self, var: &str) -> BTreeMap<String, String> {
+        self.auth
+            .as_ref()
+            .filter(|a| !a.password.is_empty())
+            .map(|a| BTreeMap::from([(var.to_owned(), a.password.clone())]))
+            .unwrap_or_default()
     }
 
     /// `<services>/<name>`, which holds the data folder and the log.

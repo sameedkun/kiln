@@ -347,7 +347,7 @@ impl ServiceProvider for Postgres {
         let mut args = vec![
             "--host=127.0.0.1".to_owned(),
             format!("--port={}", port_of(ports)),
-            format!("--username={SUPERUSER}"),
+            format!("--username={}", dirs.user_or(SUPERUSER)),
         ];
         let program = match database {
             Some(name) => {
@@ -363,7 +363,7 @@ impl ServiceProvider for Postgres {
         Some(Launch {
             program: tool(&dirs.bin, program),
             args,
-            env: BTreeMap::new(),
+            env: dirs.password_env("PGPASSWORD"),
             cwd: None,
             stop_command: None,
         })
@@ -392,13 +392,13 @@ impl ServiceProvider for Postgres {
         let mut args = vec![
             "--host=127.0.0.1".to_owned(),
             format!("--port={}", port_of(ports)),
-            format!("--username={SUPERUSER}"),
+            format!("--username={}", dirs.user_or(SUPERUSER)),
         ];
         args.extend(database.map(|d| format!("--dbname={d}")));
         Some(Launch {
             program: tool(&dirs.bin, "psql"),
             args,
-            env: BTreeMap::new(),
+            env: dirs.password_env("PGPASSWORD"),
             cwd: None,
             stop_command: None,
         })

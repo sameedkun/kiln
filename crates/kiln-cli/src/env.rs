@@ -284,6 +284,21 @@ fn wordpress_keys(
     }
 }
 
+/// A server Kiln doesn't run logs in its own way (ADR 0091 §2): its user and password in
+/// place of Kiln's defaults.
+fn with_external_login(name: &str, mut keys: Vec<(String, String)>) -> Vec<(String, String)> {
+    if let Some(e) = crate::external::get(name) {
+        for (key, value) in &mut keys {
+            match key.as_str() {
+                "DB_USERNAME" | "DB_USER" => value.clone_from(&e.user),
+                "DB_PASSWORD" => value.clone_from(&e.password),
+                _ => {}
+            }
+        }
+    }
+    keys
+}
+
 /// What the project may still need after the change.
 fn notes(kind: &str, project: &Path, drivers: bool) {
     if kind == "redis"
@@ -354,6 +369,7 @@ pub fn use_instance(
         Target::Bedrock(_) => wordpress_keys(provider, &record, database.as_deref(), true)?,
         Target::WpConfig(_) => wordpress_keys(provider, &record, database.as_deref(), false)?,
     };
+    let keys = with_external_login(name, keys);
     let text =
         std::fs::read_to_string(&env).map_err(|e| format!("cannot read {}: {e}", env.display()))?;
     let current = |k: &str| match &target {
