@@ -17,6 +17,7 @@ mod apply;
 mod coexist;
 mod daemon;
 mod doctor;
+mod domain;
 mod dump;
 mod env;
 mod ext;
@@ -196,6 +197,12 @@ enum Command {
         site: String,
         /// The group's name, e.g. "Acme".
         group: Option<String>,
+    },
+    /// A site's other names, kept by Kiln (not in the project): add, remove or list them
+    /// (ADR 0083).
+    Domain {
+        #[command(subcommand)]
+        action: DomainAction,
     },
     /// How fast each site answers, from the web server's access log: requests, failures,
     /// median, slowest 5%, the slowest requests (ADR 0065). Changes nothing.
@@ -503,6 +510,26 @@ enum DbAction {
         /// The database to load it into.
         database: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum DomainAction {
+    /// Give a site other names, e.g. `kiln domain add shop admin api` (admin.test, api.test).
+    Add {
+        /// The site, e.g. shop or shop.test.
+        site: String,
+        /// The names, short (admin) or with the TLD (admin.test).
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+    /// Take names Kiln added away from a site.
+    Remove {
+        site: String,
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+    /// Each site's other names, Kiln's and its kiln.toml's.
+    List { site: Option<String> },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1313,11 +1340,11 @@ fn run(command: Command) -> Result<(), String> {
         | Command::Git { .. }
         | Command::Share { .. }
         | Command::Tinker { .. }
-        | Command::Init { .. }) => run_site_tools(command),
+        | Command::Init { .. }
+        | Command::Domain { .. }) => run_site_tools(command),
         Command::Updates { action } => run_updates(action),
-        Command::Cache {
-            action: CacheAction::Clear,
-        } => footprint::clear_cache(),
+        // `clear` is its only action.
+        Command::Cache { .. } => footprint::clear_cache(),
         Command::Logs { source, lines } => logs::logs(source.as_deref(), lines),
         Command::Plan {
             target: PlanTarget::Hosts { names, tld, file },
@@ -1437,6 +1464,11 @@ fn run_site_tools(command: Command) -> Result<(), String> {
             no_build,
             yes,
         }),
+        Command::Domain { action } => match action {
+            DomainAction::Add { site, names } => domain::add(&site, &names),
+            DomainAction::Remove { site, names } => domain::remove(&site, &names),
+            DomainAction::List { site } => domain::list(site.as_deref()),
+        },
         _ => unreachable!("run passes only a site's tools here"),
     }
 }

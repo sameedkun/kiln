@@ -19,4 +19,6 @@ pub mod resolve;
 
 pub use driver::{Driver, detect};
 pub use manifest::Manifest;
-pub use resolve::{Link, Resolved, Site, Skipped, Source, parked_parent, resolve};
+pub use resolve::{
+    Link, Resolved, Site, Skipped, Source, add_domains, full_name, parked_parent, resolve,
+};

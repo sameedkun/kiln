@@ -50,6 +50,8 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["unisolate"], false),
     (&["proxy"], false),
     (&["group"], false),
+    (&["domain", "add"], false),
+    (&["domain", "remove"], false),
     (&["share"], false),
     (&["git", "switch"], false),
     (&["git", "trust"], false),

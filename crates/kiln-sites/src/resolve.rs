@@ -38,8 +38,11 @@ pub struct Site {
     pub source: Source,
     /// The project's `kiln.toml`, if it has a usable one (ADR 0027).
     pub manifest: Option<Manifest>,
-    /// For a name from `kiln.toml`'s `aliases`: the site it is another name for.
+    /// For a name from `kiln.toml`'s `aliases`, or one Kiln keeps: the site it is another
+    /// name for.
     pub alias_of: Option<HostName>,
+    /// An extra name Kiln keeps (`kiln domain add`, ADR 0083), not one from `kiln.toml`.
+    pub domain: bool,
 }
 
 impl Site {
@@ -78,6 +81,7 @@ fn site(host: HostName, project: PathBuf, secure: bool, source: Source) -> Site 
         source,
         manifest: None,
         alias_of: None,
+        domain: false,
     }
 }
 
@@ -130,6 +134,57 @@ fn apply_manifests(by_host: &mut BTreeMap<String, Site>, tld: &Tld, warnings: &m
         alias.alias_of = Some(main);
         by_host.insert(host.to_string(), alias);
     }
+}
+
+/// `name` as a host under `tld`: `admin` and `admin.test` are both `admin.test`.
+///
+/// # Errors
+/// Not a name a site can have.
+pub fn full_name(name: &str, tld: &Tld) -> Result<HostName, String> {
+    let name = name.to_ascii_lowercase();
+    let fqdn = if name.ends_with(&format!(".{tld}")) {
+        name
+    } else {
+        format!("{name}.{tld}")
+    };
+    HostName::new(&fqdn, tld).map_err(|e| e.to_string())
+}
+
+/// Adds the extra names Kiln keeps (ADR 0083): each another site for its main site's folder,
+/// unless the main site isn't served or the name is taken (a warning).
+pub fn add_domains(resolved: &mut Resolved, domains: &BTreeMap<String, Vec<String>>, tld: &Tld) {
+    let mut by_host: BTreeMap<String, Site> = std::mem::take(&mut resolved.sites)
+        .into_iter()
+        .map(|s| (s.host.to_string(), s))
+        .collect();
+    for (main, names) in domains {
+        let Some(site) = by_host.get(main).filter(|s| s.alias_of.is_none()).cloned() else {
+            continue; // its site is gone: kept until removed or the site returns
+        };
+        for name in names {
+            let host = match full_name(name, tld) {
+                Ok(host) => host,
+                Err(e) => {
+                    resolved
+                        .warnings
+                        .push(format!("{main}: name {name:?} skipped: {e}"));
+                    continue;
+                }
+            };
+            if by_host.contains_key(host.as_str()) {
+                resolved.warnings.push(format!(
+                    "{main}: name {host} skipped: that name is already a site"
+                ));
+                continue;
+            }
+            let mut alias = site.clone();
+            alias.host = host.clone();
+            alias.alias_of = Some(site.host.clone());
+            alias.domain = true;
+            by_host.insert(host.to_string(), alias);
+        }
+    }
+    resolved.sites = by_host.into_values().collect();
 }
 
 /// Merges `links` with the subfolders of `parked` (in the order they were parked). A link
@@ -270,6 +325,53 @@ mod tests {
         assert!(
             resolved.skipped[0].folder.ends_with("my_app"),
             "underscore isn't a valid label"
+        );
+    }
+
+    #[test]
+    fn kilns_extra_names_serve_as_aliases_unless_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let shop = dir.path().join("shop");
+        let blog = dir.path().join("blog");
+        touch(&shop.join("index.php"));
+        touch(&blog.join("index.php"));
+        let links = [
+            Link {
+                host: "shop.test".into(),
+                project: shop.clone(),
+                secure: true,
+            },
+            Link {
+                host: "blog.test".into(),
+                project: blog,
+                secure: false,
+            },
+        ];
+        let tld = Tld::default();
+        let mut resolved = resolve(&links, &[], &tld);
+        let domains = BTreeMap::from([
+            (
+                "shop.test".to_owned(),
+                vec!["admin".to_owned(), "API.test".to_owned(), "blog".to_owned()],
+            ),
+            ("gone.test".to_owned(), vec!["old".to_owned()]),
+        ]);
+        add_domains(&mut resolved, &domains, &tld);
+        assert_eq!(
+            hosts(&resolved),
+            ["admin.test", "api.test", "blog.test", "shop.test"]
+        );
+        let admin = &resolved.sites[0];
+        assert!(admin.domain && admin.secure);
+        assert_eq!(admin.project, shop);
+        assert_eq!(
+            admin.alias_of.as_ref().map(HostName::as_str),
+            Some("shop.test")
+        );
+        assert!(!resolved.sites[2].domain, "blog.test stays its own site");
+        assert_eq!(
+            resolved.warnings,
+            ["shop.test: name blog.test skipped: that name is already a site"]
         );
     }
 

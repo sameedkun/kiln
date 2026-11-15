@@ -31,7 +31,7 @@ interface Changes {
 
 /** Whether a command adds names that the hosts file needs (a site, a parked folder, a tool). */
 export function addsNames(args: string[]): boolean {
-  return ["link", "park", "proxy", "init"].includes(args[0]) || (args[0] === "tool" && args[1] === "add") || (args[0] === "service" && args[1] === "add");
+  return ["link", "park", "proxy", "init"].includes(args[0]) || (args[0] === "domain" && args[1] === "add") || (args[0] === "tool" && args[1] === "add") || (args[0] === "service" && args[1] === "add");
 }
 
 /** A download's progress in a few words: "Downloading mysql.zip · 34 of 120 MB". */

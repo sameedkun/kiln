@@ -22,6 +22,7 @@ import { useRead } from "./hooks";
 import { framework, frameworkId } from "./SitesPage";
 import { FrameworkMark } from "../components/FrameworkMark";
 import { SiteCheck } from "./SiteCheck";
+import { SiteNames } from "./SiteNames";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
 
@@ -134,6 +135,7 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       <SiteGlance site={site} />
       <SiteGit site={site} go={go} />
       <SiteShare site={site} />
+      <SiteNames site={site} />
       <Section title="How it runs">
         <li className="flex flex-wrap items-start gap-x-10 gap-y-4 border-b border-line px-1 py-4">
           {site.php ? (

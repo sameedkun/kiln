@@ -29,6 +29,10 @@ export interface Site {
   lan_url?: string | null;
   /** The group it's shown in (ADR 0074). */
   group?: string | null;
+  /** An extra name Kiln keeps (ADR 0083). */
+  domain?: boolean;
+  /** A main site's other names, and where each is kept (ADR 0083 §3). */
+  aliases?: { host: string; from: "kiln" | "kiln.toml" }[];
   framework_version: string | null;
   node: { version: string | null; asked_by: string | null; asks_for: string | null; fell_back: boolean };
 }

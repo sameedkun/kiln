@@ -889,6 +889,7 @@ dependencies = [
  "kiln-sites",
  "kiln-state",
  "kiln-sys",
+ "serde_json",
  "tempfile",
 ]
 

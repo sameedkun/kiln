@@ -488,3 +488,47 @@ describe("a site's checks (ADR 0081)", () => {
     expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["init", "D:/Code/shop"], mode: "preview" });
   });
 });
+
+describe("a site's other names (ADR 0083)", () => {
+  it("lists Kiln's names with Remove and kiln.toml's as such, and adds one", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+      aliases: [
+        { host: "admin.test", from: "kiln" },
+        { host: "team.test", from: "kiln.toml" },
+      ],
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["settings.get"] = () => ({ wildcard_dns: true });
+    answers["jobs.start"] = () => ({ job: 9 });
+    answers["jobs.get"] = () => ({
+      running: false,
+      finished: { job: 9, ok: true, exit: 0, needs_confirmation: false, last: { type: "result" } },
+      events: [],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    const names = await screen.findByRole("region", { name: "Other names" });
+    expect(names.textContent).toContain("admin.test");
+    expect(names.textContent).toContain("team.test");
+    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+    await userEvent.type(screen.getByLabelText("Add a name"), "api");
+    expect(screen.getByText(/at api\.test too/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["domain", "add", "shop.test", "api"], mode: "apply" });
+  });
+});

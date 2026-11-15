@@ -21,6 +21,23 @@ pub const DEFAULT_KEY: &str = "php.default";
 /// [ADR 0033]: ../../../docs/adr/0033-configurable-tld.md
 pub const TLD_KEY: &str = "tld";
 
+/// The `sites.domains` setting: the extra names Kiln keeps for each site, as JSON
+/// (`{"shop.test": ["admin.shop.test"]}`, [ADR 0083]).
+///
+/// [ADR 0083]: ../../../docs/adr/0083-extra-site-names.md
+pub const DOMAINS_KEY: &str = "sites.domains";
+
+/// Every site's extra names, by its host. A setting Kiln can't read counts as none.
+#[must_use]
+pub fn domains(store: &StateStore) -> BTreeMap<String, Vec<String>> {
+    store
+        .setting(DOMAINS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
 /// The development TLD sites are served under: the recorded one, else `test`. A setting Kiln
 /// can't read (edited by hand) falls back to `test` rather than stopping every command.
 pub fn tld(store: &StateStore) -> Result<Tld, StateError> {
@@ -42,7 +59,10 @@ pub fn sites(store: &StateStore) -> Result<Resolved, StateError> {
         })
         .collect();
     let parked = store.parked()?;
-    Ok(kiln_sites::resolve(&links, &parked, &tld(store)?))
+    let tld = tld(store)?;
+    let mut resolved = kiln_sites::resolve(&links, &parked, &tld);
+    kiln_sites::add_domains(&mut resolved, &domains(store), &tld);
+    Ok(resolved)
 }
 
 /// Installed versions that are complete on disk, oldest first.

@@ -533,6 +533,45 @@ Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link se
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $clone
     }
 }
+Check 'kiln domain (ADR 0083): another name serves the site and goes again; APP_URL follows kiln secure and unsecure on the site''s own name only' {
+    $names = Join-Path $projects 'names'
+    New-Item -ItemType Directory -Force $names | Out-Null
+    Set-Content (Join-Path $names 'index.php') -Encoding ascii -Value '<?php echo "names-site:" . $_SERVER["HTTP_HOST"];'
+    Set-Content (Join-Path $names '.env') -Encoding ascii -Value "APP_NAME=Names`nAPP_URL=http://names.test`n"
+    $envFile = Join-Path $names '.env'
+    try {
+        Kiln link names --path $names | Out-Null
+        Expect 'extra-names.test is another name for names.test now' (Kiln domain add names extra-names)
+        Expect 'extra-names.test  (Kiln)' (Kiln domain list names)
+        $page = Page (SiteBase 'extra-names')
+        if ($page -notmatch 'names-site:extra-names\.test') { throw "extra-names.test answered:`n$page" }
+        $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'names.test' })
+        if (-not ($site.aliases | Where-Object { $_.host -eq 'extra-names.test' -and $_.from -eq 'kiln' })) { throw "no aliases in the sites JSON: $($site | ConvertTo-Json -Depth 4)" }
+        $refused = & $Kiln domain add names shop 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect 'shop.test is already a site' $refused
+
+        # HTTPS on: APP_URL follows on the site's own name, journaled.
+        $out = Kiln secure names
+        $op = [regex]::Match($out, 'APP_URL in its \.env follows: (https://names\.test\S*) \(undo with `kiln undo (\d+)`\)')
+        if (-not $op.Success) { throw "APP_URL didn't follow:`n$out" }
+        if ((Get-Content $envFile -Raw) -notmatch "APP_URL=$([regex]::Escape($op.Groups[1].Value))") { throw ".env after secure:`n$(Get-Content $envFile -Raw)" }
+        Expect 'APP_URL=http://names.test' ((Kiln unsecure names) + (Get-Content $envFile -Raw))
+        # An APP_URL on another address is left alone.
+        Set-Content $envFile -Encoding ascii -Value "APP_URL=https://names.example.com`n"
+        Expect 'another address: left as it is' (Kiln secure names)
+        if ((Get-Content $envFile -Raw).Trim() -ne 'APP_URL=https://names.example.com') { throw 'an APP_URL on another address was changed' }
+        Kiln unsecure names | Out-Null
+
+        Expect 'extra-names.test is no longer a name of names.test' (Kiln domain remove names extra-names)
+        Expect 'no other names' (Kiln domain list names)
+    } finally {
+        & $Kiln domain remove names extra-names 2>&1 | Out-Null
+        & $Kiln unlink names 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $names
+    }
+}
 Check 'kiln group shop "Acme Corp" (ADR 0074): in the sites list with its group, then out of it' {
     Expect 'shop.test is in the group Acme Corp' (Kiln group shop 'Acme Corp')
     $site = ((& $Kiln --json sites | Select-Object -Last 1 | ConvertFrom-Json).data.sites | Where-Object { $_.host -eq 'shop.test' })

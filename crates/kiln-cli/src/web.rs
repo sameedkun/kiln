@@ -739,7 +739,83 @@ pub fn set_secure(name: &str, secure: bool) -> Result<(), String> {
     } else {
         say!("{host} is back to plain HTTP: {url}");
     }
+    if !is_proxy {
+        follow_app_url(&store, &host, &url)?;
+    }
     apply_site_change(&store)
+}
+
+/// What becomes of an `APP_URL` when the site's URL changes.
+#[derive(Debug, PartialEq, Eq)]
+enum AppUrl {
+    /// It names the site: this is it on the site's origin now.
+    Follow(String),
+    /// It names the site and is already on its origin.
+    Right,
+    /// It names another address (a tunnel, production): left alone.
+    Other,
+}
+
+/// `app_url` against the site's URL: its host decides (any scheme or port); its path stays.
+fn followed_app_url(app_url: &str, host: &str, url: &str) -> AppUrl {
+    let Some(rest) = app_url
+        .strip_prefix("https://")
+        .or_else(|| app_url.strip_prefix("http://"))
+    else {
+        return AppUrl::Other;
+    };
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let named = authority.split(':').next().unwrap_or_default();
+    if !named.eq_ignore_ascii_case(host) {
+        return AppUrl::Other;
+    }
+    let followed = format!("{}{path}", url.trim_end_matches('/'));
+    if followed == app_url {
+        AppUrl::Right
+    } else {
+        AppUrl::Follow(followed)
+    }
+}
+
+/// `kiln secure` and `unsecure` keep a Laravel app's `APP_URL` on the site's scheme
+/// ([ADR 0083] §4): a journaled `.env` change, only when `APP_URL` names the site.
+///
+/// [ADR 0083]: ../../../docs/adr/0083-extra-site-names.md
+fn follow_app_url(store: &StateStore, host: &HostName, url: &str) -> Result<(), String> {
+    let Some(site) = resolved(store)?
+        .sites
+        .into_iter()
+        .find(|s| &s.host == host && s.alias_of.is_none())
+    else {
+        return Ok(());
+    };
+    let env = site.project.join(".env");
+    let Ok(text) = std::fs::read_to_string(&env) else {
+        return Ok(());
+    };
+    let Some(app_url) = kiln_platform::env_file::value_of(&text, "APP_URL") else {
+        return Ok(());
+    };
+    match followed_app_url(&app_url, host.as_str(), url) {
+        AppUrl::Follow(followed) => {
+            let op: Box<dyn kiln_ops::Operation> =
+                Box::new(kiln_platform::env_file::EnvKeysOp::new(
+                    env,
+                    vec![("APP_URL".to_owned(), followed.clone())],
+                ));
+            let id = apply::apply_quietly(&[op])?.first().copied();
+            say!(
+                "APP_URL in its .env follows: {followed}{}.",
+                id.map(|id| format!(" (undo with `kiln undo {id}`)"))
+                    .unwrap_or_default()
+            );
+        }
+        AppUrl::Other if !app_url.is_empty() => {
+            say!("APP_URL in its .env is {app_url}, another address: left as it is.");
+        }
+        AppUrl::Other | AppUrl::Right => {}
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1045,6 +1121,14 @@ fn sites_data(
     let groups = crate::groups::groups(store);
     let lan = lan_shares(store);
     let lan_ip = if lan.is_empty() { None } else { lan_ip() };
+    // Each main site's other names, and where each is kept (ADR 0083 §3).
+    let names_of = |host: &str| -> Vec<serde_json::Value> {
+        all.sites
+            .iter()
+            .filter(|a| a.alias_of.as_ref().is_some_and(|m| m.as_str() == host))
+            .map(|a| json!({"host": a.host.as_str(), "from": if a.domain { "kiln" } else { "kiln.toml" }}))
+            .collect()
+    };
     let sites: Vec<_> = all
         .sites
         .iter()
@@ -1076,6 +1160,8 @@ fn sites_data(
                 "source": source,
                 "parked_in": folder,
                 "alias_of": site.alias_of.as_ref().map(HostName::as_str),
+                "domain": site.domain,
+                "aliases": names_of(host),
                 "php": php,
                 "in_hosts": listed(host),
                 "project": site.project,
@@ -1503,5 +1589,44 @@ mod framework_tests {
             framework_version(kiln_sites::Driver::WordPress, dir.path()).as_deref(),
             Some("6.8.3")
         );
+    }
+}
+
+#[cfg(test)]
+mod app_url_tests {
+    use super::*;
+
+    #[test]
+    fn app_url_follows_the_sites_scheme_and_port_only_on_its_own_name() {
+        let follow = |app: &str, url: &str| followed_app_url(app, "shop.test", url);
+        assert_eq!(
+            follow("http://shop.test", "https://shop.test/"),
+            AppUrl::Follow("https://shop.test".into())
+        );
+        assert_eq!(
+            follow("https://shop.test:8443/app", "http://shop.test:8080/"),
+            AppUrl::Follow("http://shop.test:8080/app".into())
+        );
+        assert_eq!(
+            follow("https://SHOP.test/app", "https://shop.test/"),
+            AppUrl::Follow("https://shop.test/app".into())
+        );
+        assert_eq!(
+            follow("https://shop.test/app", "https://shop.test/"),
+            AppUrl::Right
+        );
+        assert_eq!(
+            follow("https://shop.test", "https://shop.test/"),
+            AppUrl::Right
+        );
+        assert_eq!(
+            follow("http://localhost", "https://shop.test/"),
+            AppUrl::Other
+        );
+        assert_eq!(
+            follow("https://abc.trycloudflare.com", "https://shop.test/"),
+            AppUrl::Other
+        );
+        assert_eq!(follow("", "https://shop.test/"), AppUrl::Other);
     }
 }

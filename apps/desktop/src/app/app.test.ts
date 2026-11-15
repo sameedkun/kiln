@@ -382,3 +382,18 @@ describe("wiring a WordPress site (ADR 0082)", async () => {
     expect(wireText("laravel", "mysql")).toMatch(/^Kiln sets the keys in the site's .env/);
   });
 });
+
+describe("a site's other names (ADR 0083)", async () => {
+  const { fullName, validName } = await import("./SiteNames");
+  const { addsNames } = await import("./Change");
+  it("writes a short name under the TLD and checks its labels", () => {
+    expect(fullName("Admin", "test")).toBe("admin.test");
+    expect(fullName("api.shop.test", "test")).toBe("api.shop.test");
+    expect(validName("api.shop")).toBe(true);
+    for (const bad of ["-api", "api-", "a b", "a..b", "x_y", ""]) expect(validName(bad)).toBe(false);
+  });
+  it("offers the hosts file after adding one, not after removing one", () => {
+    expect(addsNames(["domain", "add", "shop.test", "admin"])).toBe(true);
+    expect(addsNames(["domain", "remove", "shop.test", "admin.test"])).toBe(false);
+  });
+});
