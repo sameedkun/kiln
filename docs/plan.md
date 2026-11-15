@@ -308,7 +308,7 @@ Linux and macOS features, and anything that listens beyond loopback, are left ou
 |---|---|---|---|
 | P4E-01 | A cloned project to a running site in one step (`kiln init`): PHP, HTTPS and services asked once, then composer and JS installs, `.env` and its key, migrations, storage link, asset build; resumable | M | builds on `services up`, `env use`, `new --db` |
 | P4E-02 | Site doctor: `.env` against `.env.example` (missing, extra, duplicate keys), the app key, vendor and node_modules, the database exists, the PHP range, wiring, the site's own answer; each fix previewed | M | **built** 2026-11-15, [ADR 0081](adr/0081-site-doctor.md); not `--fix` (ADR 0017): each fix is its own command (`init` and `env use` previewed, the rest asked in words) |
-| P4E-03 | Service settings for non-Laravel config files: `env use` writes `wp-config.php` (and later Drupal's `settings.php`) in place, with undo | S | |
+| P4E-03 | Service settings for non-Laravel config files: `env use` writes `wp-config.php` (and later Drupal's `settings.php`) in place, with undo | S | **built** 2026-11-15, [ADR 0082](adr/0082-wordpress-config.md); Bedrock's `.env` too; Drupal later |
 | P4E-04 | Extra names per site from the CLI and app (`kiln domain add/remove`); `secure` and `unsecure` keep `APP_URL` in step | S | |
 | P4E-05 | Run commands from the site page: artisan, composer scripts, tests, `vendor/bin` tools (Pint, PHPStan, Pest), streamed | S–M | |
 | P4E-06 | Open in your editor: detected (VS Code, PhpStorm, Cursor, Zed, Sublime) or chosen; `kiln code`; `file:line` in logs opens there | S | |

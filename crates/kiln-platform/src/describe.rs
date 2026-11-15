@@ -10,6 +10,7 @@ use crate::autostart::AUTOSTART_KIND;
 use crate::env_file::ENV_KEYS_KIND;
 use crate::hosts_op::HOSTS_BLOCK_KIND;
 use crate::nrpt_op::NRPT_KIND;
+use crate::php_defines::PHP_DEFINES_KIND;
 use crate::php_ext::PHP_EXT_KIND;
 use crate::shell_profile::SHELL_PROFILE_KIND;
 use crate::trust_nss::NSS_TRUST_KIND;
@@ -68,7 +69,7 @@ pub fn describe(kind: &str, params: &Value) -> String {
                 "off"
             }
         ),
-        ENV_KEYS_KIND => {
+        ENV_KEYS_KIND | PHP_DEFINES_KIND => {
             let keys: Vec<&str> = params["keys"]
                 .as_array()
                 .into_iter()

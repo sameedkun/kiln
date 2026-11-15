@@ -352,6 +352,14 @@ export function PortsDialog({ instance, onClose }: { instance: Instance; onClose
   );
 }
 
+/** What wiring a site changes, in words (ADR 0045, ADR 0082). */
+export function wireText(driver: string | undefined, kind: string): string {
+  const after = ", and shows them before changing anything. History can undo it.";
+  if (driver === "wordpress") return `Kiln sets the constants in the site's wp-config.php${after}${kind === "redis" ? " WordPress uses them with the Redis Object Cache plugin." : ""}`;
+  if (driver === "wordpress-bedrock") return `Kiln sets WordPress's keys in the site's .env${after}`;
+  return `Kiln sets the keys in the site's .env${after}`;
+}
+
 export function WireDialog({ instance, sites, project: fixed, onClose }: { instance: Instance; sites?: SitesList; project?: string; onClose: () => void }) {
   const { confirm } = useChanges();
   // From a site's own page the site is known (P4D-08).
@@ -362,6 +370,8 @@ export function WireDialog({ instance, sites, project: fixed, onClose }: { insta
   const site = list.find((s) => s.project === project);
   const db = instance.databases && database ? databaseName(database) : null;
   const ready = Boolean(site) && (!database || db !== null);
+  // WordPress keeps its settings as constants in wp-config.php, Bedrock in .env under WordPress's names (ADR 0082).
+  const wordpress = site?.driver === "wordpress" || site?.driver === "wordpress-bedrock";
   return (
     <JobDialog
       title={`Wire a site to ${instance.name}`}
@@ -378,13 +388,13 @@ export function WireDialog({ instance, sites, project: fixed, onClose }: { insta
             "--project",
             site!.project,
             ...(db ? ["--database", db] : []),
-            ...(instance.kind === "redis" ? (["cache", "session", "queue"] as const).filter((k) => redis[k]).map((k) => `--${k}`) : []),
+            ...(instance.kind === "redis" && !wordpress ? (["cache", "session", "queue"] as const).filter((k) => redis[k]).map((k) => `--${k}`) : []),
           ],
           `${site!.host} uses ${instance.name} now.`,
         )
       }
     >
-      <p className="mt-0">Kiln sets the keys in the site's .env, and shows them before changing anything. History can undo it.</p>
+      <p className="mt-0">{wireText(site?.driver, instance.kind)}</p>
       {!fixed && (
         <Select label="Site" className="w-full" value={project} onChange={(e) => setProject(e.target.value)} options={[{ value: "", label: "Choose a site" }, ...list.map((s) => ({ value: s.project, label: s.host }))]} />
       )}
@@ -399,7 +409,7 @@ export function WireDialog({ instance, sites, project: fixed, onClose }: { insta
           error={database && !db ? "Letters, digits and underscores." : undefined}
         />
       )}
-      {instance.kind === "redis" && (
+      {instance.kind === "redis" && !wordpress && (
         <div className="mt-4 flex flex-col gap-3">
           <Switch checked={redis.cache} onChange={(v) => setRedis({ ...redis, cache: v })} label="Laravel's cache" />
           <Switch checked={redis.session} onChange={(v) => setRedis({ ...redis, session: v })} label="Sessions" />

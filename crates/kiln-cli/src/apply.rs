@@ -118,6 +118,7 @@ mod system {
         register_hosts_block(&mut registry, hosts_path.clone(), writer);
         kiln_platform::php_ext::register_php_ext(&mut registry);
         kiln_platform::env_file::register_env_keys(&mut registry);
+        kiln_platform::php_defines::register_php_defines(&mut registry);
         if let Some(item) = kiln_platform::autostart::platform_item() {
             kiln_platform::autostart::register_autostart(&mut registry, item);
         }

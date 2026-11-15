@@ -10,6 +10,7 @@ pub mod env_file;
 pub mod hosts;
 pub mod hosts_op;
 pub mod nrpt_op;
+pub mod php_defines;
 pub mod php_ext;
 pub mod shell_profile;
 #[cfg(windows)]

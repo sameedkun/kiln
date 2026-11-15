@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use kiln_ops::{Journal, OpState};
 use kiln_platform::env_file::ENV_KEYS_KIND;
+use kiln_platform::php_defines::PHP_DEFINES_KIND;
 use kiln_sys::background::ProcStatus;
 
 /// One of Kiln's folders, and whether it may be deleted.
@@ -144,7 +145,9 @@ fn build_plan() -> Result<Plan, String> {
         {
             let what = kiln_platform::describe::describe(&entry.kind, &entry.params);
             match entry.state {
-                OpState::Applied if entry.kind == ENV_KEYS_KIND => {
+                OpState::Applied
+                    if entry.kind == ENV_KEYS_KIND || entry.kind == PHP_DEFINES_KIND =>
+                {
                     plan.wired.push((entry.id, what));
                 }
                 OpState::Applied => plan.undo.push((entry.id, what)),
@@ -220,7 +223,7 @@ fn print_plan(plan: &Plan, keep_files: bool) {
     }
     if !plan.wired.is_empty() {
         say!(
-            "   Left as they are: projects' .env files Kiln pointed at its services (`kiln undo <number>` before uninstalling puts one back)"
+            "   Left as they are: projects' .env and wp-config.php files Kiln pointed at its services (`kiln undo <number>` before uninstalling puts one back)"
         );
         for (id, what) in &plan.wired {
             say!("     #{id}  {what}");
@@ -455,6 +458,7 @@ pub fn uninstall(options: Options) -> Result<(), String> {
                 .iter()
                 .filter(|e| {
                     e.kind != ENV_KEYS_KIND
+                        && e.kind != PHP_DEFINES_KIND
                         && matches!(
                             e.state,
                             OpState::Applied | OpState::Prepared | OpState::Stuck

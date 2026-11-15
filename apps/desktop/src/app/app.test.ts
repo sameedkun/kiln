@@ -372,3 +372,13 @@ describe("a site's checks (ADR 0081)", async () => {
     expect(worstFirst([f("a", "ok"), f("b", "warn"), f("c", "fail"), f("d", "warn")]).map((x) => x.message)).toEqual(["c", "b", "d", "a"]);
   });
 });
+
+describe("wiring a WordPress site (ADR 0082)", async () => {
+  const { wireText } = await import("./ServicesPage");
+  it("says which file changes", () => {
+    expect(wireText("wordpress", "mysql")).toMatch(/^Kiln sets the constants in the site's wp-config.php/);
+    expect(wireText("wordpress", "redis")).toMatch(/Redis Object Cache plugin/);
+    expect(wireText("wordpress-bedrock", "mariadb")).toMatch(/WordPress's keys in the site's .env/);
+    expect(wireText("laravel", "mysql")).toMatch(/^Kiln sets the keys in the site's .env/);
+  });
+});

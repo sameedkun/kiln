@@ -633,9 +633,29 @@ Check 'kiln new blog --template wordpress --db mysql-8.4 (P4D-07): from wordpres
         $zip = Get-ChildItem "$env:LOCALAPPDATA\Kiln" -Recurse -Filter 'wordpress-7.1.4.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
         $published = (curl.exe -sSL --max-time 30 'https://downloads.wordpress.org/release/wordpress-7.1.4.zip.sha1' | Out-String).Trim()
         if ($zip -and (Get-FileHash $zip.FullName -Algorithm SHA1).Hash.ToLower() -ne $published) { throw "SHA-1 differs from wordpress.org's $published" }
+        # kiln env use on a WordPress site (ADR 0082): wp-config.php's constants, in place, with
+        # the database made; undo puts every byte back.
+        $configFile = Join-Path $blog 'wp-config.php'
+        $before = (Get-FileHash $configFile -Algorithm SHA256).Hash
+        $out = Kiln env use mysql-8.4 --project $blog --database blog_two --yes
+        Expect 'Created the database blog_two on mysql-8.4' $out
+        $op = [regex]::Match($out, 'kiln undo (\d+)').Groups[1].Value
+        if (-not $op) { throw "no undo number:`n$out" }
+        $config = Get-Content $configFile -Raw
+        if ($config -notmatch "define\( 'DB_NAME', 'blog_two' \);" -or $config -notmatch "define\( 'DB_HOST', '127\.0\.0\.1:\d+' \);") { throw "wp-config.php after env use:`n$($config.Substring(0, [Math]::Min(1600, $config.Length)))" }
+        if ($config -notmatch 'AUTH_KEY') { throw 'the keys and salts went' }
+        if ((Page (SiteBase 'blog')) -notmatch 'WordPress') { throw 'no WordPress on blog_two' }
+        Expect 'wp-config.php: DB_NAME' (Kiln history)
+        Expect 'already points at mysql-8.4' (Kiln env use mysql-8.4 --project $blog --database blog_two --yes)
+        $refused = & $Kiln env use mysql-8.4 --project $blog --cache --yes 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect "Laravel's settings" $refused
+        Kiln undo $op --yes | Out-Null
+        if ((Get-FileHash $configFile -Algorithm SHA256).Hash -ne $before) { throw "undo didn't put wp-config.php back:`n$(Get-Content $configFile -Raw)" }
     } finally {
         & $Kiln unlink blog 2>&1 | Out-Null
         & $Kiln --json --confirmed db drop mysql-8.4 blog 2>&1 | Out-Null
+        & $Kiln --json --confirmed db drop mysql-8.4 blog_two 2>&1 | Out-Null
         $global:LASTEXITCODE = 0
         Remove-Item -Recurse -Force $blog -ErrorAction SilentlyContinue
     }

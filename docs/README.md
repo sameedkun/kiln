@@ -97,6 +97,7 @@ working name). Start here.
 | [0079](adr/0079-snapshots-and-tinker.md) | Database snapshots (`kiln db snapshot|snapshots|rollback`, the state before a rollback kept too) and `kiln tinker <site> <code>`; a camera button and Snapshots list per service, a Tinker tab per Laravel site | accepted (Phase 4c) |
 | [0080](adr/0080-setting-up-a-cloned-project.md) | `kiln init`: a cloned project served and set up in one step (Composer, `.env` and its key, a database, migrations only against one it wired, the storage link, the front end); each step skipped when done; the steps shown before anything runs | accepted (Phase 4e) |
 | [0081](adr/0081-site-doctor.md) | `kiln doctor <site>`: one project's checks (PHP range and extensions from `composer.json`, `.env` against `.env.example`, repeated keys, the app key and URL, packages, the database on Kiln's instance, Redis and mail, one request to the site); read-only, no key values shown; fixes Kiln can run carry their arguments, run by the site page's Check tab through their preview or a question | accepted (Phase 4e) |
+| [0082](adr/0082-wordpress-config.md) | `kiln env use` for WordPress: `wp-config.php`'s `DB_*` constants (and the Redis Object Cache plugin's) set in place by a new journaled operation, undone byte for byte; Bedrock's `.env` gets WordPress's names; other services say what to do by hand | accepted (Phase 4e) |
 
 ## Conventions
 

@@ -142,23 +142,82 @@ pub fn show(project: Option<PathBuf>, reveal: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn project_env(project: Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
+/// The project folder (`project`, or the current one), as Kiln spells it.
+fn project_dir(project: Option<PathBuf>) -> Result<PathBuf, String> {
     let project = match project {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
     };
-    let project = std::fs::canonicalize(&project)
+    std::fs::canonicalize(&project)
         .map(crate::web::strip_verbatim)
-        .map_err(|e| format!("cannot use {}: {e}", project.display()))?;
+        .map_err(|e| format!("cannot use {}: {e}", project.display()))
+}
+
+fn project_env(project: Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
+    let project = project_dir(project)?;
     let env = project.join(".env");
     if env.is_file() {
         return Ok((project, env));
     }
+    Err(no_env(&project))
+}
+
+/// What `kiln env use` edits in a project ([ADR 0082] §1).
+///
+/// [ADR 0082]: ../../../docs/adr/0082-wordpress-config.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Target {
+    /// A `.env` with Laravel's names.
+    Laravel(PathBuf),
+    /// Bedrock's `.env`, with `WordPress`'s names.
+    Bedrock(PathBuf),
+    /// `wp-config.php`'s constants.
+    WpConfig(PathBuf),
+}
+
+impl Target {
+    fn file(&self) -> &Path {
+        match self {
+            Self::Laravel(p) | Self::Bedrock(p) | Self::WpConfig(p) => p,
+        }
+    }
+}
+
+/// Roots' Bedrock: `WordPress` under `web/wp`, settings in `.env`.
+fn is_bedrock(project: &Path) -> bool {
+    project.join("web").join("wp").is_dir()
+        || std::fs::read_to_string(project.join("composer.json"))
+            .is_ok_and(|t| t.contains("\"roots/wordpress\""))
+}
+
+fn target(project: &Path) -> Result<Target, String> {
+    let env = project.join(".env");
+    if env.is_file() {
+        return Ok(if is_bedrock(project) {
+            Target::Bedrock(env)
+        } else {
+            Target::Laravel(env)
+        });
+    }
+    let config = project.join("wp-config.php");
+    if config.is_file() {
+        return Ok(Target::WpConfig(config));
+    }
+    Err(no_env(project))
+}
+
+/// Why a project has nothing for Kiln to edit, and what to do.
+fn no_env(project: &Path) -> String {
     // What to do depends on what the project is (P4D-07): Laravel's advice only for Laravel.
     let wordpress = project.join("wp-config.php").is_file() || project.join("wp-includes").is_dir();
-    Err(if wordpress {
+    if wordpress && project.join("wp-config.php").is_file() {
         format!(
-            "{} is a WordPress site: it keeps its database settings in wp-config.php, not a .env (Kiln writes them when it makes a WordPress site)",
+            "{} is a WordPress site: its settings are in wp-config.php, not a .env (`kiln env use` writes them there)",
+            project.display()
+        )
+    } else if wordpress {
+        format!(
+            "{} is a WordPress site without wp-config.php yet: open it to run WordPress's installer, or copy wp-config-sample.php to wp-config.php",
             project.display()
         )
     } else if project.join(".env.example").is_file() && project.join("artisan").is_file() {
@@ -173,7 +232,57 @@ fn project_env(project: Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
         )
     } else {
         format!("{} has no .env file", project.display())
-    })
+    }
+}
+
+/// `WordPress`'s names for an instance ([ADR 0082] §2): the database's four constants (the
+/// port in `DB_HOST`), or the Redis Object Cache plugin's two. Bedrock gets no Redis.
+///
+/// [ADR 0082]: ../../../docs/adr/0082-wordpress-config.md
+fn wordpress_keys(
+    provider: &dyn kiln_services::ServiceProvider,
+    record: &kiln_state::ServiceRecord,
+    database: Option<&str>,
+    bedrock: bool,
+) -> Result<Vec<(String, String)>, String> {
+    let laravel = provider.env_keys(&record.ports);
+    let get = |key: &str| {
+        laravel
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let pairs = |list: Vec<(&str, String)>| {
+        list.into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect::<Vec<_>>()
+    };
+    match record.kind.as_str() {
+        "mysql" | "mariadb" => Ok(pairs(vec![
+            ("DB_NAME", database.unwrap_or_default().to_owned()),
+            ("DB_USER", get("DB_USERNAME")),
+            ("DB_PASSWORD", get("DB_PASSWORD")),
+            ("DB_HOST", format!("{}:{}", get("DB_HOST"), get("DB_PORT"))),
+        ])),
+        "redis" if !bedrock => Ok(pairs(vec![
+            ("WP_REDIS_HOST", get("REDIS_HOST")),
+            ("WP_REDIS_PORT", get("REDIS_PORT")),
+        ])),
+        "mailpit" => Err(format!(
+            "WordPress sends mail with PHP's mail(); an SMTP plugin (such as WP Mail SMTP) set to {} sends it to Mailpit",
+            get("MAIL_HOST") + ":" + &get("MAIL_PORT")
+        )),
+        _ => Err(format!(
+            "WordPress has no setting Kiln knows for {}; it uses MySQL or MariaDB{}",
+            provider.display_name(),
+            if bedrock {
+                ""
+            } else {
+                ", and Redis through the Redis Object Cache plugin"
+            }
+        )),
+    }
 }
 
 /// What the project may still need after the change.
@@ -210,7 +319,9 @@ pub fn use_instance(
     let provider = crate::service::provider_of(&record.kind)?;
     drop(store);
     // A service that runs in a project wires that project by default (ADR 0047).
-    let (project, env) = project_env(project.or_else(|| record.project.clone()))?;
+    let project = project_dir(project.or_else(|| record.project.clone()))?;
+    let target = target(&project)?;
+    let env = target.file().to_path_buf();
     if provider.env_keys(&record.ports).is_empty() {
         return Err(format!(
             "{} has no .env keys for Kiln to set",
@@ -225,6 +336,9 @@ pub fn use_instance(
     .into_iter()
     .filter_map(|(on, key)| on.then_some(key))
     .collect();
+    if !drivers.is_empty() && !matches!(target, Target::Laravel(_)) {
+        return Err("--cache, --session and --queue are Laravel's settings".into());
+    }
     if !drivers.is_empty() && record.kind != "redis" {
         return Err("--cache, --session and --queue choose Redis; give a redis instance".into());
     }
@@ -236,14 +350,28 @@ pub fn use_instance(
     } else {
         None
     };
-    let keys = keys_for(provider, &record, &project, database.as_deref(), &drivers);
+    let keys = match &target {
+        Target::Laravel(_) => keys_for(provider, &record, &project, database.as_deref(), &drivers),
+        Target::Bedrock(_) => wordpress_keys(provider, &record, database.as_deref(), true)?,
+        Target::WpConfig(_) => wordpress_keys(provider, &record, database.as_deref(), false)?,
+    };
     let text =
         std::fs::read_to_string(&env).map_err(|e| format!("cannot read {}: {e}", env.display()))?;
+    let current = |k: &str| match &target {
+        Target::WpConfig(_) => kiln_platform::php_defines::value_of(&text, k),
+        _ => value_of(&text, k),
+    };
     let unchanged = keys
         .iter()
-        .all(|(k, v)| value_of(&text, k).as_deref() == Some(v.as_str()));
+        .all(|(k, v)| current(k).as_deref() == Some(v.as_str()));
 
-    let op: Box<dyn Operation> = Box::new(EnvKeysOp::new(env.clone(), keys));
+    let op: Box<dyn Operation> = match &target {
+        Target::WpConfig(_) => Box::new(kiln_platform::php_defines::PhpDefinesOp::new(
+            env.clone(),
+            keys,
+        )),
+        _ => Box::new(EnvKeysOp::new(env.clone(), keys)),
+    };
     if unchanged {
         say!("{} already points at {name}.", env.display());
     } else {
@@ -276,7 +404,13 @@ pub fn use_instance(
         id.map(|id| format!(" (undo with `kiln undo {id}`)"))
             .unwrap_or_default()
     );
-    notes(&record.kind, &project, !drivers.is_empty());
+    match &target {
+        Target::Laravel(_) => notes(&record.kind, &project, !drivers.is_empty()),
+        Target::WpConfig(_) if record.kind == "redis" => say!(
+            "WordPress uses these with the Redis Object Cache plugin: install and enable it in WordPress (Kiln doesn't)."
+        ),
+        _ => {}
+    }
     Ok(id)
 }
 
@@ -312,6 +446,56 @@ mod tests {
         for bad in ["", "2shop", "my-shop", "x;drop", "Shop"] {
             assert!(check_database(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn env_use_edits_what_the_project_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        assert!(target(p).unwrap_err().contains("has no .env file"));
+        std::fs::create_dir(p.join("wp-includes")).unwrap();
+        assert!(target(p).unwrap_err().contains("without wp-config.php yet"));
+        std::fs::write(p.join("wp-config.php"), "<?php").unwrap();
+        assert_eq!(target(p), Ok(Target::WpConfig(p.join("wp-config.php"))));
+        std::fs::write(p.join(".env"), "").unwrap();
+        assert_eq!(target(p), Ok(Target::Laravel(p.join(".env"))));
+        std::fs::write(
+            p.join("composer.json"),
+            r#"{"require":{"roots/wordpress":"^6"}}"#,
+        )
+        .unwrap();
+        assert_eq!(target(p), Ok(Target::Bedrock(p.join(".env"))));
+    }
+
+    #[test]
+    fn wordpress_gets_its_own_names() {
+        let record = |kind: &str, role: &str, port: u16| kiln_state::ServiceRecord {
+            name: format!("{kind}-x"),
+            kind: kind.into(),
+            version: "1".into(),
+            ports: [(role.to_owned(), port)].into(),
+            enabled: true,
+            project: None,
+        };
+        let mysql = record("mysql", "mysql", 3307);
+        let provider = kiln_services::provider("mysql").unwrap();
+        let keys = wordpress_keys(provider, &mysql, Some("blog"), false).unwrap();
+        let names: Vec<&str> = keys.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST"]);
+        assert_eq!(keys[0].1, "blog");
+        assert_eq!(keys[3].1, "127.0.0.1:3307");
+
+        let redis = record("redis", "redis", 6380);
+        let provider = kiln_services::provider("redis").unwrap();
+        let keys = wordpress_keys(provider, &redis, None, false).unwrap();
+        assert_eq!(
+            keys,
+            [
+                ("WP_REDIS_HOST".to_owned(), "127.0.0.1".to_owned()),
+                ("WP_REDIS_PORT".to_owned(), "6380".to_owned())
+            ]
+        );
+        assert!(wordpress_keys(provider, &redis, None, true).is_err());
     }
 
     #[test]
