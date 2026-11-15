@@ -104,6 +104,8 @@ export interface Finding {
   status: "ok" | "info" | "warn" | "fail";
   message: string;
   fix?: string;
+  /** The fix as kiln's arguments, when the app can run it (ADR 0081 §6). */
+  run?: string[];
 }
 export interface DoctorReport {
   findings: Finding[];

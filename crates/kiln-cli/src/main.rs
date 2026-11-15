@@ -38,6 +38,7 @@ mod requests;
 mod service;
 mod services_up;
 mod share;
+mod site_doctor;
 mod snapshot;
 mod tinker;
 mod tool;
@@ -134,7 +135,12 @@ enum Command {
     /// Check Kiln's health: state, ports, web server, PHP, sites, DNS, certificates, shims.
     /// Changes nothing; exits with 1 if something failed.
     /// With --json, the findings are the result's data.
-    Doctor,
+    /// With a site (or a folder), checks that project instead: its .env, packages, database,
+    /// PHP and its answer (ADR 0081).
+    Doctor {
+        /// A site's name, or a folder (with a path separator, or `.`).
+        site: Option<String>,
+    },
     /// What can be updated: PHP patch releases for Kiln's PHP, and a new Kiln on GitHub if
     /// checking for it is on (off by default; ADR 0064).
     Updates {
@@ -1018,7 +1024,7 @@ fn changes_state(command: &Command) -> bool {
             | Command::Sites
             | Command::Which { .. }
             | Command::History { .. }
-            | Command::Doctor
+            | Command::Doctor { .. }
             | Command::Setup
             | Command::Settings
             | Command::Logs { .. }
@@ -1131,10 +1137,16 @@ fn main() -> ExitCode {
             "--confirmed goes with --json; on a terminal, use the command's --yes".into(),
         ));
     }
-    if matches!(cli.command, Command::Doctor) {
+    if let Command::Doctor { site } = &cli.command {
         // A failed check is still a successful read: the final line says so, the exit code
         // is 1 as before (ADR 0053 §1).
-        let healthy = doctor::run();
+        let healthy = match site {
+            None => doctor::run(),
+            Some(site) => match site_doctor::run(site) {
+                Ok(healthy) => healthy,
+                Err(e) => return out::finish(Err(e)),
+            },
+        };
         let code = out::finish(Ok(()));
         return if healthy { code } else { ExitCode::FAILURE };
     }
@@ -1290,7 +1302,7 @@ fn run_service(action: ServiceAction) -> Result<(), String> {
 
 fn run(command: Command) -> Result<(), String> {
     match command {
-        Command::Doctor => unreachable!("handled in main"),
+        Command::Doctor { .. } => unreachable!("handled in main"),
         Command::Setup => doctor::setup(),
         Command::Settings => web::settings(),
         Command::Footprint => footprint::footprint(),

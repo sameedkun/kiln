@@ -21,6 +21,7 @@ import { LogPanel } from "./LogsPage";
 import { useRead } from "./hooks";
 import { framework, frameworkId } from "./SitesPage";
 import { FrameworkMark } from "../components/FrameworkMark";
+import { SiteCheck } from "./SiteCheck";
 
 const minor = (version: string) => version.split(".").slice(0, 2).join(".");
 
@@ -110,12 +111,15 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
           { id: "logs", label: "Logs" },
           { id: "dumps", label: "Dumps" },
           { id: "env", label: ".env" },
+          { id: "check", label: "Check" },
           ...(site.driver === "laravel" ? [{ id: "tinker", label: "Tinker" }] : []),
         ]}
         current={tab}
         onSelect={setTab}
       >
-      {tab === "tinker" ? (
+      {tab === "check" ? (
+        <SiteCheck site={site} />
+      ) : tab === "tinker" ? (
         <SiteTinker site={site} />
       ) : tab === "env" ? (
         <SiteEnv site={site} />

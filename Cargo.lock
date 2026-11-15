@@ -716,6 +716,8 @@ dependencies = [
  "kiln-supervisor",
  "kiln-sys",
  "kiln-web",
+ "rustls",
+ "rustls-pki-types",
  "serde_json",
  "tempfile",
  "time",

@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+pub mod site;
+
 /// How bad a finding is, mildest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -36,6 +38,12 @@ pub enum Area {
     Shims,
     Services,
     OtherTools,
+    // One site's checks (ADR 0081).
+    Project,
+    EnvFile,
+    Packages,
+    Database,
+    Answer,
 }
 
 impl Area {
@@ -53,6 +61,11 @@ impl Area {
             Self::Shims => "Shims",
             Self::Services => "Services",
             Self::OtherTools => "Other tools",
+            Self::Project => "Project",
+            Self::EnvFile => "Environment file",
+            Self::Packages => "Packages",
+            Self::Database => "Database",
+            Self::Answer => "The site's answer",
         }
     }
 }
@@ -65,6 +78,9 @@ pub struct Finding {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
+    /// The fix as `kiln`'s arguments, when it is a Kiln command a client may run (ADR 0081 §6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<Vec<String>>,
 }
 
 fn finding(area: Area, status: Status, message: impl Into<String>) -> Finding {
@@ -73,6 +89,7 @@ fn finding(area: Area, status: Status, message: impl Into<String>) -> Finding {
         status,
         message: message.into(),
         fix: None,
+        run: None,
     }
 }
 

@@ -81,8 +81,8 @@ export function HistoryPage() {
   );
 }
 
-const statusOf: Record<Finding["status"], StatusState> = { ok: "running", info: "stopped", warn: "attention", fail: "failed" };
-const statusWord: Record<Finding["status"], string> = { ok: "OK", info: "Note", warn: "Check", fail: "Problem" };
+export const statusOf: Record<Finding["status"], StatusState> = { ok: "running", info: "stopped", warn: "attention", fail: "failed" };
+export const statusWord: Record<Finding["status"], string> = { ok: "OK", info: "Note", warn: "Check", fail: "Problem" };
 
 /** Findings grouped by area, in the doctor's order. */
 export function byArea(findings: Finding[]): [string, Finding[]][] {

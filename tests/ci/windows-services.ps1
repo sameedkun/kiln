@@ -496,13 +496,19 @@ function ShopPage {
     if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
 }
 Check 'the app serves pages on MySQL 8.4' { ShopPage }
-Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link set up on MySQL and served; a second run has nothing to do' {
+Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link set up on MySQL and served; a second run has nothing to do; kiln doctor <site> (ADR 0081) finds what it lacks first, and nothing after' {
     # As a clone from Git has it: no vendor, node_modules, .env or storage link.
     $clone = Join-Path $projects 'cloned'
     robocopy $shop $clone /E /XJ /NFL /NDL /NJH /NJS /XD vendor node_modules /XF .env | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
     $global:LASTEXITCODE = 0
     try {
+        # The site doctor on the bare clone (a folder Kiln doesn't serve yet): problems, each
+        # pointing at kiln init; exit code 1.
+        $before = & $Kiln doctor $clone 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 1) { throw "kiln doctor <clone> exited $LASTEXITCODE, not 1:`n$before" }
+        $global:LASTEXITCODE = 0
+        foreach ($finding in '.env is missing', 'vendor/ is missing', 'kiln init ','Kiln doesn''t serve this folder') { Expect $finding $before }
         $out = Kiln init $clone --db mysql-8.4 --no-build --yes
         foreach ($step in 'composer install --no-interaction', 'Wrote .env from .env.example', 'php artisan key:generate', 'Created the database cloned', 'php artisan migrate --force', 'php artisan storage:link', 'Set up: ') { Expect $step $out }
         if ($out -match 'npm (ci|install|run)') { throw "--no-build ran npm:`n$out" }
@@ -510,6 +516,11 @@ Check 'kiln init (ADR 0080): a clone without vendor, .env or its storage link se
         if ($count -notmatch '(?m)^\s*[1-9]') { throw "no migrations on mysql-8.4:`n$count" }
         $page = Page (SiteBase 'cloned')
         if ($page -notmatch 'Laravel') { throw "no Laravel page:`n$($page.Substring(0, [Math]::Min(600, $page.Length)))" }
+        # Set up: nothing fails (exit code 0); the database and the answer are found.
+        $after = Kiln doctor cloned
+        foreach ($finding in 'APP_KEY is set', "Composer's packages are installed", "cloned on Kiln's mysql-8.4", 'answers 200', '0 problem(s)') { Expect $finding $after }
+        $json = & $Kiln --json doctor cloned | Select-Object -Last 1 | ConvertFrom-Json
+        if (-not ($json.data.findings | Where-Object { $_.area -eq 'answer' -and $_.status -eq 'ok' })) { throw "no answer finding in the JSON:`n$($json | ConvertTo-Json -Depth 5)" }
         Expect 'nothing to do' (Kiln init $clone --no-build --yes)
     } finally {
         & $Kiln unlink cloned 2>&1 | Out-Null

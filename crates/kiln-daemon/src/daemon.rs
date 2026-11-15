@@ -310,6 +310,7 @@ impl Daemon {
         "services.databases",
         "git.branches",
         "services.snapshots",
+        "site.doctor",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -687,6 +688,26 @@ impl Daemon {
         }
     }
 
+    /// `site.doctor` ([ADR 0081] §8): one site's checks. Only a site's name reaches the
+    /// command line, never a folder.
+    ///
+    /// [ADR 0081]: ../../../docs/adr/0081-site-doctor.md
+    fn site_doctor(&self, params: &Value) -> Result<Value, RpcError> {
+        match params["host"].as_str() {
+            Some(host)
+                if !host.is_empty()
+                    && !host.starts_with(['-', '.'])
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') =>
+            {
+                self.read(&["doctor", host])
+            }
+            Some(host) => Err(RpcError::kiln(format!("{host:?} isn't a site's name"))),
+            None => Err(RpcError::kiln("params.host (a site) is missing")),
+        }
+    }
+
     /// `logs.tail` ([ADR 0059] §3): a log's last lines, or what was written since `after`.
     /// Only a log `kiln logs` lists can be read.
     ///
@@ -1023,6 +1044,7 @@ impl Handler for Daemon {
                 self.read(&["db", "snapshots", name])
             }
             "git.branches" => self.git_branches(params),
+            "site.doctor" => self.site_doctor(params),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.get" => {

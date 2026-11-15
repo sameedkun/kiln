@@ -1435,3 +1435,16 @@ commits and PRs.
 - **Found:** the Scenario (P4D-02), 2026-11-15: everything else in `kiln dns on` passed.
 - **Fix:** History describes it in words ("every .test name answered by Kiln (Windows name
   resolution policy)", or the rule's removal), as for every other kind.
+
+### I-102: Kiln reads the first of a key set twice in `.env`; Laravel reads the last (open)
+
+- **Found:** writing the site doctor (P4E-02), 2026-11-15, from phpdotenv's own code in a
+  Laravel project's `vendor/`: Laravel's repository is immutable only toward variables set
+  outside the file (`ImmutableWriter` remembers what it loaded itself and lets a later line
+  replace it).
+- **Effect:** `kiln_platform::env_file::value_of` and `settings` (`kiln env show`, which sites
+  use an instance, `kiln env use`'s "already points at") read the first setting. With a key set
+  twice, Kiln can show or match a value Laravel doesn't use. `kiln init`'s own reader and the
+  site doctor read the last.
+- **Rule meanwhile:** the site doctor reports every key set twice, by line ("Laravel reads the
+  last"). To fix: `value_of` and `settings` read the last, and `set` changes that line.

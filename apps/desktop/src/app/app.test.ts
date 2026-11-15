@@ -358,3 +358,17 @@ describe("setting up a cloned project (ADR 0080)", async () => {
     ]);
   });
 });
+
+describe("a site's checks (ADR 0081)", async () => {
+  const { fixWay, worstFirst } = await import("./SiteCheck");
+  it("runs init and env use through their preview, the rest after asking", () => {
+    expect(fixWay(["init", "C:\code\shop"])).toBe("preview");
+    expect(fixWay(["env", "use", "mysql-8.4", "--project", "C:\code\shop"])).toBe("preview");
+    expect(fixWay(["service", "start", "mysql-8.4"])).toBe("ask");
+    expect(fixWay(["db", "create", "mysql-8.4", "shop"])).toBe("ask");
+  });
+  it("puts problems first, keeping the doctor's order otherwise", () => {
+    const f = (message: string, status: "ok" | "info" | "warn" | "fail") => ({ area: "project", status, message });
+    expect(worstFirst([f("a", "ok"), f("b", "warn"), f("c", "fail"), f("d", "warn")]).map((x) => x.message)).toEqual(["c", "b", "d", "a"]);
+  });
+});

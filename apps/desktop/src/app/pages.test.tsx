@@ -439,3 +439,52 @@ describe("Tinker (ADR 0079)", () => {
     expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["tinker", "shop.test", "User::count()"], mode: "apply" });
   });
 });
+
+describe("a site's checks (ADR 0081)", () => {
+  it("shows what needs a look and previews a fix of Kiln's before running it", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["site.doctor"] = () => ({
+      findings: [
+        { area: "project", status: "ok", message: "PHP 8.4.27 meets composer.json's \"^8.2\"" },
+        { area: "packages", status: "fail", message: "vendor/ is missing: Composer hasn't installed its packages", fix: "kiln init D:/Code/shop", run: ["init", "D:/Code/shop"] },
+        { area: "envfile", status: "warn", message: "1 key in .env.example that .env lacks: STRIPE_KEY", fix: "add them to .env" },
+      ],
+    });
+    answers["jobs.start"] = () => ({ job: 3 });
+    answers["jobs.get"] = () => ({
+      running: false,
+      finished: { job: 3, ok: true, exit: 0, needs_confirmation: true, last: { type: "confirm", question: "Set it up?" } },
+      events: [{ type: "confirm", question: "Set it up?" }],
+    });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    await userEvent.click(await screen.findByRole("tab", { name: "Check" }));
+    expect(await screen.findByText(/vendor\/ is missing/)).toBeTruthy();
+    expect(screen.getByText("2 things need a look.")).toBeTruthy();
+    expect(screen.queryByText(/meets composer.json/)).toBeNull();
+    expect(screen.getByRole("region", { name: "Environment file" })).toBeTruthy();
+    expect(asked.find((a) => a.key === "site.doctor")?.args).toEqual({ host: "shop.test" });
+    // Only the finding Kiln can run has a Fix button; it previews first.
+    const fixes = screen.getAllByRole("button", { name: "Fix" });
+    expect(fixes).toHaveLength(1);
+    await userEvent.click(fixes[0]);
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toMatchObject({ args: ["init", "D:/Code/shop"], mode: "preview" });
+  });
+});

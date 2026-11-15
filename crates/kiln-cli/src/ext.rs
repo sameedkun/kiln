@@ -123,7 +123,7 @@ fn php(record: &PhpRecord) -> Command {
 }
 
 /// What `php -m` lists, and PHP's start-up warnings.
-fn modules(record: &PhpRecord) -> Result<(Vec<String>, Vec<String>), String> {
+pub(crate) fn modules(record: &PhpRecord) -> Result<(Vec<String>, Vec<String>), String> {
     let output = php(record)
         .arg("-m")
         .output()
@@ -152,7 +152,7 @@ fn modules(record: &PhpRecord) -> Result<(Vec<String>, Vec<String>), String> {
 }
 
 /// The build's loadable extension files.
-fn shipped(record: &PhpRecord) -> Result<Vec<String>, String> {
+pub(crate) fn shipped(record: &PhpRecord) -> Result<Vec<String>, String> {
     if cfg!(windows) {
         return Ok(extension_files(&record.dir.join("ext")));
     }

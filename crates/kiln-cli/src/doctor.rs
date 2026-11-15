@@ -174,7 +174,7 @@ pub fn setup() -> Result<(), String> {
     Ok(())
 }
 
-fn open_read_only() -> Result<StateStore, String> {
+pub(crate) fn open_read_only() -> Result<StateStore, String> {
     let dir = kiln_state::default_state_dir().ok_or("cannot determine the state directory")?;
     let db = dir.join(kiln_state::DB_FILE);
     if !db.is_file() {
