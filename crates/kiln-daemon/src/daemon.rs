@@ -313,6 +313,7 @@ impl Daemon {
         "site.doctor",
         "jobs.stop",
         "site.commands",
+        "editor.get",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -1051,6 +1052,7 @@ impl Handler for Daemon {
             "git.branches" => self.git_branches(params),
             "site.doctor" => self.site_doctor(params),
             "site.commands" => self.site_commands(params),
+            "editor.get" => self.read(&["editor"]),
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.list" => Ok(self.jobs.list()),

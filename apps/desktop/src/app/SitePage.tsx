@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
+import { ArrowLeft16Regular, Code16Regular, Folder16Regular, Open16Regular } from "@fluentui/react-icons";
 import { BarChart } from "../components/BarChart";
 import { Button } from "../components/Button";
 import { Dialog } from "../components/Dialog";
@@ -14,7 +14,7 @@ import { Tabs } from "../components/Tabs";
 import { Tag } from "../components/Tag";
 import { useToast } from "../components/Toast";
 import { TextField } from "../components/TextField";
-import { call, message, openFolder, runJob, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
+import { call, message, openFolder, runJob, type EditorInfo, type EnvShow, type GitBranches, type Instance, type LogSources, type RequestsList, type PhpList, type ServicesList, type Site, type SitesList } from "./api";
 import { useChanges } from "./Change";
 import { WireDialog } from "./ServicesPage";
 import { LogPanel } from "./LogsPage";
@@ -61,6 +61,8 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
   // Switching PHP starts the other version's workers and reloads the web server: seconds.
   const [switching, setSwitching] = useState(false);
   const site = sites.data?.sites.find((s) => s.host === host);
+  const editor = useRead<EditorInfo>("editor.get");
+  const using = editor.data?.found.find((f) => f.id === editor.data?.using);
 
   const back = <Button variant="quiet" aria-label="Back to Sites" icon={<ArrowLeft16Regular />} onClick={() => go("sites")} />;
   if (sites.data && !site) {
@@ -94,6 +96,11 @@ export function SitePage({ host, go }: { host: string; go: (page: string) => voi
       actions={
         <>
           <Button variant="quiet" aria-label="Open the folder" title="Open the folder" icon={<Folder16Regular />} onClick={() => openFolder(site.host)} />
+          {using && (
+            <Button icon={<Code16Regular />} onClick={() => run(["code", site.host], `Opened ${site.host} in ${using.name}.`)}>
+              Open in {using.name}
+            </Button>
+          )}
           <Button icon={<Open16Regular />} onClick={() => open(site.host)}>
             Open {site.host}
           </Button>

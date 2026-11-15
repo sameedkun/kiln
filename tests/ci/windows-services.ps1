@@ -1321,6 +1321,32 @@ Check 'kiln run (ADR 0084): a site''s artisan with its PHP, nothing but its own 
     $global:LASTEXITCODE = 0
     Expect 'has ended' $again
 }
+Check 'kiln code (ADR 0085): an editor found on PATH, chosen, opening a file at a line; nothing outside the site opens' {
+    # A stand-in "Zed": a harmless Windows program under Zed's name, first on PATH.
+    $fake = Join-Path $env:RUNNER_TEMP 'fake-editor'
+    New-Item -ItemType Directory -Force $fake | Out-Null
+    Copy-Item "$env:SystemRoot\System32\whoami.exe" (Join-Path $fake 'zed.exe') -Force
+    $oldPath = $env:PATH
+    $env:PATH = "$fake;$env:PATH"
+    try {
+        Expect 'zed' (Kiln editor)
+        Expect 'Sites open in Zed now' (Kiln editor use zed)
+        $json = (& $Kiln --json editor | Select-Object -Last 1 | ConvertFrom-Json).data
+        if ($json.chosen -ne 'zed' -or $json.using -ne 'zed') { throw "kiln editor --json: $($json | ConvertTo-Json -Depth 4)" }
+        Expect 'at line 3 in Zed' (Kiln code shop --goto routes/web.php:3)
+        Expect 'in Zed' (Kiln code shop)
+        $outside = & $Kiln code shop --goto ..\..\Windows\win.ini 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        if ($outside -notmatch "isn't inside the site's folder|cannot open") { throw "a file outside the site opened:`n$outside" }
+        $refused = & $Kiln editor use notepadplusplus 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect "doesn't know the editor" $refused
+    } finally {
+        & $Kiln editor use auto 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+        $env:PATH = $oldPath
+    }
+}
 Check 'kiln app enable: the login item starts the app in the tray; undo puts back what was there (ADR 0054 §6)' {
     # This job doesn't build the app: for the login item, a stand-in file next to kiln is enough.
     $app = Join-Path (Split-Path $Kiln) 'kiln-desktop.exe'

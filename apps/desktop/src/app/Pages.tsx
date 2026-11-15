@@ -7,7 +7,7 @@ import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
-import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type KilnSettings, type SetupStatus, type Updates, openReleases } from "./api";
+import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type EditorInfo, type KilnSettings, type SetupStatus, type Updates, openReleases } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -81,6 +81,7 @@ export function Settings({ setUp }: { setUp: () => void }) {
       </Section>
       <KilnSection />
       <NamesSection />
+      <EditorSection />
       <AssistantsSection />
       <UpdatesSection />
       <FootprintSection />
@@ -293,6 +294,38 @@ function UpdatesSection() {
         }
       >
         Kiln asks GitHub for its newest release, sending nothing about you or this PC. {status}
+      </SettingRow>
+    </Section>
+  );
+}
+
+/** The editor sites and log lines open in (ADR 0085 §4). */
+function EditorSection() {
+  const editor = useRead<EditorInfo>("editor.get");
+  const { run } = useChanges();
+  const e = editor.data;
+  const using = e?.found.find((f) => f.id === e.using);
+  return (
+    <Section title="Editor">
+      <SettingRow
+        title={using ? `Sites open in ${using.name}` : "No editor found"}
+        control={
+          e && (
+            <Select
+              label="Editor"
+              value={e.chosen ?? "auto"}
+              onChange={(ev) => run(["editor", "use", ev.target.value], ev.target.value === "auto" ? "Kiln picks the editor it finds first." : "Sites open in it now.")}
+              options={[
+                { value: "auto", label: `The first found${e.found[0] ? ` (${e.found[0].name})` : ""}` },
+                ...e.known.map((k) => ({ value: k.id, label: e.found.some((f) => f.id === k.id) ? k.name : `${k.name} (not found)` })),
+              ]}
+            />
+          )
+        }
+      >
+        {e && e.found.length === 0
+          ? "Kiln looks for VS Code, Cursor, PhpStorm, Zed and Sublime Text in their usual places."
+          : "The site page's Open button and file links in a site's logs open here."}
       </SettingRow>
     </Section>
   );

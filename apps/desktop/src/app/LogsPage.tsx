@@ -5,6 +5,7 @@ import { Page } from "../components/Page";
 import { Switch } from "../components/Switch";
 import { TextField } from "../components/TextField";
 import { call, message, type LogSources, type LogTail } from "./api";
+import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
 type Level = LogLine["level"];
@@ -163,6 +164,10 @@ export function LogPanel({ source, label, tall = false }: { source: string; labe
   const [shown, setShown] = useState<Shown>("all");
   const [find, setFind] = useState("");
   const { lines, error, path } = useLogFollow(source, follow);
+  const { run } = useChanges();
+  // A site's own log: a file at a line opens in the editor (ADR 0085 §4).
+  const host = source.startsWith("site:") ? source.slice(5).split("/")[0] : null;
+  const onPath = host ? (file: string, line: number) => void run(["code", host, "--goto", `${file}:${line}`], `Opened ${file.split(/[\\/]/).pop()} at line ${line}.`) : undefined;
   const needle = find.trim().toLowerCase();
   const visible = lines.filter(
     (l) => (shown === "all" || (shown === "warn" ? l.level === "warn" || l.level === "error" : l.level === "error")) && (!needle || l.text.toLowerCase().includes(needle)),
@@ -191,7 +196,7 @@ export function LogPanel({ source, label, tall = false }: { source: string; labe
       {lines.length === 0 && !error ? (
         <p className="m-0 rounded-xl border border-line px-4 py-6 text-[13px] text-text-2">{path ? `${label}: nothing written yet.` : "Reading…"}</p>
       ) : (
-        <LogView label={`${label} log`} lines={visible} follow={follow} tall={tall} />
+        <LogView label={`${label} log`} lines={visible} follow={follow} tall={tall} onPath={onPath} />
       )}
       {path && <p className="m-0 mt-2 break-all font-mono text-[11.5px] text-text-3">{path}</p>}
     </div>

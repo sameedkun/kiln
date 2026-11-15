@@ -78,6 +78,13 @@ export interface GitBranches {
   dirty: boolean;
   worktrees: { path: string; branch: string | null; host: string | null }[];
 }
+/** `editor.get` (ADR 0085 §2): the editors Kiln finds, and the one sites open in. */
+export interface EditorInfo {
+  chosen: string | null;
+  using: string | null;
+  found: { id: string; name: string; exe: string }[];
+  known: { id: string; name: string }[];
+}
 /** `site.commands` (ADR 0084 §3): what a site can run. */
 export interface SiteCommands {
   host: string;

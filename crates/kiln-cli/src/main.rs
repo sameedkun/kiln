@@ -19,6 +19,7 @@ mod daemon;
 mod doctor;
 mod domain;
 mod dump;
+mod editor;
 mod env;
 mod ext;
 mod footprint;
@@ -211,6 +212,21 @@ enum Command {
         /// The command and its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+    /// Open a site's folder in your editor, or with --goto a file in it at a line, e.g.
+    /// `kiln code shop --goto app/Models/User.php:42` (ADR 0085).
+    Code {
+        /// The site (default: the one whose folder you're in).
+        site: Option<String>,
+        /// A file in the site (relative, or absolute inside its folder), with :line or (line).
+        #[arg(long)]
+        goto: Option<String>,
+    },
+    /// The editors Kiln finds, and the one sites open in; `kiln editor use <id>` chooses one
+    /// (ADR 0085).
+    Editor {
+        #[command(subcommand)]
+        action: Option<EditorAction>,
     },
     /// A site's other names, kept by Kiln (not in the project): add, remove or list them
     /// (ADR 0083).
@@ -524,6 +540,12 @@ enum DbAction {
         /// The database to load it into.
         database: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum EditorAction {
+    /// Choose the editor: vscode, cursor, phpstorm, zed or sublime; `auto` picks the first found.
+    Use { id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1082,6 +1104,8 @@ fn changes_state(command: &Command) -> bool {
             // A test run or queue:work lasts minutes or hours; it reads Kiln's state once and
             // changes nothing of Kiln's (ADR 0084).
             | Command::Run { .. }
+            | Command::Code { .. }
+            | Command::Editor { action: None }
             | Command::Domain {
                 action: DomainAction::List { .. }
             }
@@ -1356,13 +1380,6 @@ fn run(command: Command) -> Result<(), String> {
         Command::Mcp { action } => run_mcp(action),
         Command::Requests { site } => requests::requests(site.as_deref()),
         Command::Dns { state, yes } => web::dns(&state, yes),
-        command @ (Command::Group { .. }
-        | Command::Git { .. }
-        | Command::Share { .. }
-        | Command::Tinker { .. }
-        | Command::Init { .. }
-        | Command::Domain { .. }
-        | Command::Run { .. }) => run_site_tools(command),
         Command::Updates { action } => run_updates(action),
         // `clear` is its only action.
         Command::Cache { .. } => footprint::clear_cache(),
@@ -1448,6 +1465,8 @@ fn run(command: Command) -> Result<(), String> {
         Command::App { action } => run_app(action),
         Command::Daemon { action } => run_daemon(action),
         Command::Undo { id, force, yes } => apply::undo(id, force, yes),
+        // What works on one site or its project (`is_site_tool`).
+        command => run_site_tools(command),
     }
 }
 
@@ -1462,7 +1481,24 @@ fn run_node(action: NodeAction) -> Result<(), String> {
 }
 
 /// A site's tools: its group, Git, sharing, Tinker.
+/// The commands `run_site_tools` dispatches: what works on one site or its project.
+fn is_site_tool(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Group { .. }
+            | Command::Git { .. }
+            | Command::Share { .. }
+            | Command::Tinker { .. }
+            | Command::Init { .. }
+            | Command::Domain { .. }
+            | Command::Run { .. }
+            | Command::Code { .. }
+            | Command::Editor { .. }
+    )
+}
+
 fn run_site_tools(command: Command) -> Result<(), String> {
+    debug_assert!(is_site_tool(&command), "{command:?} isn't a site tool");
     match command {
         Command::Group { site, group } => groups::set(&site, group.as_deref()),
         Command::Git { action } => run_git(action),
@@ -1489,6 +1525,11 @@ fn run_site_tools(command: Command) -> Result<(), String> {
             site, list: true, ..
         } => run::list(&site),
         Command::Run { site, command, .. } => run::run(&site, &command),
+        Command::Code { site, goto } => editor::code(site.as_deref(), goto.as_deref()),
+        Command::Editor { action: None } => editor::show(),
+        Command::Editor {
+            action: Some(EditorAction::Use { id }),
+        } => editor::choose(&id),
         Command::Domain { action } => match action {
             DomainAction::Add { site, names } => domain::add(&site, &names),
             DomainAction::Remove { site, names } => domain::remove(&site, &names),

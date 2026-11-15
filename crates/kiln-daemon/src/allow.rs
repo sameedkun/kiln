@@ -97,6 +97,9 @@ const COMMANDS: &[(&[&str], bool)] = &[
     (&["tinker"], false),
     // A site's own command (ADR 0084): artisan, composer or a vendor/bin tool, checked by kiln.
     (&["run"], false),
+    // The user's editor on a site's folder or a file inside it (ADR 0085).
+    (&["code"], false),
+    (&["editor", "use"], false),
     (&["undo"], true),
     (&["cache", "clear"], false),
     (&["updates", "check-kiln"], false),

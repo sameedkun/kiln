@@ -593,3 +593,33 @@ describe("a site's commands (ADR 0084)", () => {
     expect(screen.getByRole("button", { name: "Run" }).hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("opening a site in the editor (ADR 0085)", () => {
+  it("names the editor Kiln found and opens the site in it", async () => {
+    const site = {
+      host: "shop.test",
+      url: "http://shop.test",
+      driver: "laravel",
+      framework: "laravel",
+      document_root: "D:/Code/shop/public",
+      secure: false,
+      source: "link",
+      parked_in: null,
+      php: { version: "8.4.27", pinned: null, from_project: false, fell_back: false },
+      in_hosts: true,
+      project: "D:/Code/shop",
+      framework_version: "12.38.1",
+      node: { version: null, asked_by: null, asks_for: null, fell_back: false },
+    };
+    answers["sites.list"] = () => ({ parked: [], sites: [site], proxies: [], skipped: [], warnings: [] });
+    answers["php.list"] = () => ({ versions: [], default: null });
+    answers["ca.status"] = () => ({ intermediate_days_left: 20 });
+    answers["services.list"] = () => ({ supervisor_running: true, instances: [] });
+    answers["editor.get"] = () => ({ chosen: null, using: "zed", found: [{ id: "zed", name: "Zed", exe: "C:/Zed/Zed.exe" }], known: [{ id: "zed", name: "Zed" }] });
+    answers["jobs.start"] = () => ({ job: 21 });
+    answers["jobs.get"] = () => ({ running: false, finished: { job: 21, ok: true, exit: 0, needs_confirmation: false, last: { type: "result" } }, events: [] });
+    shell(<SitePage host="shop.test" go={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Open in Zed" }));
+    expect(asked.find((a) => a.key === "jobs.start")?.args).toEqual({ args: ["code", "shop.test"], mode: "apply" });
+  });
+});

@@ -423,3 +423,19 @@ describe("how a site's command ended (ADR 0084)", async () => {
     expect(endText({ ok: false, last: { type: "error", message: "`artisan test` exited with code 1" } }).tone).toBe("bad");
   });
 });
+
+describe("file links in a site's log (ADR 0085)", async () => {
+  const { linkPaths } = await import("../components/LogView");
+  it("picks out a PHP file at a line, either way PHP writes it", () => {
+    const line = String.raw`Class not found at C:\Sites\shop\app\X.php:42 then #0 C:\Sites\shop\vendor\y.php(17): z()`;
+    const pieces = linkPaths(line);
+    const links = pieces.filter((p) => "path" in p);
+    expect(links).toEqual([
+      { text: String.raw`C:\Sites\shop\app\X.php:42`, path: String.raw`C:\Sites\shop\app\X.php`, line: 42 },
+      { text: String.raw`C:\Sites\shop\vendor\y.php(17)`, path: String.raw`C:\Sites\shop\vendor\y.php`, line: 17 },
+    ]);
+    expect(pieces.map((p) => p.text).join("")).toBe(line);
+    const plain = String.raw`no file here, nor C:\x.txt:4`;
+    expect(linkPaths(plain)).toEqual([{ text: plain }]);
+  });
+});
