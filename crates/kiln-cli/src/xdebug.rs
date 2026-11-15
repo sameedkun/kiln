@@ -242,11 +242,19 @@ pub fn set_modes(text: &str) -> Result<(), String> {
     if modes.iter().any(|m| *m != "debug") {
         say!("Profiles and traces go to {}.", output_dir()?.display());
     }
-    if minors_on(&store)?.is_empty() {
+    let on = minors_on(&store)?;
+    if on.is_empty() {
         say!("Xdebug is off for every PHP: `kiln php xdebug on` turns it on.");
         return Ok(());
     }
-    crate::web::apply_site_change(&store)
+    // The debug worker's php.ini keeps its path, so the pool looks unchanged: its workers are
+    // restarted to read the new modes.
+    for minor in &on {
+        if let Ok(record) = crate::ext::target(&store, Some(minor)) {
+            crate::web::restart_php(&store, &record.version)?;
+        }
+    }
+    Ok(())
 }
 
 /// Profile and trace files, newest first: (name, bytes, modified as Unix seconds).

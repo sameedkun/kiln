@@ -547,7 +547,13 @@ impl ServiceProvider for Flavor {
             let found = query(format!(
                 "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '{name}'"
             ))?;
-            if found.trim() != "0" {
+            // The count is the last number printed: a client may warn first (MariaDB's about
+            // TLS on a passwordless login to a server Kiln doesn't run, ADR 0091).
+            let count = found
+                .lines()
+                .rev()
+                .find_map(|l| l.trim().parse::<u64>().ok());
+            if count != Some(0) {
                 return Ok(false);
             }
             query(format!("CREATE DATABASE `{name}`"))?;

@@ -332,6 +332,49 @@ fn answers(name: &str, wait: std::time::Duration) -> bool {
     false
 }
 
+/// Whether the restarted service answers, and still does a few seconds later: a server that
+/// can't read its settings may answer briefly (its old process stopping) before it fails.
+fn stays_up(name: &str) -> bool {
+    if !answers(name, std::time::Duration::from_secs(30)) {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    answers(name, std::time::Duration::from_secs(10))
+}
+
+/// For MySQL (Oracle's): `mysqld --validate-config` with the instance's config, which reads the
+/// user's file. Its error, if it refuses; `None` for other servers or a clean check.
+fn mysql_refuses(record: &kiln_state::ServiceRecord) -> Option<String> {
+    if record.kind != "mysql" {
+        return None;
+    }
+    let dirs = crate::service::dirs_of(record).ok()?;
+    let mysqld = dirs.bin.join("bin").join(if cfg!(windows) {
+        "mysqld.exe"
+    } else {
+        "mysqld"
+    });
+    let out = std::process::Command::new(&mysqld)
+        .arg(format!("--defaults-file={}", dirs.config().display()))
+        .arg("--validate-config")
+        .output()
+        .ok()?;
+    if out.status.success() {
+        return None;
+    }
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let errors: Vec<&str> = text.lines().filter(|l| l.contains("[ERROR]")).collect();
+    Some(if errors.is_empty() {
+        text.trim().to_owned()
+    } else {
+        errors.join("\n")
+    })
+}
+
 /// `kiln config show <target>`.
 pub fn show(target: &str) -> Result<(), String> {
     let target = Target::parse(target)?;
@@ -407,11 +450,18 @@ fn save_text(target: &Target, text: &str, yes: bool) -> Result<bool, String> {
             crate::web::restart_php(&store, &record.version)?;
         }
         Target::Service(name) => {
-            let running = crate::service::record_of(&crate::web::open_store()?, name)?.enabled;
-            if running {
+            let record = crate::service::record_of(&crate::web::open_store()?, name)?;
+            // MySQL can say whether it would start, without starting (ADR 0089 §3).
+            if let Some(why) = mysql_refuses(&record) {
+                write(&path, &before)?;
+                return Err(format!(
+                    "{name} didn't start with the new settings, so the previous ones are back:\n{why}"
+                ));
+            }
+            if record.enabled {
                 // A start that fails may say so itself; either way the port decides.
                 let restarted = crate::service::restart(name);
-                if restarted.is_err() || !answers(name, std::time::Duration::from_secs(30)) {
+                if restarted.is_err() || !stays_up(name) {
                     write(&path, &before)?;
                     let _ = crate::service::restart(name);
                     // Back on the last good file before saying so.
