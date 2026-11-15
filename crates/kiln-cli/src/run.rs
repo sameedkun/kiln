@@ -76,6 +76,11 @@ fn changes_database(args: &[String]) -> bool {
     })
 }
 
+/// Whether a test run asks for coverage: `--coverage`, `--coverage-html out`… (ADR 0088 §3).
+fn wants_coverage(args: &[String]) -> bool {
+    args.iter().any(|a| a.starts_with("--coverage"))
+}
+
 /// Whether the arguments already say `--no-interaction`.
 fn quiet_already(args: &[String]) -> bool {
     args.iter().any(|a| a == "-n" || a == "--no-interaction")
@@ -105,6 +110,11 @@ fn command(
                 _ => PathBuf::from("artisan"),
             };
             let mut command = Command::new(php.dir.join(kiln_php::PHP_EXE));
+            // Coverage needs Xdebug in this PHP, for this run only (ADR 0088 §3).
+            if cfg!(windows) && wants_coverage(&args) {
+                let dll = crate::xdebug::ensure_dll(php)?;
+                command.args(kiln_php::xdebug::coverage_args(&dll));
+            }
             command
                 .arg(script)
                 .args(args)
@@ -460,6 +470,15 @@ mod tests {
         for c in [&["migrate:status"][..], &["route:list"], &["about"], &[]] {
             assert!(!yes(c), "{c:?}");
         }
+    }
+
+    #[test]
+    fn coverage_is_asked_for_by_any_coverage_option() {
+        let w = |a: &[&str]| wants_coverage(&a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+        assert!(w(&["test", "--coverage"]));
+        assert!(w(&["--coverage-html", "out"]));
+        assert!(w(&["--coverage-clover=c.xml"]));
+        assert!(!w(&["test", "--filter", "coverage"]));
     }
 
     #[test]

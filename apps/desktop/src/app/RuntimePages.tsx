@@ -10,7 +10,7 @@ import { Select } from "../components/Select";
 import { Status } from "../components/Status";
 import { Switch } from "../components/Switch";
 import { Tag } from "../components/Tag";
-import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList, type Updates } from "./api";
+import { call, message, type JobEvent, type NodeAvailable, type NodeList, type PhpAvailable, type PhpExtensions, type PhpList, type SitesList, type Updates, type XdebugStatus } from "./api";
 import { useChanges } from "./Change";
 import { fewNames, useRead } from "./hooks";
 
@@ -204,15 +204,7 @@ export function PhpPage() {
           );
         })}
       </Section>
-      {versions.some((v) => v.xdebug) && (
-        <Section title="Debugging" meta="Xdebug on demand">
-          <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">
-            A request with the <code className="font-mono text-xs text-text">XDEBUG_SESSION</code> cookie (set by your browser's Xdebug helper) or{" "}
-            <code className="font-mono text-xs text-text">?XDEBUG_SESSION_START=1</code> goes to a debug worker, which connects to your editor on{" "}
-            <code className="font-mono text-xs text-text">127.0.0.1:9003</code>. Every other request stays on the fast workers.
-          </li>
-        </Section>
-      )}
+      {versions.some((v) => v.xdebug) && <XdebugSection />}
       <ProgressLine progress={progress} />
       {shownFor && <Extensions php={shownFor} lines={[...new Set(versions.map((v) => minor(v.version)))]} onChoose={setChosen} />}
       {installing && (
@@ -227,6 +219,60 @@ export function PhpPage() {
         />
       )}
     </Page>
+  );
+}
+
+/** The debug worker's modes, toggled one at a time; never none (ADR 0088 §1). */
+export function toggledModes(modes: string[], mode: string, on: boolean): string[] {
+  const order = ["debug", "profile", "trace"];
+  const next = on ? [...new Set([...modes, mode])] : modes.filter((m) => m !== mode);
+  return order.filter((m) => next.includes(m));
+}
+
+// Xdebug on demand (ADR 0061, 0088): what the debug worker runs on a trigger, and the
+// profiles and traces it wrote.
+function XdebugSection() {
+  const status = useRead<XdebugStatus>("xdebug.status");
+  const { run } = useChanges();
+  const s = status.data;
+  const words: Record<string, string> = {
+    debug: "Step through code in your editor (127.0.0.1:9003)",
+    profile: "A cachegrind profile per request, for QCacheGrind or PhpStorm",
+    trace: "Every function call, to a trace file",
+  };
+  return (
+    <Section title="Debugging" meta="Xdebug on demand" action={s && s.files.length > 0 ? <Button size="sm" onClick={() => run(["php", "xdebug", "clear"], "Deleted the profiles and traces.")}>Clear files</Button> : undefined}>
+      <li className="border-b border-line px-1 py-4 text-[13px] text-text-2">
+        A request with the <code className="font-mono text-xs text-text">XDEBUG_SESSION</code> cookie (your browser's Xdebug helper) or{" "}
+        <code className="font-mono text-xs text-text">?XDEBUG_TRIGGER=1</code> goes to a debug worker running what's on below. Every other request stays on the fast workers.
+        Coverage needs nothing here: a Commands-tab run with <code className="font-mono text-xs text-text">--coverage</code> loads Xdebug for itself.
+      </li>
+      {s &&
+        ["debug", "profile", "trace"].map((mode) => (
+          <li key={mode} className="flex items-center gap-4 border-b border-line px-1 py-3">
+            <span className="flex-1 text-[13px]">{words[mode]}</span>
+            <Switch
+              label={mode}
+              checked={s.modes.includes(mode)}
+              disabled={s.modes.length === 1 && s.modes.includes(mode)}
+              onChange={(on) => run(["php", "xdebug", "mode", toggledModes(s.modes, mode, on).join(",")], `The debug worker runs ${toggledModes(s.modes, mode, on).join(", ")} now.`)}
+            />
+          </li>
+        ))}
+      {s && (s.modes.includes("profile") || s.modes.includes("trace") || s.files.length > 0) && (
+        <li className="border-b border-line px-1 py-3 text-xs text-text-2">
+          <span className="block break-all font-mono">{s.output_dir}</span>
+          {s.files.length === 0
+            ? "No profiles or traces yet."
+            : s.files.slice(0, 8).map((f) => (
+                <span key={f.name} className="mt-1 flex justify-between gap-3 font-mono">
+                  <span className="truncate">{f.name}</span>
+                  <span className="figures">{(f.bytes / 1048576).toFixed(1)} MB</span>
+                </span>
+              ))}
+        </li>
+      )}
+    </Section>
   );
 }
 

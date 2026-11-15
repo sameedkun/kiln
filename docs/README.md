@@ -103,6 +103,7 @@ working name). Start here.
 | [0085](adr/0085-open-in-editor.md) | The user's editor: VS Code, Cursor, PhpStorm, Zed or Sublime Text found in their usual places (an `.exe` only), or chosen (`kiln editor use`); `kiln code` opens a site or a file inside it at a line; the site page's Open button, Settings → Editor, file links in a site's logs | accepted (Phase 4e) |
 | [0086](adr/0086-automatic-snapshots.md) | Snapshots Kiln takes itself: before a branch switch, migrations, a drop (strict) and a rollback; daily from kilnd if asked; named by reason, only those pruned to a limit per database; `kiln db keep`; `kiln db snapshot-settings` and Settings → Snapshots | accepted (Phase 4e) |
 | [0087](adr/0087-notifications.md) | Notifications: kilnd collects mail Mailpit caught, programs the services supervisor saw fail, long jobs done; keeps 50; `notifications.list`/`clear`; the app shows Windows toasts (installed Kiln) and a Notifications page | accepted (Phase 4e) |
+| [0088](adr/0088-xdebug-modes.md) | Xdebug's other modes: the debug worker runs debug, profile and/or trace on a trigger (`kiln php xdebug mode`), files in Kiln's folder (`status`, `clear`); coverage loaded by `kiln run` for a `--coverage` run only | accepted (Phase 4e) |
 
 ## Conventions
 

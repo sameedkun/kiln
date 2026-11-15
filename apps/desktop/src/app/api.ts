@@ -91,6 +91,13 @@ export interface SnapshotSettings {
   daily: boolean;
   keep: number;
 }
+/** `xdebug.status` (ADR 0088 §2). */
+export interface XdebugStatus {
+  on: string[];
+  modes: string[];
+  output_dir: string;
+  files: { name: string; bytes: number; at: number }[];
+}
 /** `site.commands` (ADR 0084 §3): what a site can run. */
 export interface SiteCommands {
   host: string;

@@ -78,26 +78,54 @@ pub fn build_for(version: &str, archive: &str) -> Option<&'static Build> {
     })
 }
 
-/// The `php.ini` of a debug worker: the PHP's own, followed by Xdebug loaded from `dll`, on
-/// demand only (a trigger in the request), connecting to an editor on this computer. JIT
-/// is off: Xdebug and the JIT don't run together.
+/// The modes the debug worker may run (ADR 0088 §1).
+pub const MODES: &[&str] = &["debug", "profile", "trace"];
+
+/// The `php.ini` of a debug worker: the PHP's own, followed by Xdebug loaded from `dll` in
+/// `modes`, on demand only (a trigger in the request), connecting to an editor on this
+/// computer; profiles and traces go to `output`. JIT is off: Xdebug and the JIT don't run
+/// together.
 #[must_use]
-pub fn debug_ini(base: &str, dll: &std::path::Path) -> String {
+pub fn debug_ini(
+    base: &str,
+    dll: &std::path::Path,
+    modes: &[&str],
+    output: &std::path::Path,
+) -> String {
     use std::fmt::Write;
     let mut text = base.trim_end().to_owned();
     let _ = write!(
         text,
-        "\n\n; Kiln's debug worker (ADR 0061): written by Kiln on each start, not to be edited.\n\
+        "\n\n; Kiln's debug worker (ADR 0061, 0088): written by Kiln on each start, not to be edited.\n\
          [xdebug]\n\
          zend_extension=\"{}\"\n\
-         xdebug.mode=debug\n\
+         xdebug.mode={}\n\
          xdebug.start_with_request=trigger\n\
          xdebug.client_host=127.0.0.1\n\
          xdebug.client_port={CLIENT_PORT}\n\
+         xdebug.output_dir=\"{}\"\n\
+         xdebug.profiler_output_name=cachegrind.out.%t.%R\n\
+         xdebug.trace_output_name=trace.%t.%R\n\
          opcache.jit=off\n",
-        dll.display()
+        dll.display(),
+        modes.join(","),
+        output.display()
     );
     text
+}
+
+/// What `php` needs on its command line to measure coverage with Xdebug from `dll` for one
+/// run (ADR 0088 §3).
+#[must_use]
+pub fn coverage_args(dll: &std::path::Path) -> Vec<String> {
+    vec![
+        "-d".into(),
+        format!("zend_extension={}", dll.display()),
+        "-d".into(),
+        "xdebug.mode=coverage".into(),
+        "-d".into(),
+        "opcache.jit=off".into(),
+    ]
 }
 
 #[cfg(test)]
@@ -144,12 +172,42 @@ mod tests {
 
     #[test]
     fn the_debug_ini_is_the_php_ini_then_xdebug_on_trigger() {
-        let ini = debug_ini("memory_limit=512M\n", std::path::Path::new("C:/k/x.dll"));
+        let out = std::path::Path::new("C:/k/out");
+        let ini = debug_ini(
+            "memory_limit=512M\n",
+            std::path::Path::new("C:/k/x.dll"),
+            &["debug"],
+            out,
+        );
         assert!(ini.starts_with("memory_limit=512M\n"));
         assert!(ini.contains("zend_extension=\"C:/k/x.dll\""));
         assert!(ini.contains("xdebug.mode=debug\n"));
         assert!(ini.contains("xdebug.start_with_request=trigger\n"));
         assert!(ini.contains("xdebug.client_host=127.0.0.1\n"));
         assert!(ini.contains("opcache.jit=off\n"));
+        let both = debug_ini(
+            "",
+            std::path::Path::new("C:/k/x.dll"),
+            &["debug", "profile"],
+            out,
+        );
+        assert!(both.contains("xdebug.mode=debug,profile\n"));
+        assert!(both.contains("xdebug.output_dir=\"C:/k/out\"\n"));
+        assert!(both.contains("xdebug.profiler_output_name=cachegrind.out.%t.%R\n"));
+    }
+
+    #[test]
+    fn coverage_loads_xdebug_for_one_run() {
+        assert_eq!(
+            coverage_args(std::path::Path::new("C:/k/x.dll")),
+            [
+                "-d",
+                "zend_extension=C:/k/x.dll",
+                "-d",
+                "xdebug.mode=coverage",
+                "-d",
+                "opcache.jit=off"
+            ]
+        );
     }
 }

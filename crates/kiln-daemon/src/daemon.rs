@@ -334,6 +334,7 @@ impl Daemon {
         "snapshots.settings",
         "notifications.list",
         "notifications.clear",
+        "xdebug.status",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -1120,9 +1121,9 @@ impl Handler for Daemon {
                     .map(|output| json!({"ok": true, "output": output}))
                     .map_err(RpcError::kiln)
             }
-            "sites.list" => self.read(&["sites"]),
-            "php.list" => self.read(&["php", "list"]),
-            "php.available" => self.read(&["php", "available"]),
+            method if plain_read(method).is_some() => {
+                self.read(plain_read(method).unwrap_or_default())
+            }
             "php.extensions" => match params["php"].as_str() {
                 Some(php) => {
                     check_version(php)?;
@@ -1130,10 +1131,6 @@ impl Handler for Daemon {
                 }
                 None => self.read(&["php", "ext", "list"]),
             },
-            "node.list" => self.read(&["node", "list"]),
-            "node.available" => self.read(&["node", "available"]),
-            "services.list" => self.read(&["service", "list"]),
-            "services.catalog" => self.read(&["service", "catalog"]),
             "history.list" => {
                 if params["all"].as_bool().unwrap_or(false) {
                     self.read(&["history", "--all"])
@@ -1141,9 +1138,6 @@ impl Handler for Daemon {
                     self.read(&["history"])
                 }
             }
-            "doctor.report" => self.read(&["doctor"]),
-            "setup.status" => self.read(&["setup"]),
-            "settings.get" => self.read(&["settings"]),
             "logs.sources" => {
                 let data = self.read(&["logs"])?;
                 *self
@@ -1154,8 +1148,6 @@ impl Handler for Daemon {
                 Ok(data)
             }
             "logs.tail" => self.log_tail(params),
-            "footprint.get" => self.read(&["footprint"]),
-            "updates.check" => self.read(&["updates"]),
             "requests.get" => self.requests(params),
             "services.logs" => self.service_logs(params),
             "services.databases" => self.service_databases(params),
@@ -1166,8 +1158,6 @@ impl Handler for Daemon {
             "git.branches" => self.git_branches(params),
             "site.doctor" => self.site_doctor(params),
             "site.commands" => self.site_commands(params),
-            "editor.get" => self.read(&["editor"]),
-            "snapshots.settings" => self.read(&["db", "snapshot-settings"]),
             "notifications.list" => Ok(self.notices.list()),
             "notifications.clear" => {
                 self.notices.clear();
@@ -1198,6 +1188,28 @@ fn job_method(jobs: &Jobs, log: &Log, method: &str, params: &Value) -> Result<Va
     }
     jobs.get(id)
         .ok_or_else(|| RpcError::kiln(format!("no job {id}")))
+}
+
+/// The reads that are only `kiln --json <words>`, with nothing from the caller.
+fn plain_read(method: &str) -> Option<&'static [&'static str]> {
+    Some(match method {
+        "sites.list" => &["sites"],
+        "php.list" => &["php", "list"],
+        "php.available" => &["php", "available"],
+        "node.list" => &["node", "list"],
+        "node.available" => &["node", "available"],
+        "services.list" => &["service", "list"],
+        "services.catalog" => &["service", "catalog"],
+        "doctor.report" => &["doctor"],
+        "setup.status" => &["setup"],
+        "settings.get" => &["settings"],
+        "footprint.get" => &["footprint"],
+        "updates.check" => &["updates"],
+        "editor.get" => &["editor"],
+        "snapshots.settings" => &["db", "snapshot-settings"],
+        "xdebug.status" => &["php", "xdebug", "status"],
+        _ => return None,
+    })
 }
 
 /// `params.host` as a site's name only: letters, digits, `.` and `-`, never an option or a

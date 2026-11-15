@@ -1062,6 +1062,32 @@ Check 'Xdebug connects to an editor listening on 127.0.0.1:9003 (its init packet
         if ((Get-Content $out -Raw).Trim() -ne 'debug') { throw "the page said: $(Get-Content $out -Raw)" }
     } finally { $listener.Stop() }
 }
+Check 'Xdebug modes (ADR 0088): profile on a trigger writes a cachegrind file, clear deletes it; a test run with --coverage gets Xdebug by itself' {
+    Expect 'runs debug, profile now' (Kiln php xdebug mode debug,profile)
+    try {
+        Kiln php xdebug clear | Out-Null
+        if ((XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')) -notmatch 'debug\s*$') { throw 'the triggered request missed the debug worker' }
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            $status = (& $Kiln --json php xdebug status | Select-Object -Last 1 | ConvertFrom-Json).data
+            if (-not ($status.files | Where-Object { $_.name -like 'cachegrind.out.*' })) { Start-Sleep -Milliseconds 500 }
+        } while (-not ($status.files | Where-Object { $_.name -like 'cachegrind.out.*' }) -and (Get-Date) -lt $deadline)
+        if (-not ($status.files | Where-Object { $_.name -like 'cachegrind.out.*' })) { throw "no profile written: $($status | ConvertTo-Json -Depth 4)" }
+        if (($status.modes -join ',') -ne 'debug,profile') { throw "modes: $($status.modes -join ',')" }
+        Expect 'Deleted' (Kiln php xdebug clear)
+        if (((& $Kiln --json php xdebug status | Select-Object -Last 1 | ConvertFrom-Json).data.files).Count -ne 0) { throw 'clear left files' }
+        $refused = & $Kiln php xdebug mode coverage 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        Expect 'coverage is for test runs' $refused
+        # Coverage: PHPUnit's report needs a driver; Kiln loads Xdebug for this run only.
+        $coverage = & $Kiln run shop phpunit --coverage-text --colors=never 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        if ($coverage -match 'No code coverage driver' -or $coverage -notmatch 'Code Coverage Report') { throw "phpunit --coverage-text:`n$coverage" }
+    } finally {
+        & $Kiln php xdebug mode debug 2>&1 | Out-Null
+        $global:LASTEXITCODE = 0
+    }
+}
 Check 'kiln php xdebug off: the debug worker is gone, the cookie gets the plain workers' {
     Expect 'is off for PHP' (Kiln php xdebug off)
     $page = XdebugPage @('-H', 'Cookie: XDEBUG_SESSION=kiln')

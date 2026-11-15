@@ -844,6 +844,13 @@ enum XdebugAction {
         #[arg(long)]
         php: Option<String>,
     },
+    /// Choose what the debug worker runs on a trigger: debug, profile, trace, or several,
+    /// e.g. `debug,profile` (ADR 0088).
+    Mode { modes: String },
+    /// Where Xdebug is on, its modes, and the profile and trace files.
+    Status,
+    /// Delete the profile and trace files.
+    Clear,
     /// Stop the debug worker.
     Off {
         /// The PHP build: 8.4 (its newest patch) or 8.4.26. Default: the default PHP.
@@ -1295,6 +1302,9 @@ fn run_php(action: PhpAction) -> Result<(), String> {
         PhpAction::Xdebug { action } => match action {
             XdebugAction::On { php } => xdebug::on(php.as_deref()),
             XdebugAction::Off { php } => xdebug::off(php.as_deref()),
+            XdebugAction::Mode { modes } => xdebug::set_modes(&modes),
+            XdebugAction::Status => xdebug::status(),
+            XdebugAction::Clear => xdebug::clear(),
         },
         PhpAction::Ext { action } => match action {
             ExtAction::List { php } => ext::list(php.as_deref()),

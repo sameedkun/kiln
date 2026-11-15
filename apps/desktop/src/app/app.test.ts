@@ -465,3 +465,12 @@ describe("notifications (ADR 0087)", async () => {
     expect(ago(1000, 1000 + 3 * 3600)).toBe("3 h ago");
   });
 });
+
+describe("Xdebug's modes (ADR 0088)", async () => {
+  const { toggledModes } = await import("./RuntimePages");
+  it("toggles one mode, in Kiln's order", () => {
+    expect(toggledModes(["debug"], "profile", true)).toEqual(["debug", "profile"]);
+    expect(toggledModes(["trace", "debug"], "profile", true)).toEqual(["debug", "profile", "trace"]);
+    expect(toggledModes(["debug", "profile"], "debug", false)).toEqual(["profile"]);
+  });
+});
