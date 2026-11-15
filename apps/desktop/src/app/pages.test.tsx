@@ -623,3 +623,24 @@ describe("opening a site in the editor (ADR 0085)", () => {
     expect(asked.find((a) => a.key === "jobs.start")?.args).toEqual({ args: ["code", "shop.test"], mode: "apply" });
   });
 });
+
+describe("Notifications (ADR 0087)", () => {
+  it("lists kilnd's notifications newest first, and clears them", async () => {
+    const { NotificationsPage } = await import("./Notifications");
+    let list = [
+      { id: 2, at: Date.now() / 1000 - 30, kind: "mail", title: "Mail caught: Welcome!", body: "From hi@shop.test to a@x.test, in mailpit-1" },
+      { id: 1, at: Date.now() / 1000 - 600, kind: "process", title: "queue-shop failed", body: "Kiln's supervisor restarts it." },
+    ];
+    answers["notifications.list"] = () => ({ notifications: list });
+    answers["notifications.clear"] = () => {
+      list = [];
+      return { cleared: true };
+    };
+    shell(<NotificationsPage />);
+    expect(await screen.findByText("Mail caught: Welcome!")).toBeTruthy();
+    expect(screen.getByText("queue-shop failed")).toBeTruthy();
+    expect(screen.getByText("10 min ago")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(await screen.findByText("none yet")).toBeTruthy();
+  });
+});

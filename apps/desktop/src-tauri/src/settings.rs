@@ -36,6 +36,8 @@ pub struct Settings {
     /// "Not now" on first-run onboarding (ADR 0057 §3): it doesn't open on its own again.
     pub onboarding_dismissed: bool,
     pub window: Option<Place>,
+    /// Windows notifications turned off (ADR 0087 §2); the app's list still fills.
+    pub toasts_off: bool,
 }
 
 /// The settings at `path`; the defaults if there are none or they can't be read.
@@ -86,6 +88,7 @@ mod tests {
             start_in: StartIn::Tray,
             close_notice_shown: true,
             onboarding_dismissed: false,
+            toasts_off: true,
             window: Some(Place {
                 x: 10,
                 y: 20,

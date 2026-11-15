@@ -1,4 +1,5 @@
 import {
+  Alert20Regular,
   Code20Regular,
   Cube20Regular,
   Database20Regular,
@@ -28,6 +29,7 @@ import { ServicePage } from "./ServicePage";
 import { SitePage } from "./SitePage";
 import { ServicesPage } from "./ServicesPage";
 import { SitesPage } from "./SitesPage";
+import { NotificationsPage, useUnread } from "./Notifications";
 
 function Screen({ page, go, setUp }: { page: string; go: (page: string) => void; setUp: () => void }) {
   if (page.startsWith("site:")) return <SitePage host={page.slice(5)} go={go} />;
@@ -51,6 +53,8 @@ function Screen({ page, go, setUp }: { page: string; go: (page: string) => void;
       return <HistoryPage />;
     case "doctor":
       return <DoctorPage />;
+    case "notifications":
+      return <NotificationsPage />;
     case "settings":
       return <Settings setUp={setUp} />;
     default:
@@ -116,6 +120,7 @@ export function MainApp() {
   }, []);
 
   const down = services.data?.instances.some((i) => i.enabled && !i.running) ?? false;
+  const unreadCount = useUnread(page === "notifications");
   const pages: NavItem[] = [
     { id: "home", label: "Home", icon: <Home20Regular /> },
     { id: "sites", label: "Sites", icon: <Globe20Regular />, detail: sites.data ? String(sites.data.sites.length + sites.data.proxies.length) : undefined },
@@ -125,6 +130,7 @@ export function MainApp() {
     { id: "logs", label: "Logs", icon: <TextBulletListLtr20Regular />, groupStart: true },
     { id: "history", label: "History", icon: <History20Regular /> },
     { id: "doctor", label: "Doctor", icon: <Stethoscope20Regular /> },
+    { id: "notifications", label: "Notifications", icon: <Alert20Regular />, detail: unreadCount ? String(unreadCount) : undefined },
   ];
 
   return (

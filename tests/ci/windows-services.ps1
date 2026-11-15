@@ -1554,6 +1554,25 @@ Check 'tool remove adminer: the site and its files go' {
     if ((Kiln sites) -match 'adminer\.test') { throw 'still a site' }
 }
 
+Check 'notifications (ADR 0087): kilnd tells of mail Mailpit caught and of a long job done, keeps them, clears them' {
+    function Notices { @((Kiln daemon call notifications.list | ConvertFrom-Json).notifications) }
+    Send-MailMessage -SmtpServer 127.0.0.1 -Port $script:smtp -From app@example.test -To you@example.test `
+        -Subject 'kiln-notify-test' -Body 'hello' -WarningAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(40)
+    while (-not (Notices | Where-Object { $_.kind -eq 'mail' -and $_.title -eq 'Mail caught: kiln-notify-test' }) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+    $mail = Notices | Where-Object { $_.title -eq 'Mail caught: kiln-notify-test' }
+    if (-not $mail) { throw "no mail notification: $((Notices) | ConvertTo-Json -Depth 4)" }
+    if ($mail.body -notmatch 'From app@example\.test to you@example\.test') { throw "the mail notification says: $($mail.body)" }
+    # A job of 20 seconds or more is told when it ends.
+    $id = ((Kiln daemon call jobs.start '{\"args\":[\"run\",\"shop\",\"artisan\",\"tinker\",\"--execute\",\"sleep(21);\"],\"mode\":\"apply\"}') | ConvertFrom-Json).job
+    $job = WaitJob $id
+    if (-not $job.finished.ok) { throw "the long job failed: $($job.finished | ConvertTo-Json -Depth 5)" }
+    if (-not (Notices | Where-Object { $_.kind -eq 'job' -and $_.title -match '^Done: kiln run shop artisan tinker' })) { throw "no job notification: $((Notices) | ConvertTo-Json -Depth 4)" }
+    # Kept in kilnd's state folder, and cleared on request.
+    if (-not (Test-Path "$env:APPDATA\Kiln\notifications.json") -and -not (Get-ChildItem "$env:APPDATA\Kiln" -Recurse -Filter notifications.json -ErrorAction SilentlyContinue)) { throw 'notifications.json not written' }
+    Kiln daemon call notifications.clear | Out-Null
+    if ((Notices).Length -ne 0) { throw 'notifications.clear left some' }
+}
 Say '== uninstall'
 Check 'kiln uninstall refuses while services hold data, and changes nothing' {
     $out = (& $Kiln uninstall --yes 2>&1 | ForEach-Object { "$_" }) -join "`n"

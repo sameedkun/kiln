@@ -17,6 +17,7 @@
 mod bridge;
 mod placement;
 mod settings;
+mod toast;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -282,6 +283,27 @@ fn settings_get(shell: State<'_, Shell>) -> Settings {
 #[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
 fn set_start_in(start_in: StartIn, shell: State<'_, Shell>) {
     shell.update(|s| s.start_in = start_in);
+}
+
+/// A kilnd event to the pages; a notification also as a Windows toast, once whatever windows
+/// are open (ADR 0087 §2).
+fn forward_event(handle: &AppHandle, event: Value) {
+    if event["method"] == "notification" && !handle.state::<Shell>().settings().toasts_off {
+        let n = &event["params"];
+        let _ = toast::show(
+            &handle.config().identifier,
+            n["title"].as_str().unwrap_or("Kiln"),
+            n["body"].as_str().unwrap_or_default(),
+        );
+    }
+    let _ = handle.emit("kiln-event", event);
+}
+
+/// Windows notifications on or off (ADR 0087 §2).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri hands commands their arguments by value
+fn set_toasts(on: bool, shell: State<'_, Shell>) {
+    shell.update(|s| s.toasts_off = !on);
 }
 
 /// Remembers that onboarding was dismissed, or done (ADR 0057 §3).
@@ -630,6 +652,7 @@ fn main() {
             settings_get,
             set_start_in,
             set_onboarding_dismissed,
+            set_toasts,
             set_tray,
             fit_popup,
             quit,
@@ -672,9 +695,7 @@ fn main() {
                     &|| {
                         let _ = handle.emit("kiln-reconnected", ());
                     },
-                    &|event| {
-                        let _ = handle.emit("kiln-event", event);
-                    },
+                    &|event| forward_event(&handle, event),
                 );
             });
             Ok(())

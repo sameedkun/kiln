@@ -137,6 +137,9 @@ pub const RENEW_BEFORE_DAYS: i64 = 10;
 /// How often the daemon checks the intermediate (and once when it starts).
 pub const CA_CHECK_EVERY: Duration = Duration::from_hours(6);
 
+/// A job that runs this long is told when it ends (ADR 0087 §1).
+const LONG_JOB: Duration = Duration::from_secs(20);
+
 /// How often kilnd looks for daily snapshots that are due (ADR 0086 §3).
 pub const SNAPSHOT_CHECK_EVERY: Duration = Duration::from_hours(1);
 
@@ -240,6 +243,8 @@ pub struct Daemon {
     ///
     /// [ADR 0053]: ../../../docs/adr/0053-api-v2-and-json-output.md
     jobs: Arc<Jobs>,
+    /// Notifications (ADR 0087).
+    notices: Arc<crate::notify::Notices>,
     /// The `kiln` program next to the daemon.
     kiln: PathBuf,
     /// The logs `kiln logs` listed, and when: a follow reads every second or so, and the
@@ -258,6 +263,9 @@ const LOG_SOURCES_FOR: Duration = Duration::from_secs(10);
 impl Daemon {
     #[must_use]
     pub fn new(paths: Paths, log: Arc<Log>, events: Arc<Events>, shutdown: Sender<()>) -> Self {
+        let notices = Arc::new(crate::notify::Notices::load(
+            paths.state.join(crate::notify::FILE),
+        ));
         Self {
             paths,
             log,
@@ -271,6 +279,7 @@ impl Daemon {
             snapshots_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             renewals: Mutex::new(Vec::new()),
             jobs: Arc::new(Jobs::default()),
+            notices,
             log_sources: Mutex::new(None),
             kiln: std::env::current_exe().map_or_else(
                 |_| PathBuf::from(KILN_EXE),
@@ -323,6 +332,8 @@ impl Daemon {
         "site.commands",
         "editor.get",
         "snapshots.settings",
+        "notifications.list",
+        "notifications.clear",
     ];
 
     /// Days the web server's intermediate certificate has left, or `None` without one.
@@ -396,6 +407,46 @@ impl Daemon {
             }
             running.store(false, Ordering::SeqCst);
         });
+    }
+
+    /// One pass of the notifier (ADR 0087 §1): Mailpit's counts, and the services
+    /// supervisor's log for programs that failed.
+    pub fn watch_notices(&self, watch: &mut crate::notify::Watch, now: Instant) {
+        if let Ok((store, _)) = kiln_state::StateStore::open_dir(&self.paths.state) {
+            let mailpits = store
+                .services()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.enabled && r.kind == "mailpit");
+            for record in mailpits {
+                let Some(count) = record
+                    .ports
+                    .get("http")
+                    .and_then(|p| crate::notify::mailpit(*p))
+                else {
+                    continue;
+                };
+                if let Some((title, body)) = watch.mail(&record.name, count) {
+                    self.notice("mail", &title, &body);
+                }
+            }
+        }
+        if let Ok(supervisor) = self.services_supervisor() {
+            for name in watch.log(&supervisor.log_path(), now) {
+                self.notice(
+                    "process",
+                    &format!("{name} failed"),
+                    "Kiln's supervisor restarts it; its log on the Logs page says why.",
+                );
+            }
+        }
+    }
+
+    /// Records a notification and publishes it (ADR 0087).
+    fn notice(&self, kind: &str, title: &str, body: &str) {
+        self.log.line(&format!("notification ({kind}): {title}"));
+        let notice = self.notices.push(kind, title, body);
+        self.events.publish("notification", notice);
     }
 
     pub fn check_ca(&self, now: Instant) {
@@ -885,12 +936,14 @@ impl Daemon {
             args.join(" "),
             mode.name()
         ));
-        let (jobs, events, log, kiln) = (
+        let (jobs, events, log, kiln, notices) = (
             Arc::clone(&self.jobs),
             Arc::clone(&self.events),
             Arc::clone(&self.log),
             self.kiln.clone(),
+            Arc::clone(&self.notices),
         );
+        let began = Instant::now();
         let stop = self.jobs.stop_handle(id);
         std::thread::spawn(move || {
             let outcome = jobs::run_stoppable(
@@ -920,6 +973,23 @@ impl Daemon {
             };
             log.line(&format!("job {id}: {how}"));
             jobs.finish(id, finished.clone());
+            // A long one is told when it ends (ADR 0087 §1): the user has moved on meanwhile.
+            if mode == Mode::Apply && began.elapsed() >= LONG_JOB {
+                let command = format!("kiln {}", args.join(" "));
+                let (title, body) = if outcome.ok {
+                    (format!("Done: {command}"), "It worked.".to_owned())
+                } else {
+                    (
+                        format!("Failed: {command}"),
+                        outcome.last["message"]
+                            .as_str()
+                            .unwrap_or("it failed")
+                            .to_owned(),
+                    )
+                };
+                let notice = notices.push("job", &title, &body);
+                events.publish("notification", notice);
+            }
             events.publish("job.finished", finished);
             if mode == Mode::Apply {
                 let command: Vec<_> = args.iter().take(2).cloned().collect();
@@ -1098,6 +1168,11 @@ impl Handler for Daemon {
             "site.commands" => self.site_commands(params),
             "editor.get" => self.read(&["editor"]),
             "snapshots.settings" => self.read(&["db", "snapshot-settings"]),
+            "notifications.list" => Ok(self.notices.list()),
+            "notifications.clear" => {
+                self.notices.clear();
+                Ok(json!({"cleared": true}))
+            }
             "env.show" => self.env_show(params),
             "jobs.start" => self.start_job(params),
             "jobs.list" => Ok(self.jobs.list()),

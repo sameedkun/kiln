@@ -365,12 +365,16 @@ export interface AppSettings {
   start_in: "window" | "tray";
   close_notice_shown: boolean;
   onboarding_dismissed: boolean;
+  /** Windows notifications turned off (ADR 0087 §2). */
+  toasts_off?: boolean;
 }
 export const settingsGet = () => invoke<AppSettings>("settings_get");
 /** What Kiln's login item starts (ADR 0054 §6). */
 export const loginItem = () => invoke<"app" | "daemon" | "other" | "none">("login_item");
 export const setOnboardingDismissed = (dismissed: boolean) => invoke("set_onboarding_dismissed", { dismissed });
 export const setStartIn = (startIn: "window" | "tray") => invoke("set_start_in", { startIn });
+/** Windows notifications on or off (ADR 0087 §2); the app's list fills either way. */
+export const setToasts = (on: boolean) => invoke("set_toasts", { on });
 
 /** A job's error, or what a failed call said, in words for the page. */
 export function message(error: unknown): string {

@@ -87,6 +87,16 @@ fn main() -> ExitCode {
         }
     });
 
+    // Notifications (ADR 0087): Mailpit and the services supervisor's log, every few seconds.
+    let notifier = Arc::clone(&daemon);
+    std::thread::spawn(move || {
+        let mut watch = kiln_daemon::notify::Watch::default();
+        loop {
+            notifier.watch_notices(&mut watch, Instant::now());
+            std::thread::sleep(Duration::from_secs(4));
+        }
+    });
+
     // Names without the hosts file (ADR 0078): answered while the feature is on.
     let resolver = Arc::clone(&daemon);
     std::thread::spawn(move || {

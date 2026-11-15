@@ -7,7 +7,7 @@ import { Page } from "../components/Page";
 import { Row, Section } from "../components/Rows";
 import { SettingRow } from "../components/SettingRow";
 import { Switch } from "../components/Switch";
-import { loginItem, onEvent, setStartIn, settingsGet, type AppSettings, type Footprint, type EditorInfo, type KilnSettings, type SnapshotSettings, type SetupStatus, type Updates, openReleases } from "./api";
+import { loginItem, onEvent, setStartIn, setToasts, settingsGet, type AppSettings, type Footprint, type EditorInfo, type KilnSettings, type SnapshotSettings, type SetupStatus, type Updates, openReleases } from "./api";
 import { useChanges } from "./Change";
 import { useRead } from "./hooks";
 
@@ -34,6 +34,25 @@ export function Settings({ setUp }: { setUp: () => void }) {
       <Section title="Set-up">
         <SettingRow title="Set up Kiln" control={<Button size="sm" onClick={setUp}>Open…</Button>}>
           The first-run steps: the web server, PHP, HTTPS, your projects, the terminal and starting at sign-in. Steps already done say so.
+        </SettingRow>
+      </Section>
+      <Section title="Notifications">
+        <SettingRow
+          title="Windows notifications"
+          control={
+            settings && (
+              <Switch
+                label="Windows notifications"
+                checked={!settings.toasts_off}
+                onChange={(on) => {
+                  setToasts(on);
+                  setSettings({ ...settings, toasts_off: !on });
+                }}
+              />
+            )
+          }
+        >
+          Mail Mailpit caught, a dev process that failed and a long job done, shown by Windows (for an installed Kiln). The Notifications page keeps them either way.
         </SettingRow>
       </Section>
       <Section title="Starting and closing">

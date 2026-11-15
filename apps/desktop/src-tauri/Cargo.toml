@@ -23,6 +23,10 @@ tauri-plugin-dialog = "=2.8.4"
 tauri-plugin-opener = "=2.7.3"
 tauri-plugin-single-instance = "=2.5.5"
 
+# Windows notifications (ADR 0087): the version Tauri already links, two of its modules.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Data_Xml_Dom", "UI_Notifications"] }
+
 [features]
 # Pages from the built frontend inside the program (what `tauri build` turns on). On by
 # default, so `cargo build` gives a working app; `--no-default-features` loads the dev

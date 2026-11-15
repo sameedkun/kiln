@@ -1060,6 +1060,24 @@ pub fn survive_ctrl_c() -> io::Result<()> {
     Ok(())
 }
 
+/// Joins this thread to COM's multithreaded apartment, which Windows Runtime calls (a toast,
+/// ADR 0087) need on a thread of the caller's own. Harmless if the thread already is in it.
+///
+/// # Errors
+/// The thread is already in a single-threaded apartment, or COM can't start.
+pub fn com_multithreaded() -> io::Result<()> {
+    use windows_sys::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+    // SAFETY: a null reserved pointer, as documented; the matching CoUninitialize is left to
+    // the thread's end, which Windows allows.
+    let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
+    // S_OK and S_FALSE (already initialised this way) are both fine.
+    if hr >= 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(hr))
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Job objects
 // ---------------------------------------------------------------------------------------------

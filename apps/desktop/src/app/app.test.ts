@@ -450,3 +450,18 @@ describe("what a snapshot is (ADR 0086)", async () => {
     expect(snapshotKind({ kind: "auto", reason: "daily" })).toBe("Daily");
   });
 });
+
+describe("notifications (ADR 0087)", async () => {
+  const { unread, ago } = await import("./Notifications");
+  const n = (id: number) => ({ id, at: 0, kind: "mail", title: "", body: "" });
+  it("counts the ones newer than the newest seen", () => {
+    expect(unread([n(5), n(4), n(3)], 3)).toBe(2);
+    expect(unread([n(5)], 5)).toBe(0);
+    expect(unread([], 0)).toBe(0);
+  });
+  it("says how long ago, briefly", () => {
+    expect(ago(1000, 1030)).toBe("just now");
+    expect(ago(1000, 1000 + 5 * 60)).toBe("5 min ago");
+    expect(ago(1000, 1000 + 3 * 3600)).toBe("3 h ago");
+  });
+});

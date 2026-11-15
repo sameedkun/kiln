@@ -15,6 +15,7 @@ pub mod daemon;
 pub mod dns;
 pub mod jobs;
 pub mod logs;
+pub mod notify;
 pub mod proto;
 pub mod server;
 pub mod transport;
